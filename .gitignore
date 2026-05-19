@@ -1,0 +1,13 @@
+/bin/
+/dist/
+/.env
+/coverage.out
+/coverage.html
+.DS_Store
+.idea/
+.vscode/
+*.test
+*.out
+
+# 設計書と実装計画書はローカル保持とし公開しません
+/docs/

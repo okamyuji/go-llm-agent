@@ -1,0 +1,46 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gocritic
+    - revive
+    - gosec
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+    gosec:
+      excludes:
+        - G104   # errcheck で別途検出する
+        - G204   # exec.Command の意図的利用 (shell ツールと build)
+        - G301   # MkdirAll 0755 は OK
+        - G302   # WriteFile 0600 は OK
+        - G304   # 動的パス読み取りはサンドボックスでカバー済み
+        - G306   # WriteFile permission は安全な 0600 を使用
+        - G122   # WalkDir 内の symlink TOCTOU はサンドボックスで防御済み
+        - G118   # Server.Shutdown 用に意図的に context.Background を使用
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (io.Writer).Write
+        - (*bytes.Buffer).Write
+        - (*strings.Builder).WriteString
+    gocritic:
+      disabled-checks:
+        - exitAfterDefer
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck

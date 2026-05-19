@@ -1,0 +1,11 @@
+title = "go-llm-agent gitleaks config"
+
+[allowlist]
+description = "Allow .env.example masked placeholders"
+paths = [
+  '''\.env\.example''',
+]
+regexes = [
+  '''sk-\*\*\*''',
+  '''sk-ant-\*\*\*''',
+]

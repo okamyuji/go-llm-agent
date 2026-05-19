@@ -1,0 +1,44 @@
+repos:
+  - repo: local
+    hooks:
+      - id: check-gofmt
+        name: check-gofmt
+        entry: scripts/hooks/check_gofmt.sh
+        language: system
+        pass_filenames: false
+        types: [go]
+      - id: go-vet
+        name: go-vet
+        entry: go vet ./...
+        language: system
+        pass_filenames: false
+        types: [go]
+      - id: staticcheck
+        name: staticcheck
+        entry: staticcheck ./...
+        language: system
+        pass_filenames: false
+        types: [go]
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run --timeout 5m ./...
+        language: system
+        pass_filenames: false
+        types: [go]
+      - id: govulncheck
+        name: govulncheck
+        entry: govulncheck ./...
+        language: system
+        pass_filenames: false
+        types: [go]
+      - id: go-test-shuffle
+        name: go-test-shuffle
+        entry: go test --count=1 --shuffle=on ./...
+        language: system
+        pass_filenames: false
+        types: [go]
+      - id: gitleaks-protect
+        name: gitleaks-protect
+        entry: gitleaks protect --staged --redact --no-banner --config .gitleaks.toml
+        language: system
+        pass_filenames: false
