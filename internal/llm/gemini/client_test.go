@@ -8,9 +8,16 @@ import (
 	"strings"
 	"testing"
 
+	"go.uber.org/goleak"
+
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/llm/gemini"
 )
+
+// TestMain パッケージ全テスト終了時に goroutine リークを検証する
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestChat_Sync(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

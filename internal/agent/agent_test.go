@@ -5,10 +5,17 @@ import (
 	"encoding/json"
 	"testing"
 
+	"go.uber.org/goleak"
+
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
 )
+
+// TestMain パッケージ全テスト終了時に goroutine リークを検証する
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 type fakeStream struct {
 	events []llm.StreamEvent

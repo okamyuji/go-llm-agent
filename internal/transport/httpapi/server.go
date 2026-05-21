@@ -41,9 +41,11 @@ func ListenAndServe(ctx context.Context, addr string, svc agent.Service, cfg *co
 	}
 	go func() {
 		<-ctx.Done()
+		// 親 ctx は既に Done なので継承不可。Shutdown のタイムアウトは
+		// 独立した Background から発行する必要がある。
 		shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shCtx)
+		_ = srv.Shutdown(shCtx) //nolint:contextcheck // Shutdown は親 ctx から切り離した新規 ctx で実行する設計
 	}()
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err

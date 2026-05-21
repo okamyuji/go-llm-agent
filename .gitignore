@@ -9,5 +9,8 @@
 *.test
 *.out
 
+# 個人ローカル設定はコミット対象外。サンプルは config.yaml.example を参照
+/config.yaml
+
 # 設計書と実装計画書はローカル保持とし公開しません
 /docs/

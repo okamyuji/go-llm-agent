@@ -10,11 +10,18 @@ import (
 	"strings"
 	"testing"
 
+	"go.uber.org/goleak"
+
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/config"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/transport/httpapi"
 )
+
+// TestMain パッケージ全テスト終了時に goroutine リークを検証する
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 type fakeSvc struct{}
 
@@ -32,7 +39,7 @@ func TestChat_NonStreaming(t *testing.T) {
 	defer srv.Close()
 
 	body := bytes.NewBufferString(`{"model":"fake/m","messages":[{"role":"user","content":"hi"}]}`)
-	res, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", body)
+	res, err := postJSON(t, srv.URL+"/v1/chat/completions", body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +65,7 @@ func TestChat_Streaming(t *testing.T) {
 	defer srv.Close()
 
 	body := bytes.NewBufferString(`{"model":"fake/m","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
-	res, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", body)
+	res, err := postJSON(t, srv.URL+"/v1/chat/completions", body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +87,7 @@ func TestModels(t *testing.T) {
 	cfg := &config.Config{Providers: map[string]config.ProviderConfig{"openai": {}, "ollama": {}}}
 	srv := httptest.NewServer(httpapi.New(fakeSvc{}, cfg).Handler())
 	defer srv.Close()
-	res, err := http.Get(srv.URL + "/v1/models")
+	res, err := getURL(t, srv.URL+"/v1/models")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,4 +96,23 @@ func TestModels(t *testing.T) {
 	if !strings.Contains(string(b), "openai") {
 		t.Fatalf("openai 含まれない: %s", string(b))
 	}
+}
+
+func postJSON(t *testing.T, url string, body io.Reader) (*http.Response, error) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return http.DefaultClient.Do(req)
+}
+
+func getURL(t *testing.T, url string) (*http.Response, error) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	return http.DefaultClient.Do(req)
 }

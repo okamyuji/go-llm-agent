@@ -1,0 +1,81 @@
+# go-llm-agent サンプル設定
+# 使い方: `cp config.yaml.example config.yaml` してから編集する。
+# 実体の config.yaml は .gitignore 対象（個人ローカル設定）。
+# デフォルトは安全寄り (readonly + allowlist + audit)。fs_write/shell を有効にする際は
+# README の Security セクションを必ず読むこと。
+
+default_model: gemini/gemini-2.5-pro
+
+providers:
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    # 許可モデルを明示する（空ならプロバイダー側に委譲）。サプライチェーン耐性のため
+    # 検証済みモデルだけをここに列挙することを推奨。
+    allow_models:
+      - gpt-4.1-mini
+      - gpt-4o-mini
+  anthropic:
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    allow_models:
+      - claude-3-5-sonnet-latest
+      - claude-3-5-haiku-latest
+  gemini:
+    base_url: https://generativelanguage.googleapis.com/v1beta
+    api_key_env: GEMINI_API_KEY
+    allow_models:
+      - gemini-2.5-pro
+      - gemini-2.5-flash
+  ollama:
+    base_url: http://localhost:11434
+    # ローカル Ollama はモデル列挙を端的にしづらいため allow_models は空のままにする
+    allow_models: []
+
+agent:
+  max_tool_hops: 8
+  # 既定は readonly のみ。fs_write / shell を有効にしたい場合は意図して追記する。
+  # enabled_tools を空または未指定にすると Registry が DefaultReadonlyTools を採用する。
+  enabled_tools: [fs_read, search_files, http_fetch]
+  system_prompt: |
+    あなたは慎重で正確な開発支援エージェントです。
+    ユーザーの依頼を達成するために必要なら提供されたツールを使い、
+    破壊的な操作を行う前に意図を確認してください。
+    回答は日本語で簡潔にまとめます。
+
+tools:
+  fs:
+    # 専用ワークスペースに閉じることを推奨。リポジトリルート ./ は推奨しない。
+    allow_paths:
+      - ~/Documents/agent-workspace
+    # サンドボックス配下でも追加で deny したいパターン（センシティブな .git や .env 等は
+    # 設定不要で常に遮断される）。
+    deny_paths: []
+    max_read_bytes: 1048576
+  shell:
+    timeout_seconds: 30
+    max_timeout_seconds: 300
+    # 必要最小限のバイナリのみ列挙する。
+    allow_binaries: [git, go, rg, ls, cat, head, tail, sed, awk, grep]
+    # 既定の deny 正規表現 (`config --global`, `bash -c`, `core.sshCommand`, `env -w`,
+    # `install`, `--exec`, `-c <code>` 等) は常に有効。追加で deny したいパターンを記述する。
+    arg_deny_patterns: []
+  http_fetch:
+    deny_private_networks: true
+    timeout_seconds: 15
+    max_body_bytes: 2097152
+    # 公開取得先を絞り込むため FQDN 末尾一致でホワイトリスト。空なら全公開ドメイン許可。
+    # 例: [github.com, raw.githubusercontent.com]
+    allow_domains: []
+  search_files:
+    max_results: 200
+
+server:
+  addr: 127.0.0.1:14000
+
+storage:
+  sessions_dir: ~/.local/state/go-llm-agent/sessions
+
+logging:
+  format: text
+  level: info

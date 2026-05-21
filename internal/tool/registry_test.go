@@ -38,6 +38,35 @@ func TestRegistry_UnknownLookup(t *testing.T) {
 	}
 }
 
+func TestRegistry_DefaultsReadonly_WhenNil(t *testing.T) {
+	r := tool.NewRegistry([]tool.Tool{
+		&fakeTool{name: "fs_read"},
+		&fakeTool{name: "fs_write"},
+		&fakeTool{name: "shell"},
+		&fakeTool{name: "http_fetch"},
+		&fakeTool{name: "search_files"},
+	}, nil)
+	if _, ok := r.Lookup("fs_write"); ok {
+		t.Fatal("enabled_tools 未指定時に fs_write は無効でなければならない")
+	}
+	if _, ok := r.Lookup("shell"); ok {
+		t.Fatal("enabled_tools 未指定時に shell は無効でなければならない")
+	}
+	if _, ok := r.Lookup("fs_read"); !ok {
+		t.Fatal("fs_read は readonly セットに含まれるべき")
+	}
+}
+
+func TestRegistry_DefaultsReadonly_WhenEmptySlice(t *testing.T) {
+	r := tool.NewRegistry([]tool.Tool{
+		&fakeTool{name: "fs_read"},
+		&fakeTool{name: "fs_write"},
+	}, []string{})
+	if _, ok := r.Lookup("fs_write"); ok {
+		t.Fatal("空配列でも readonly デフォルトを適用")
+	}
+}
+
 func TestSandbox_AllowsConfiguredPath(t *testing.T) {
 	root := t.TempDir()
 	sb := tool.NewSandbox([]string{root})

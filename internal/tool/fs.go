@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -15,14 +16,20 @@ const defaultMaxRead = 1 << 20
 type FSRead struct {
 	sb       *Sandbox
 	maxBytes int
+	logger   *slog.Logger
 }
 
 // NewFSRead Sandbox と最大バイト数で FSRead を生成する
 func NewFSRead(sb *Sandbox, maxBytes int) *FSRead {
+	return NewFSReadWithLogger(sb, maxBytes, nil)
+}
+
+// NewFSReadWithLogger Sandbox と最大バイト数と logger で FSRead を生成する
+func NewFSReadWithLogger(sb *Sandbox, maxBytes int, logger *slog.Logger) *FSRead {
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxRead
 	}
-	return &FSRead{sb: sb, maxBytes: maxBytes}
+	return &FSRead{sb: sb, maxBytes: maxBytes, logger: logger}
 }
 
 // Spec ツール定義を返す
@@ -43,7 +50,7 @@ type fsReadArgs struct {
 }
 
 // Execute 引数からパスを受け取り読み込みを行う
-func (t *FSRead) Execute(_ context.Context, raw json.RawMessage) (Result, error) {
+func (t *FSRead) Execute(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var a fsReadArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
@@ -52,16 +59,26 @@ func (t *FSRead) Execute(_ context.Context, raw json.RawMessage) (Result, error)
 		return Result{IsError: true, Content: "path is required"}, nil
 	}
 	if err := t.sb.CheckPath(a.Path); err != nil {
+		auditFS(ctx, t.logger, "fs_read", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	// TOCTOU 緩和: 終端パスが symlink の場合、CheckPath で確認した実体と異なる可能性があるため拒否
+	// （完全な TOCTOU 防御には openat2/O_NOFOLLOW が必要だが、ポータビリティのため Lstat ベース）
+	if info, lerr := os.Lstat(a.Path); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+		msg := fmt.Sprintf("sandbox: symlink 経由のアクセスは拒否 %q", a.Path)
+		auditFS(ctx, t.logger, "fs_read", a.Path, 0, false, msg)
+		return Result{IsError: true, Content: msg}, nil
 	}
 	f, err := os.Open(a.Path)
 	if err != nil {
+		auditFS(ctx, t.logger, "fs_read", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 	defer func() { _ = f.Close() }()
 	limited := io.LimitReader(f, int64(t.maxBytes)+1)
 	b, err := io.ReadAll(limited)
 	if err != nil {
+		auditFS(ctx, t.logger, "fs_read", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 	truncated := false
@@ -69,17 +86,24 @@ func (t *FSRead) Execute(_ context.Context, raw json.RawMessage) (Result, error)
 		b = b[:t.maxBytes]
 		truncated = true
 	}
+	auditFS(ctx, t.logger, "fs_read", a.Path, len(b), true, "ok")
 	return Result{Content: string(b), Truncated: truncated}, nil
 }
 
 // FSWrite fs_write ツールの実装
 type FSWrite struct {
-	sb *Sandbox
+	sb     *Sandbox
+	logger *slog.Logger
 }
 
 // NewFSWrite Sandbox から FSWrite を生成する
 func NewFSWrite(sb *Sandbox) *FSWrite {
-	return &FSWrite{sb: sb}
+	return NewFSWriteWithLogger(sb, nil)
+}
+
+// NewFSWriteWithLogger Sandbox と logger から FSWrite を生成する
+func NewFSWriteWithLogger(sb *Sandbox, logger *slog.Logger) *FSWrite {
+	return &FSWrite{sb: sb, logger: logger}
 }
 
 // Spec ツール定義を返す
@@ -104,7 +128,7 @@ type fsWriteArgs struct {
 }
 
 // Execute 引数からパスと内容を受け取り書き込みを行う
-func (t *FSWrite) Execute(_ context.Context, raw json.RawMessage) (Result, error) {
+func (t *FSWrite) Execute(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var a fsWriteArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
@@ -113,13 +137,44 @@ func (t *FSWrite) Execute(_ context.Context, raw json.RawMessage) (Result, error
 		return Result{IsError: true, Content: "path is required"}, nil
 	}
 	if err := t.sb.CheckPath(a.Path); err != nil {
+		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	// TOCTOU 緩和: 既存ファイルが symlink の場合は上書き先がリンク先となるため拒否
+	if info, lerr := os.Lstat(a.Path); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+		msg := fmt.Sprintf("sandbox: 既存パスが symlink のため拒否 %q", a.Path)
+		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, msg)
+		return Result{IsError: true, Content: msg}, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(a.Path), 0o755); err != nil {
+		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+	// O_CREATE|O_TRUNC で書き込み。symlink 経由の置換攻撃に対する完全防御には openat2 が必要
 	if err := os.WriteFile(a.Path, []byte(a.Content), 0o600); err != nil {
+		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+	auditFS(ctx, t.logger, "fs_write", a.Path, len(a.Content), true, "ok")
 	return Result{Content: fmt.Sprintf("wrote %d bytes to %s", len(a.Content), a.Path)}, nil
+}
+
+func auditFS(ctx context.Context, logger *slog.Logger, op, path string, bytesLen int, ok bool, reason string) {
+	if logger == nil {
+		return
+	}
+	corr := ""
+	if ctx != nil {
+		if v, ok2 := ctx.Value(CorrelationKey()).(string); ok2 {
+			corr = v
+		}
+	}
+	logger.Info("audit",
+		slog.String("tool", op),
+		slog.String("path", path),
+		slog.Int("bytes", bytesLen),
+		slog.Bool("ok", ok),
+		slog.String("reason", reason),
+		slog.String("correlation_id", corr),
+	)
 }

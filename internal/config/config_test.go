@@ -69,3 +69,53 @@ func TestLoad_FileMissing(t *testing.T) {
 		t.Fatal("missing file は err")
 	}
 }
+
+const hardenedYAML = `
+default_model: openai/gpt-4.1-mini
+
+providers:
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    allow_models: [gpt-4.1-mini, gpt-4o-mini]
+
+agent:
+  max_tool_hops: 4
+  enabled_tools: [fs_read, search_files]
+
+tools:
+  fs:
+    allow_paths: [/tmp/agent-workspace]
+    deny_paths: [".git", ".env"]
+  shell:
+    allow_binaries: [git]
+    arg_deny_patterns:
+      - 'config\s+--global'
+  http_fetch:
+    deny_private_networks: true
+    allow_domains: [example.com]
+`
+
+func TestLoad_HardeningFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(hardenedYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load err=%v", err)
+	}
+	if got := cfg.Providers["openai"].AllowModels; len(got) != 2 || got[0] != "gpt-4.1-mini" {
+		t.Fatalf("allow_models got=%v", got)
+	}
+	if got := cfg.Tools.FS.DenyPaths; len(got) != 2 || got[0] != ".git" {
+		t.Fatalf("deny_paths got=%v", got)
+	}
+	if got := cfg.Tools.Shell.ArgDenyPatterns; len(got) != 1 || got[0] != `config\s+--global` {
+		t.Fatalf("arg_deny_patterns got=%v", got)
+	}
+	if got := cfg.Tools.HTTPFetch.AllowDomains; len(got) != 1 || got[0] != "example.com" {
+		t.Fatalf("allow_domains got=%v", got)
+	}
+}

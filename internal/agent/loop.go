@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/okamyuji/go-llm-agent/internal/llm"
+	"github.com/okamyuji/go-llm-agent/internal/tool"
 )
 
 // Run LLM とツールを最大 MaxToolHops 回交互に呼ぶ
@@ -72,7 +73,8 @@ func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 			out <- Event{Kind: EventError, Err: err}
 			return err
 		}
-		res, terr := t.Execute(ctx, pendingCall.Arguments)
+		execCtx := context.WithValue(ctx, tool.CorrelationKey(), pendingCall.ID)
+		res, terr := t.Execute(execCtx, pendingCall.Arguments)
 		tr := &ToolResult{CallID: pendingCall.ID, Name: pendingCall.Name, Content: res.Content, IsError: terr != nil || res.IsError}
 		if terr != nil {
 			tr.Content = terr.Error()
