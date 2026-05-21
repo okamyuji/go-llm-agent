@@ -55,3 +55,34 @@ func TestProviderError_String(t *testing.T) {
 		t.Fatal("unwrap")
 	}
 }
+
+func TestRegistry_AllowModels_AcceptsListed(t *testing.T) {
+	r := llm.NewRegistryWithAllowlist(
+		map[string]llm.Provider{"openai": &fakeProvider{name: "openai"}},
+		map[string][]string{"openai": {"gpt-4.1-mini", "gpt-4o-mini"}},
+	)
+	if _, _, err := r.Resolve("openai/gpt-4.1-mini"); err != nil {
+		t.Fatalf("許可モデルは通る: %v", err)
+	}
+}
+
+func TestRegistry_AllowModels_RejectsUnlisted(t *testing.T) {
+	r := llm.NewRegistryWithAllowlist(
+		map[string]llm.Provider{"openai": &fakeProvider{name: "openai"}},
+		map[string][]string{"openai": {"gpt-4.1-mini"}},
+	)
+	_, _, err := r.Resolve("openai/gpt-3.5")
+	if err == nil {
+		t.Fatal("許可外モデルは拒否されるべき")
+	}
+}
+
+func TestRegistry_AllowModels_EmptyMeansAll(t *testing.T) {
+	r := llm.NewRegistryWithAllowlist(
+		map[string]llm.Provider{"openai": &fakeProvider{name: "openai"}},
+		map[string][]string{"openai": {}},
+	)
+	if _, _, err := r.Resolve("openai/anything"); err != nil {
+		t.Fatalf("空 allow_models は全許可: %v", err)
+	}
+}

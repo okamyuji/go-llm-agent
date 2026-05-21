@@ -20,8 +20,9 @@ type Config struct {
 
 // ProviderConfig プロバイダー固有設定
 type ProviderConfig struct {
-	BaseURL   string `yaml:"base_url"`
-	APIKeyEnv string `yaml:"api_key_env"`
+	BaseURL     string   `yaml:"base_url"`
+	APIKeyEnv   string   `yaml:"api_key_env"`
+	AllowModels []string `yaml:"allow_models"`
 }
 
 // AgentConfig エージェントループ設定
@@ -42,6 +43,7 @@ type ToolsConfig struct {
 // FSToolConfig fs_read と fs_write の設定
 type FSToolConfig struct {
 	AllowPaths   []string `yaml:"allow_paths"`
+	DenyPaths    []string `yaml:"deny_paths"`
 	MaxReadBytes int      `yaml:"max_read_bytes"`
 }
 
@@ -50,13 +52,15 @@ type ShellToolConfig struct {
 	TimeoutSeconds    int      `yaml:"timeout_seconds"`
 	MaxTimeoutSeconds int      `yaml:"max_timeout_seconds"`
 	AllowBinaries     []string `yaml:"allow_binaries"`
+	ArgDenyPatterns   []string `yaml:"arg_deny_patterns"`
 }
 
 // HTTPFetchToolConfig http_fetch の設定
 type HTTPFetchToolConfig struct {
-	DenyPrivateNetworks bool `yaml:"deny_private_networks"`
-	TimeoutSeconds      int  `yaml:"timeout_seconds"`
-	MaxBodyBytes        int  `yaml:"max_body_bytes"`
+	DenyPrivateNetworks bool     `yaml:"deny_private_networks"`
+	TimeoutSeconds      int      `yaml:"timeout_seconds"`
+	MaxBodyBytes        int      `yaml:"max_body_bytes"`
+	AllowDomains        []string `yaml:"allow_domains"`
 }
 
 // SearchFilesConfig search_files の設定

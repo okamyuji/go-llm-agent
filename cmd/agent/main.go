@@ -88,15 +88,21 @@ func loadDeps(configPath string) (*config.Config, llm.Registry, tool.Registry, s
 	if pc, ok := cfg.Providers["ollama"]; ok {
 		provs["ollama"] = ollama.New(ollama.Options{BaseURL: pc.BaseURL})
 	}
-	llmReg := llm.NewRegistry(provs)
+	allowModels := map[string][]string{}
+	for name, pc := range cfg.Providers {
+		if len(pc.AllowModels) > 0 {
+			allowModels[name] = pc.AllowModels
+		}
+	}
+	llmReg := llm.NewRegistryWithAllowlist(provs, allowModels)
 
 	logger := obs.NewLogger(obs.LoggerOptions{Format: cfg.Logging.Format, Level: cfg.Logging.Level})
-	sb := tool.NewSandbox(cfg.Tools.FS.AllowPaths)
+	sb := tool.NewSandboxWithDeny(cfg.Tools.FS.AllowPaths, cfg.Tools.FS.DenyPaths)
 	tools := []tool.Tool{
-		tool.NewFSRead(sb, cfg.Tools.FS.MaxReadBytes),
-		tool.NewFSWrite(sb),
+		tool.NewFSReadWithLogger(sb, cfg.Tools.FS.MaxReadBytes, logger),
+		tool.NewFSWriteWithLogger(sb, logger),
 		tool.NewShell(cfg.Tools.Shell, logger),
-		tool.NewHTTPFetch(cfg.Tools.HTTPFetch),
+		tool.NewHTTPFetchWithLogger(cfg.Tools.HTTPFetch, logger),
 		tool.NewSearchFiles(sb, cfg.Tools.SearchFiles),
 	}
 	toolReg := tool.NewRegistry(tools, cfg.Agent.EnabledTools)

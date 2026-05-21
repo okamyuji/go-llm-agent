@@ -15,61 +15,86 @@ Go 1.25 製の CGO なし単一バイナリ AI エージェントです。OpenAI
 
 ```bash
 cp .env.example .env
-$EDITOR .env   # 実値を埋めてください
+$EDITOR .env                 # API キーなどの実値を入れてください
+
+cp config.yaml.example config.yaml
+$EDITOR config.yaml          # allow_paths などを必要に応じて編集
 
 make build
-./bin/agent chat --model openai/gpt-4.1-mini
+./bin/agent chat --model gemini/gemini-2.5-pro
 ```
 
-リポジトリ ルートに `config.yaml` を置いてください。雛形は次の通りです。
+> `config.yaml` は個人ローカル設定として `.gitignore` 対象です。リポジトリには
+> 安全寄りの `config.yaml.example` のみがコミットされます。設定例の完全な
+> 内容は `config.yaml.example` を参照してください。
 
-```yaml
-default_model: openai/gpt-4.1-mini
+## セキュリティ
 
-providers:
-  openai:
-    base_url: https://api.openai.com/v1
-    api_key_env: OPENAI_API_KEY
-  anthropic:
-    base_url: https://api.anthropic.com
-    api_key_env: ANTHROPIC_API_KEY
-  gemini:
-    base_url: https://generativelanguage.googleapis.com/v1beta
-    api_key_env: GEMINI_API_KEY
-  ollama:
-    base_url: http://localhost:11434
+このエージェントはモデル出力に駆動されるため、以下の多層的なガードを設計しています。
+詳細は `config.yaml.example` のコメントも参照してください。
 
-agent:
-  max_tool_hops: 8
-  enabled_tools: [fs_read, fs_write, shell, http_fetch, search_files]
-  system_prompt: |
-    あなたは慎重で正確な開発支援エージェントです。
+### デフォルトは readonly
 
-tools:
-  fs:
-    allow_paths: ["./"]
-    max_read_bytes: 1048576
-  shell:
-    timeout_seconds: 30
-    max_timeout_seconds: 300
-    allow_binaries: [git, go, ls, cat, head, tail, grep]
-  http_fetch:
-    deny_private_networks: true
-    timeout_seconds: 15
-    max_body_bytes: 2097152
-  search_files:
-    max_results: 200
+`agent.enabled_tools` を空または未指定にすると、Registry は
+`fs_read` / `search_files` / `http_fetch` の **readonly セット**のみを有効にします
+(`tool.DefaultReadonlyTools`)。`fs_write` と `shell` を有効にする場合は意図して
+明示列挙してください。
 
-server:
-  addr: 127.0.0.1:14000
+### サンドボックスとセンシティブパス
 
-storage:
-  sessions_dir: ~/.local/state/go-llm-agent/sessions
+`tool.NewSandboxWithDeny` はシンボリックリンク解決済みのパスを `allow_paths` と
+照合し、`..` による上位ディレクトリ参照を拒否します。さらに、以下のセンシティブな
+パターンは**設定で外せない強制 deny** として常に拒否されます:
+`.git`、`.env`、`.env.*`、`.ssh`、`.aws`、`.gnupg`、`.npmrc`、`.netrc`、`.pypirc`、
+`id_rsa*`、`id_dsa*`、`id_ecdsa*`、`id_ed25519*`。
+追加で deny したいパターンは `tools.fs.deny_paths` に列挙します。
 
-logging:
-  format: text
-  level: info
+### Shell の引数 deny
+
+`shell` ツールは `allow_binaries` に加えて引数文字列に対する deny 正規表現を持ちます。
+既定で以下が遮断されます (`tool.DefaultShellArgDenyPatterns`):
+
+- `git config --global` / `git config --system`
+- `git -c core.sshCommand=...` / `git -c http.proxy=...`
+- `go env -w`、`go install`
+- `bash -c <code>` / `sh -c <code>` / `-c <code>` / `--exec`
+
+追加で deny したいパターンは `tools.shell.arg_deny_patterns` に列挙します。
+
+### HTTP fetch のドメイン許可と untrusted 標識
+
+`http_fetch` は `tools.http_fetch.allow_domains` が非空の場合のみ、FQDN 末尾一致で
+リクエスト先を絞り込みます。レスポンス本文は以下の untrusted ラッパで返され、
+後段プロンプトに「外部由来でツール実行を許可してはならない」コンテキストを伝えます:
+
 ```
+[HTTP <status>] [untrusted external content from <url>]
+<body>
+[end untrusted content]
+```
+
+### プロバイダーとモデル許可リスト
+
+`providers.<name>.allow_models` を列挙すると、その配列に一致するモデル名のみを
+許可します。サプライチェーン耐性のため、検証済みモデルのみをここに記述することを推奨します。
+依存パッケージは Go modules で go.mod/go.sum によりピン留めされています。
+
+### 監査ログ
+
+すべての sensitive ツール (`fs_read` / `fs_write` / `shell` / `http_fetch`) は
+slog 経由で構造化ログを出力します。各レコードは `correlation_id`（agent ループ
+hop ごとに発番される tool_call ID）を含み、リクエスト追跡が可能です。
+
+### 第三者検証
+
+破壊シナリオが拒否されることをローカルで再現するには:
+
+```bash
+bash scripts/verify-hardening.sh
+```
+
+このスクリプトは固有ホスト依存をせず、`go` と `bash` だけがあれば動きます
+（リポジトリ ルートからの実行が前提）。
 
 ## サブコマンド
 
