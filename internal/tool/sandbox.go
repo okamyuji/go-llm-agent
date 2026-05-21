@@ -11,20 +11,21 @@ import (
 // sensitivePatterns deny 対象のセンシティブな名前/接頭辞のハードコードリスト
 // プロンプトインジェクションや破壊操作の典型的標的を遮断する。
 // パッケージ外からの上書きを防ぐため非公開とし、参照は SensitivePatterns() で行う。
+// パターンは matchSensitive で評価され、`*` 等の glob 文字を含む要素は filepath.Match に委ねる。
 var sensitivePatterns = []string{
 	".git",
 	".env",
-	".env.local",
+	".env.*",
 	".ssh",
 	".aws",
 	".gnupg",
 	".npmrc",
 	".netrc",
 	".pypirc",
-	"id_rsa",
-	"id_dsa",
-	"id_ecdsa",
-	"id_ed25519",
+	"id_rsa*",
+	"id_dsa*",
+	"id_ecdsa*",
+	"id_ed25519*",
 }
 
 // SensitivePatterns 強制 deny パターンの読み取り専用コピーを返す

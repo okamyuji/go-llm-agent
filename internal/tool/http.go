@@ -146,7 +146,7 @@ func (t *HTTPFetchTool) audit(ctx context.Context, fullURL, host string, status,
 	}
 	corr := ""
 	if ctx != nil {
-		if v, ok2 := ctx.Value(correlationKey{}).(string); ok2 {
+		if v, ok2 := ctx.Value(CorrelationKey()).(string); ok2 {
 			corr = v
 		}
 	}

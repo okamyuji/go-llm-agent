@@ -165,7 +165,7 @@ func auditFS(ctx context.Context, logger *slog.Logger, op, path string, bytesLen
 	}
 	corr := ""
 	if ctx != nil {
-		if v, ok2 := ctx.Value(correlationKey{}).(string); ok2 {
+		if v, ok2 := ctx.Value(CorrelationKey()).(string); ok2 {
 			corr = v
 		}
 	}

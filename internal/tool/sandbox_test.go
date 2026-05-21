@@ -28,6 +28,7 @@ func TestSandbox_DenyEnv(t *testing.T) {
 	cases := []string{
 		filepath.Join(root, ".env"),
 		filepath.Join(root, "sub", ".env.local"),
+		filepath.Join(root, "sub", ".env.production"),
 		filepath.Join(root, "deep", "more", ".ssh", "config"),
 	}
 	for _, c := range cases {
@@ -40,11 +41,32 @@ func TestSandbox_DenyEnv(t *testing.T) {
 func TestSandbox_DenyIDKeys(t *testing.T) {
 	root := t.TempDir()
 	sb := tool.NewSandbox([]string{root})
-	for _, name := range []string{"id_rsa", "id_rsa.pub", "id_ed25519"} {
+	for _, name := range []string{
+		"id_rsa",
+		"id_rsa.pub",
+		"id_rsa_backup",
+		"id_ed25519",
+		"id_ed25519.pub",
+		"id_ecdsa_old",
+		"id_dsa.bak",
+	} {
 		p := filepath.Join(root, name)
 		if err := sb.CheckPath(p); err == nil {
 			t.Fatalf("%s は deny", name)
 		}
+	}
+}
+
+func TestSandbox_SensitivePatternsImmutable(t *testing.T) {
+	got := tool.SensitivePatterns()
+	if len(got) == 0 {
+		t.Fatal("SensitivePatterns() は空でない一覧を返すべき")
+	}
+	// 返却されたスライスを変更しても内部状態は崩れない（コピーが返るため）
+	got[0] = "MODIFIED"
+	again := tool.SensitivePatterns()
+	if again[0] == "MODIFIED" {
+		t.Fatal("SensitivePatterns() は内部状態への書込を許してはならない")
 	}
 }
 

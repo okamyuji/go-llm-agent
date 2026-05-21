@@ -145,7 +145,7 @@ func (t *ShellTool) audit(ctx context.Context, binary string, args []string, ela
 	}
 	corr := ""
 	if ctx != nil {
-		if v, ok2 := ctx.Value(correlationKey{}).(string); ok2 {
+		if v, ok2 := ctx.Value(CorrelationKey()).(string); ok2 {
 			corr = v
 		}
 	}
@@ -159,9 +159,3 @@ func (t *ShellTool) audit(ctx context.Context, binary string, args []string, ela
 		slog.String("correlation_id", corr),
 	)
 }
-
-// correlationKey は audit ログの相関 ID を取り出すための context key
-type correlationKey struct{}
-
-// CorrelationKey audit ログ間で hop を紐付ける context key
-func CorrelationKey() any { return correlationKey{} }
