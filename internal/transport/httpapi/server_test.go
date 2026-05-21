@@ -10,11 +10,18 @@ import (
 	"strings"
 	"testing"
 
+	"go.uber.org/goleak"
+
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/config"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/transport/httpapi"
 )
+
+// TestMain パッケージ全テスト終了時に goroutine リークを検証する
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 type fakeSvc struct{}
 
