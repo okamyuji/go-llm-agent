@@ -8,9 +8,10 @@ import (
 	"strings"
 )
 
-// SensitivePatterns deny 対象のセンシティブな名前/接頭辞のハードコードリスト
-// プロンプトインジェクションや破壊操作の典型的標的を遮断する
-var SensitivePatterns = []string{
+// sensitivePatterns deny 対象のセンシティブな名前/接頭辞のハードコードリスト
+// プロンプトインジェクションや破壊操作の典型的標的を遮断する。
+// パッケージ外からの上書きを防ぐため非公開とし、参照は SensitivePatterns() で行う。
+var sensitivePatterns = []string{
 	".git",
 	".env",
 	".env.local",
@@ -24,6 +25,13 @@ var SensitivePatterns = []string{
 	"id_dsa",
 	"id_ecdsa",
 	"id_ed25519",
+}
+
+// SensitivePatterns 強制 deny パターンの読み取り専用コピーを返す
+func SensitivePatterns() []string {
+	out := make([]string, len(sensitivePatterns))
+	copy(out, sensitivePatterns)
+	return out
 }
 
 // Sandbox 許可ルートと拒否パターンの管理
@@ -51,8 +59,8 @@ func NewSandboxWithDeny(roots, deny []string) *Sandbox {
 		}
 		clean = append(clean, abs)
 	}
-	// SensitivePatterns は常に強制 deny に組み込む（設定で外せない）
-	denyAll := append([]string{}, SensitivePatterns...)
+	// sensitivePatterns は常に強制 deny に組み込む（設定で外せない）
+	denyAll := append([]string{}, sensitivePatterns...)
 	denyAll = append(denyAll, deny...)
 	return &Sandbox{allowedRoots: clean, denyPatterns: denyAll}
 }
@@ -62,13 +70,18 @@ func (s *Sandbox) CheckPath(path string) error {
 	if path == "" {
 		return fmt.Errorf("sandbox: パスが空です")
 	}
-	path = expandTilde(path)
-	abs, err := filepath.Abs(path)
+	// 正規化前の入力に .. セグメントがある場合は早期拒否
+	// filepath.Clean が .. を消す前に検出することで意図を明確化する
+	expanded := expandTilde(path)
+	if hasDotDotSegment(expanded) {
+		return fmt.Errorf("sandbox: パスに上位ディレクトリ参照が含まれています %q", path)
+	}
+	abs, err := filepath.Abs(expanded)
 	if err != nil {
 		return fmt.Errorf("sandbox: 絶対パス変換失敗: %w", err)
 	}
 	clean := filepath.Clean(abs)
-	// Clean 後に .. が残るのは不正
+	// Clean 後に .. が残るケース（許可ルート外への遡上）も二段で拒否
 	if hasDotDotSegment(clean) {
 		return fmt.Errorf("sandbox: パスに上位ディレクトリ参照が含まれています %q", path)
 	}

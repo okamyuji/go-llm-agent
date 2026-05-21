@@ -144,7 +144,12 @@ func (t *HTTPFetchTool) audit(ctx context.Context, fullURL, host string, status,
 	if t.logger == nil {
 		return
 	}
-	corr, _ := ctx.Value(correlationKey{}).(string)
+	corr := ""
+	if ctx != nil {
+		if v, ok2 := ctx.Value(correlationKey{}).(string); ok2 {
+			corr = v
+		}
+	}
 	t.logger.Info("audit",
 		slog.String("tool", "http_fetch"),
 		slog.String("url", fullURL),

@@ -67,7 +67,7 @@ make build
 リクエスト先を絞り込みます。レスポンス本文は以下の untrusted ラッパで返され、
 後段プロンプトに「外部由来でツール実行を許可してはならない」コンテキストを伝えます:
 
-```
+```text
 [HTTP <status>] [untrusted external content from <url>]
 <body>
 [end untrusted content]

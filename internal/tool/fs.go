@@ -62,6 +62,13 @@ func (t *FSRead) Execute(ctx context.Context, raw json.RawMessage) (Result, erro
 		auditFS(ctx, t.logger, "fs_read", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+	// TOCTOU 緩和: 終端パスが symlink の場合、CheckPath で確認した実体と異なる可能性があるため拒否
+	// （完全な TOCTOU 防御には openat2/O_NOFOLLOW が必要だが、ポータビリティのため Lstat ベース）
+	if info, lerr := os.Lstat(a.Path); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+		msg := fmt.Sprintf("sandbox: symlink 経由のアクセスは拒否 %q", a.Path)
+		auditFS(ctx, t.logger, "fs_read", a.Path, 0, false, msg)
+		return Result{IsError: true, Content: msg}, nil
+	}
 	f, err := os.Open(a.Path)
 	if err != nil {
 		auditFS(ctx, t.logger, "fs_read", a.Path, 0, false, err.Error())
@@ -133,10 +140,17 @@ func (t *FSWrite) Execute(ctx context.Context, raw json.RawMessage) (Result, err
 		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+	// TOCTOU 緩和: 既存ファイルが symlink の場合は上書き先がリンク先となるため拒否
+	if info, lerr := os.Lstat(a.Path); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+		msg := fmt.Sprintf("sandbox: 既存パスが symlink のため拒否 %q", a.Path)
+		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, msg)
+		return Result{IsError: true, Content: msg}, nil
+	}
 	if err := os.MkdirAll(filepath.Dir(a.Path), 0o755); err != nil {
 		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+	// O_CREATE|O_TRUNC で書き込み。symlink 経由の置換攻撃に対する完全防御には openat2 が必要
 	if err := os.WriteFile(a.Path, []byte(a.Content), 0o600); err != nil {
 		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
@@ -149,7 +163,12 @@ func auditFS(ctx context.Context, logger *slog.Logger, op, path string, bytesLen
 	if logger == nil {
 		return
 	}
-	corr, _ := ctx.Value(correlationKey{}).(string)
+	corr := ""
+	if ctx != nil {
+		if v, ok2 := ctx.Value(correlationKey{}).(string); ok2 {
+			corr = v
+		}
+	}
 	logger.Info("audit",
 		slog.String("tool", op),
 		slog.String("path", path),

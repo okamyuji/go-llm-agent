@@ -143,7 +143,12 @@ func (t *ShellTool) audit(ctx context.Context, binary string, args []string, ela
 	if t.logger == nil {
 		return
 	}
-	corr, _ := ctx.Value(correlationKey{}).(string)
+	corr := ""
+	if ctx != nil {
+		if v, ok2 := ctx.Value(correlationKey{}).(string); ok2 {
+			corr = v
+		}
+	}
 	t.logger.Info("audit",
 		slog.String("tool", "shell"),
 		slog.String("binary", binary),
