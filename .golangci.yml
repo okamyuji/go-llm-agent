@@ -12,6 +12,12 @@ linters:
     - gocritic
     - revive
     - gosec
+    # リソース/メモリリーク検出系
+    - bodyclose      # net/http response.Body.Close() 漏れ
+    - noctx          # context 無しの net/http リクエスト
+    - contextcheck   # 受け取った context が下流に伝播されているか
+    - rowserrcheck   # database/sql の rows.Err() / rows.Close() 漏れ
+    - sqlclosecheck  # database/sql の stmt close 漏れ
   settings:
     revive:
       rules:

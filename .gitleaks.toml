@@ -1,9 +1,20 @@
 title = "go-llm-agent gitleaks config"
 
+# gitleaks 内蔵のデフォルトルール一式を継承する。
+# これがないと [allowlist] のみが読まれてルール 0 件となり何も検出できない。
+[extend]
+useDefault = true
+
 [allowlist]
-description = "Allow .env.example masked placeholders"
+description = """\
+.env.example はマスク済みのサンプルなので allowlist。
+.env / config.yaml はローカル専用かつ /.gitignore で git 保護されており、
+git に混入する経路はないため作業ツリーの no-git scan からは除外する。
+"""
 paths = [
   '''\.env\.example''',
+  '''^\.env$''',
+  '''^config\.yaml$''',
 ]
 regexes = [
   '''sk-\*\*\*''',

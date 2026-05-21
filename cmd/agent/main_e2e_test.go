@@ -55,14 +55,16 @@ func TestE2E_Run_OpenAIStubbed(t *testing.T) {
 	}
 
 	binary := filepath.Join(dir, "agent")
-	build := exec.Command("go", "build", "-o", binary, ".")
+	buildCtx, buildCancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer buildCancel()
+	build := exec.CommandContext(buildCtx, "go", "build", "-o", binary, ".")
 	build.Stdout = os.Stdout
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		t.Fatalf("build: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, "run", "--config", cfgPath, "-p", "say hi")
 	cmd.Env = append(os.Environ(), "OPENAI_API_KEY=dummy")
@@ -83,13 +85,17 @@ func TestE2E_VersionCommand(t *testing.T) {
 	}
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "agent")
-	build := exec.Command("go", "build", "-o", binary, ".")
+	buildCtx, buildCancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer buildCancel()
+	build := exec.CommandContext(buildCtx, "go", "build", "-o", binary, ".")
 	build.Stdout = os.Stdout
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	out, err := exec.Command(binary, "version").Output()
+	runCtx, runCancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer runCancel()
+	out, err := exec.CommandContext(runCtx, binary, "version").Output()
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}

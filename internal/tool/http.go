@@ -164,18 +164,20 @@ func (t *HTTPFetchTool) audit(ctx context.Context, fullURL, host string, status,
 
 func privateDenyDialer(timeout time.Duration) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	d := &net.Dialer{Timeout: timeout}
+	resolver := net.DefaultResolver
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, err
 		}
-		ips, err := net.LookupIP(host)
+		// context 付きの解決を使うことで cancel/timeout を伝播する
+		ips, err := resolver.LookupIPAddr(ctx, host)
 		if err != nil {
 			return nil, err
 		}
 		for _, ip := range ips {
-			if isPrivateOrLocal(ip) {
-				return nil, fmt.Errorf("http_fetch: private or loopback IP rejected: %s", ip)
+			if isPrivateOrLocal(ip.IP) {
+				return nil, fmt.Errorf("http_fetch: private or loopback IP rejected: %s", ip.IP)
 			}
 		}
 		return d.DialContext(ctx, network, addr)

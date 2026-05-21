@@ -110,9 +110,15 @@ bash scripts/verify-hardening.sh
 
 ```bash
 make precommit-install   # pre-commit フックを有効化
-make quality             # 品質ゲートをローカル実行
+make quality             # 品質ゲートをローカル実行（CI と同一フロー）
 make build-all           # 6 バイナリへクロスコンパイル
 ```
+
+`scripts/quality-gate.sh` は **pre-commit と CI で同一コマンド** を実行する単一
+エントリです。gofmt / go vet / staticcheck / golangci-lint / govulncheck / `go test
+--count=1 --shuffle=on -race -cover` / `gitleaks detect --no-git --source .` を
+順に走らせます。gitleaks は作業ツリーを直接スキャンする方式に統一しており、
+pre-commit でもステージ済み・未ステージ含む全ファイルを検査します。
 
 ## ライセンス
 
