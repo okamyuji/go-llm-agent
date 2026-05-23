@@ -37,6 +37,10 @@ type TelemetryConfig struct {
 }
 
 // Shutdown InitTelemetry が返すクリーンアップ関数の型
+// 引数 ctx は将来のキャンセル伝播用に残しているが、現在の実装では使用しない
+// shutdown 経路で親 ctx が既に canceled な状況でも span / metric の最終 flush を
+// 確実に走らせるため、内部で Background ベースの独立 ctx を起こす設計に変更したため
+// 呼び出し側は context.Background() を渡しておけば十分
 type Shutdown func(context.Context) error
 
 // telemetryInstruments TracerProvider と MeterProvider と計測器を保持する
