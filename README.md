@@ -251,6 +251,14 @@ agent:
 
 E2E スクリプトは `tests/e2e/05-tool-choice-validation.sh` です。fixtures/tool_choice_exercise の OpenAI 互換 fake サーバが受信するペイロードに `tool_choice: required` が正しくマッピングされていることを確認します。設計の詳細は `docs/design/05-tool-choice-schema-validation.md` を参照してください。
 
+## mTLS と OAuth2
+
+`internal/transport/httpapi.BuildTLSConfig` で TLS 終端と mTLS を構築できます。`ClientCAFile` を指定すると `RequireAndVerifyClientCert` で mTLS を強制します。`MinVersion` で TLS の最低バージョンも指定できます。
+
+`JWTVerifier` は OAuth2 リソースサーバの最小スタブです。MVP として shared_secret_env による HS256 検証だけ用意しており、JWKS fetch と RS256 / ES256 検証は後続フェーズの go-jwt 統合で拡張します。
+
+E2E スクリプトは `tests/e2e/15-mtls.sh` で BuildTLSConfig と NewJWTVerifier の各分岐を -race 付きで実行します。設計の詳細は `docs/design/15-mtls-oauth.md` を参照してください。
+
 ## HTTP API の認証とレート制限
 
 `agent serve` の HTTP API は既定で無認証です。本番運用や 127.0.0.1 以外で待ち受ける場合は、Bearer Token 認証、レート制限、IP allowlist、CORS をまとめて有効化できます。
