@@ -194,8 +194,10 @@ safety:
       - id: jp_mynumber
         regex: "\\b\\d{4}\\s?\\d{4}\\s?\\d{4}\\b"
         replacement: "[REDACTED:JP_MYNUMBER]"
+      # ipv4 は 0-255 のオクテット範囲を厳密に判定し、version 番号 (例: 1.2.3.4) 風の文字列に
+      # 過剰反応しないようにする
       - id: ipv4
-        regex: "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b"
+        regex: "\\b(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(\\.(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}\\b"
         replacement: "[REDACTED:IPV4]"
 
 # OpenTelemetry 計装。enabled: true で OTLP HTTP exporter にトレースとメトリクスを送る。

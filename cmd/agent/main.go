@@ -216,7 +216,9 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 	if ns, err := memory.NewFileNoteStore(notesPath); err == nil {
 		tools = append(tools, &tool.NoteAddTool{Store: ns}, &tool.NoteSearchTool{Store: ns})
 	} else {
-		logger.Warn("notes store init failed; note_add / note_search will be disabled", "path", notesPath, "err", err)
+		// 永続化レイヤの初期化失敗は無視せず Error として記録する
+		// note_add / note_search ツールは無効化される運用上の制約をログから検知できるようにする
+		logger.Error("notes store init failed; note_add / note_search will be disabled", "path", notesPath, "err", err)
 	}
 	toolReg := tool.NewRegistry(tools, cfg.Agent.EnabledTools)
 	store := storage.NewSessionStore(expand(cfg.Storage.SessionsDir))
@@ -277,9 +279,12 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 			slog.Warn("agent.approval.default_decision=allow は廃止されました timeout 時は常に deny として扱います")
 		}
 		approver = agent.NewHTTPApprover()
+		// timeout_seconds 未設定 (<=0) は無期限待機による goroutine リークを招くため、
+		// 暗黙の既定値 30 秒を適用する。30 秒は MVP 既定で、本番運用は明示設定を推奨する
 		timeout := time.Duration(cfg.Agent.Approval.TimeoutSeconds) * time.Second
 		if timeout <= 0 {
 			timeout = 30 * time.Second
+			slog.Warn("agent.approval.timeout_seconds 未指定のため既定値 30 秒を適用しました。本番運用では明示設定を推奨します")
 		}
 		opts = append(opts, agent.WithApprover(approver, cfg.Agent.Approval.RequiredTools, timeout))
 	}

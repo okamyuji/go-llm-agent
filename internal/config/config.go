@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -271,5 +272,46 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(b, &cfg); err != nil {
 		return nil, fmt.Errorf("config parse: %w", err)
 	}
+	if err := validateFallbackChains(cfg.Providers); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+// validateFallbackChains providers の fallback_to から有向グラフを作り、サイクルが存在しないことを確認する
+// サイクル付きの設定はランタイムで無限ループの原因になるため起動時に拒否する
+func validateFallbackChains(providers map[string]ProviderConfig) error {
+	const (
+		white = 0
+		gray  = 1
+		black = 2
+	)
+	color := make(map[string]int, len(providers))
+	var dfs func(name string, stack []string) error
+	dfs = func(name string, stack []string) error {
+		switch color[name] {
+		case gray:
+			return fmt.Errorf("config: provider fallback cycle detected: %s", strings.Join(append(stack, name), " -> "))
+		case black:
+			return nil
+		}
+		color[name] = gray
+		next := providers[name].FallbackTo
+		if next != "" {
+			if _, ok := providers[next]; !ok {
+				return fmt.Errorf("config: provider %q fallback_to references unknown provider %q", name, next)
+			}
+			if err := dfs(next, append(stack, name)); err != nil {
+				return err
+			}
+		}
+		color[name] = black
+		return nil
+	}
+	for name := range providers {
+		if err := dfs(name, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }

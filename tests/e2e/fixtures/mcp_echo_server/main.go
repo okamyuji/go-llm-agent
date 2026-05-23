@@ -36,6 +36,12 @@ func main() {
 	for sc.Scan() {
 		var req rpcReq
 		if e := json.Unmarshal(sc.Bytes(), &req); e != nil {
+			// JSON-RPC 2.0 Parse error (-32700) として明示的に応答する
+			parseErr := rpcResp{JSONRPC: "2.0", Error: &err{Code: -32700, Message: "parse error: " + e.Error()}}
+			if b, merr := json.Marshal(parseErr); merr == nil {
+				_, _ = out.Write(append(b, '\n'))
+				_ = out.Flush()
+			}
 			continue
 		}
 		var resp rpcResp
