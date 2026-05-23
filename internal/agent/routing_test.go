@@ -1,10 +1,22 @@
 package agent
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
+
+func mustRouter(t *testing.T, primary, canaryModel string, canaryRatio float64, shadowModel string, shadowRatio float64) *Router {
+	t.Helper()
+	r, err := NewRouter(primary, canaryModel, canaryRatio, shadowModel, shadowRatio)
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	return r
+}
 
 func TestRouter_RatioZeroNeverUsesCanary(t *testing.T) {
 	t.Parallel()
-	r := NewRouter("primary", "canary", 0, "", 0)
+	r := mustRouter(t, "primary", "canary", 0, "", 0)
 	for i := range 100 {
 		d := r.Pick(int64(i))
 		if d.UseCanary {
@@ -18,7 +30,7 @@ func TestRouter_RatioZeroNeverUsesCanary(t *testing.T) {
 
 func TestRouter_RatioOneAlwaysUsesCanary(t *testing.T) {
 	t.Parallel()
-	r := NewRouter("primary", "canary", 1.0, "", 0)
+	r := mustRouter(t, "primary", "canary", 1.0, "", 0)
 	for i := range 50 {
 		d := r.Pick(int64(i))
 		if !d.UseCanary || d.Primary != "canary" {
@@ -29,11 +41,11 @@ func TestRouter_RatioOneAlwaysUsesCanary(t *testing.T) {
 
 func TestRouter_ShadowAlwaysOrNever(t *testing.T) {
 	t.Parallel()
-	r0 := NewRouter("p", "", 0, "s", 0)
+	r0 := mustRouter(t, "p", "", 0, "s", 0)
 	if d := r0.Pick(1); d.Shadow != "" {
 		t.Errorf("ratio=0 must yield empty Shadow, got %q", d.Shadow)
 	}
-	r1 := NewRouter("p", "", 0, "s", 1.0)
+	r1 := mustRouter(t, "p", "", 0, "s", 1.0)
 	if d := r1.Pick(1); d.Shadow != "s" {
 		t.Errorf("ratio=1 must always set Shadow, got %q", d.Shadow)
 	}
@@ -41,7 +53,7 @@ func TestRouter_ShadowAlwaysOrNever(t *testing.T) {
 
 func TestRouter_ShadowRatioCappedAt05(t *testing.T) {
 	t.Parallel()
-	r := NewRouter("p", "", 0, "s", 0.9)
+	r := mustRouter(t, "p", "", 0, "s", 0.9)
 	// 内部状態はテストで直接確認できないので Pick 結果のみ観測
 	// 0.9 のままだったら 90% で shadow になる
 	on := 0
@@ -59,10 +71,19 @@ func TestRouter_ShadowRatioCappedAt05(t *testing.T) {
 
 func TestRouter_DecisionDeterministicForSameSeed(t *testing.T) {
 	t.Parallel()
-	r := NewRouter("p", "c", 0.5, "s", 0.5)
+	r := mustRouter(t, "p", "c", 0.5, "s", 0.5)
 	d1 := r.Pick(42)
 	d2 := r.Pick(42)
 	if d1 != d2 {
 		t.Errorf("same seed must yield same decision, got %+v vs %+v", d1, d2)
+	}
+}
+
+// TestNewRouter_RejectsEmptyPrimary primary 空での構築を起動時 error で弾くことを確認する
+func TestNewRouter_RejectsEmptyPrimary(t *testing.T) {
+	t.Parallel()
+	_, err := NewRouter("", "", 0, "", 0)
+	if !errors.Is(err, ErrRouterPrimaryRequired) {
+		t.Fatalf("expected ErrRouterPrimaryRequired, got %v", err)
 	}
 }

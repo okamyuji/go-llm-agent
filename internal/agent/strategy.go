@@ -44,9 +44,10 @@ func (plannerExecutorStrategy) Name() string { return "planner_executor" }
 // executor_model が設定されていれば Input.Model を上書きする
 func (p plannerExecutorStrategy) run(ctx context.Context, s *service, in Input, out chan<- Event) error {
 	prompt := in.SystemPrompt
-	// "[Planner]" タグの有無で既存のプランナー指示を判定する。"plan" 単語マッチは
-	// "explain"/"complaint" などに誤マッチするため避ける
-	if !strings.Contains(prompt, "[Planner]") {
+	// "[Planner]" タグの有無で既存のプランナー指示を判定する
+	// "plan" 単語マッチは "explain"/"complaint" などに誤マッチするため避ける
+	// 大小文字どちらでも検出できるよう ToLower で比較する (元のケーシングは保持する)
+	if !strings.Contains(strings.ToLower(prompt), "[planner]") {
 		prompt = strings.TrimSpace(prompt + "\n\n[Planner] 必要なら最初に箇条書きで計画を出し、その後ツールを順に呼び出してください。複雑な質問は副問いに分解して計画に含めてください。")
 	}
 	in.SystemPrompt = prompt

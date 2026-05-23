@@ -1,5 +1,7 @@
 package agent
 
+import "errors"
+
 // Decision Router.Pick が返すルーティング判定
 type Decision struct {
 	Primary   string
@@ -17,12 +19,19 @@ type Router struct {
 	shadowRatio float64
 }
 
+// ErrRouterPrimaryRequired primary モデルが空の Router 構築を拒否する sentinel error
+var ErrRouterPrimaryRequired = errors.New("agent: router primary model is required")
+
 // NewRouter primary model と canary/shadow 設定から Router を構築する
+// primary 空は LLM 呼び出し時に空モデル名を生むため起動時 fail-fast する
 // shadowRatio は安全のため 0.5 を上限としてハードキャップする
 // canaryModel が空のとき canaryRatio を 0 に強制し、空モデル名での LLM 呼び出しを防ぐ
 // shadowModel が空のとき shadowRatio を 0 に強制する
 // これらの安全フォールバックは Router 内で完結するため、呼び出し側はモデル名検証を二重に行う必要がない
-func NewRouter(primary, canaryModel string, canaryRatio float64, shadowModel string, shadowRatio float64) *Router {
+func NewRouter(primary, canaryModel string, canaryRatio float64, shadowModel string, shadowRatio float64) (*Router, error) {
+	if primary == "" {
+		return nil, ErrRouterPrimaryRequired
+	}
 	// canary 発火する設定では canaryModel が必須
 	// canaryModel 空のまま canaryRatio > 0 を渡されたら canaryRatio を 0 に倒し、
 	// primary だけが返るようにフォールバックする (空モデル LLM 呼び出しを防ぐ)
@@ -41,7 +50,7 @@ func NewRouter(primary, canaryModel string, canaryRatio float64, shadowModel str
 		canaryRatio: canaryRatio,
 		shadowModel: shadowModel,
 		shadowRatio: shadowRatio,
-	}
+	}, nil
 }
 
 // Pick seed から決定論的に Decision を返す

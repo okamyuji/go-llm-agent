@@ -117,8 +117,10 @@ func (s *fileNoteStore) Search(_ context.Context, query string, topK int) ([]Not
 		}
 		var n Note
 		if err := json.Unmarshal(line, &n); err != nil {
-			// 単一の壊れた JSONL 行で全検索を中断しない。問題行を warn ログに記録し、続行する
-			slog.Warn("notes: skipping malformed JSONL line", "err", err)
+			// 単一の壊れた JSONL 行で全検索を中断しない。問題行を warn ログに記録するが、
+			// err には raw line の断片やノート本文の機密情報が含まれ得るため、
+			// 詳細を伏せて record の位置と byte 長だけを記録する
+			slog.Warn("notes: skipping malformed JSONL line", "bytes", len(line))
 			continue
 		}
 		score := scoreNote(n, terms)
