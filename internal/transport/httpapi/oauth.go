@@ -45,6 +45,11 @@ func NewJWTVerifier(c JWTVerifierConfig, secretLookup func(env string) (string, 
 	if !ok || v == "" {
 		return nil, errors.New("httpapi: oauth2 shared secret env is not set")
 	}
+	// HS256 の鍵長は RFC 7518 §3.2 で 256 ビット以上を MUST と定めている
+	// 32 バイト未満は明示的に拒否し、運用時の鍵不足を fail-fast で検知する
+	if len(v) < 32 {
+		return nil, errors.New("httpapi: oauth2 shared secret is too short; HS256 requires at least 32 bytes")
+	}
 	ttl := time.Duration(c.CacheTTLSeconds) * time.Second
 	if ttl <= 0 {
 		ttl = 5 * time.Minute

@@ -78,13 +78,26 @@ func TestNewJWTVerifier_RequiresSharedSecret(t *testing.T) {
 
 func TestNewJWTVerifier_BuildsWithSharedSecret(t *testing.T) {
 	t.Parallel()
-	v, err := NewJWTVerifier(JWTVerifierConfig{Enabled: true, SharedSecretEnv: "X"}, func(env string) (string, bool) {
-		return "topsecret", true
+	// HS256 必須長 (32 バイト) を満たすシークレットを与える
+	v, err := NewJWTVerifier(JWTVerifierConfig{Enabled: true, SharedSecretEnv: "X"}, func(_ string) (string, bool) {
+		return "this-secret-must-be-at-least-32-bytes-long", true
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if v == nil {
 		t.Fatal("verifier must not be nil")
+	}
+}
+
+// TestNewJWTVerifier_RejectsShortSecret HS256 鍵長 32 バイト未満を拒否することを確認する
+// RFC 7518 §3.2 で MUST とされている要件のため起動時 fail-fast で弾く
+func TestNewJWTVerifier_RejectsShortSecret(t *testing.T) {
+	t.Parallel()
+	_, err := NewJWTVerifier(JWTVerifierConfig{Enabled: true, SharedSecretEnv: "X"}, func(_ string) (string, bool) {
+		return "tooshort", true
+	})
+	if err == nil {
+		t.Fatal("short HS256 secret must be rejected")
 	}
 }

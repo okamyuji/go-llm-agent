@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 
@@ -120,11 +119,9 @@ func (s *service) executeOne(ctx context.Context, sessionID string, call llm.Too
 	if terr != nil {
 		content = terr.Error()
 	}
-	// runReAct と同じ untrusted ラッパを並列経路でも付与する
-	// ツールが既にラッパ済みの結果を返した場合 (例: redact パイプラインの中継) は二重付与を避ける
-	if !strings.HasPrefix(content, "[UNTRUSTED INPUT") {
-		content = "[UNTRUSTED INPUT: tool=" + call.Name + "]\n" + content + "\n[END UNTRUSTED]"
-	}
+	// runReAct と同じく、untrusted ラッパは無条件付与する
+	// ツール側が自前マーカーを偽装してラップ回避するのを防ぐため接頭辞 check は外す
+	content = "[UNTRUSTED INPUT: tool=" + call.Name + "]\n" + content + "\n[END UNTRUSTED]"
 	if s.redactor != nil {
 		content = s.redactor.Redact(content)
 	}

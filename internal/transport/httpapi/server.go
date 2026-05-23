@@ -55,17 +55,18 @@ func (s *Server) WithMiddleware(auth *BearerAuth, limiter *TokenBucketLimiter, a
 }
 
 // Handler http.Handler を返す
-// 適用順は外側から CORS → Allowlist → Auth → RateLimit → mux
-// CORS を最外層に置くことで OPTIONS プリフライトが Allowlist や Auth に阻まれず、
-// 合法な Origin からのブラウザアクセスが正しく成立する
+// 適用順は外側から CORS → Allowlist → RateLimit → Auth → mux
+// CORS を最外層に置くことで OPTIONS プリフライトが Allowlist や Auth に阻まれない
+// RateLimit を Auth より外に置くことで失敗した認証試行も rate limit の対象になる
+// (不正なトークンで連打しても 429 が返るため認証 brute force を抑制できる)
 // 各ミドルウェアが nil の場合はその層をスキップする。WithMiddleware を呼ばない経路でも panic させない
 func (s *Server) Handler() http.Handler {
 	var h http.Handler = s.mux
-	if s.limiter != nil {
-		h = s.limiter.Handler(h)
-	}
 	if s.auth != nil {
 		h = s.auth.Handler(h)
+	}
+	if s.limiter != nil {
+		h = s.limiter.Handler(h)
 	}
 	if s.allowlist != nil {
 		h = s.allowlist.Handler(h)

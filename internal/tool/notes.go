@@ -69,8 +69,13 @@ func (t *NoteSearchTool) Execute(ctx context.Context, raw json.RawMessage) (Resu
 		return Result{IsError: true, Content: "query is required"}, nil
 	}
 	// 負値は入力エラーとして扱い、0 のときのみ既定値 5 にフォールバックする
+	// 過大な top_k は Store 側のメモリ使用量を肥大化させるため maxToolTopK で上限する
+	const maxToolTopK = 100
 	if a.TopK < 0 {
 		return Result{IsError: true, Content: "top_k must be non-negative"}, nil
+	}
+	if a.TopK > maxToolTopK {
+		return Result{IsError: true, Content: fmt.Sprintf("top_k must be <= %d", maxToolTopK)}, nil
 	}
 	topK := a.TopK
 	if topK == 0 {

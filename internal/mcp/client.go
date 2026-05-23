@@ -20,8 +20,10 @@ import (
 )
 
 // validateMCPCommand mcp.servers.<name>.command[0] が許容パス形式かを検査する
-// 受け付けるのは絶対パスのみ、かつ正規化後に .. セグメントを含まないものに限定する
-// PATH 経由の任意コマンド実行 (例: "node") と path traversal (例: "/opt/srv/../../etc/passwd") を防ぐ
+// 受け付けるのは絶対パスのみで、かつ「正規化前のパスに .. が含まれていない」ことも要件にする
+// filepath.Clean は "/opt/srv/../bin/sh" を "/opt/bin/sh" に畳んでしまい traversal 意図を
+// 検知できなくなる。そこで Clean に頼らず元のパスに .. セグメントが無いことを直接確認する
+// PATH 経由の任意コマンド実行 (例: "node") と path traversal (例: "/opt/srv/../bin/sh") を共に防ぐ
 func validateMCPCommand(path string) error {
 	if path == "" {
 		return errors.New("mcp: command[0] is empty")
@@ -29,10 +31,8 @@ func validateMCPCommand(path string) error {
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("mcp: command[0] must be an absolute path, got %q", path)
 	}
-	cleaned := filepath.Clean(path)
-	// Clean 後でも .. が残るのは現在ディレクトリより上を参照しているケース。Clean が
-	// 絶対パスの先頭境界を越える .. は除去するが、保守のため明示的に再確認する
-	if hasDotDotSegment(cleaned) {
+	// Clean 前の入力に .. セグメントが含まれていれば拒否する
+	if hasDotDotSegment(path) {
 		return fmt.Errorf("mcp: command[0] must not contain .. segments, got %q", path)
 	}
 	return nil

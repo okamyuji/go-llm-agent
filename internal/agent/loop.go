@@ -219,10 +219,10 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 		if terr != nil {
 			content = terr.Error()
 		}
-		// 06 番設計書: 全ツール出力に untrusted マーカーを付与してプロンプトインジェクション耐性を高める
-		if !strings.HasPrefix(content, "[UNTRUSTED INPUT") {
-			content = "[UNTRUSTED INPUT: tool=" + pendingCall.Name + "]\n" + content + "\n[END UNTRUSTED]"
-		}
+		// 06 番設計書 全ツール出力に untrusted マーカーを無条件付与する
+		// 旧実装は "[UNTRUSTED INPUT" 接頭辞ありで skip していたが、ツールが攻撃的に
+		// 自前マーカーを偽装した場合に外周のラップを回避できる穴があったため常に付与する
+		content = "[UNTRUSTED INPUT: tool=" + pendingCall.Name + "]\n" + content + "\n[END UNTRUSTED]"
 		if s.redactor != nil {
 			content = s.redactor.Redact(content)
 		}

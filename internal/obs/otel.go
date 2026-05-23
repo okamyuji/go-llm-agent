@@ -166,10 +166,12 @@ func InitTelemetry(ctx context.Context, c TelemetryConfig, logger *slog.Logger) 
 }
 
 // stripScheme OTLP HTTP exporter の WithEndpoint が host:port のみを期待するため scheme を除去する
+// 大文字小文字を問わず "http://" / "https://" を除く ("HTTPS://..." なども正しく扱う)
 func stripScheme(endpoint string) string {
+	lower := strings.ToLower(endpoint)
 	for _, prefix := range []string{"http://", "https://"} {
-		if rest, ok := strings.CutPrefix(endpoint, prefix); ok {
-			return rest
+		if strings.HasPrefix(lower, prefix) {
+			return endpoint[len(prefix):]
 		}
 	}
 	return endpoint

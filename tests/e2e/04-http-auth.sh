@@ -47,8 +47,11 @@ server:
         secret_env: AGENT_LOCAL_TOKEN
   rate_limit:
     enabled: true
-    rps: 1
-    burst: 1
+    # rps/burst を低めに設定して burst exhaustion を検証するが、
+    # auth テストが直前で消費するクォータを考慮して burst を 4 に確保する
+    # (RateLimit を Auth より外に置く middleware 順序になったため)
+    rps: 4
+    burst: 4
     per_token: false
 storage:
   sessions_dir: ${WORK}/sessions
@@ -105,11 +108,11 @@ if [[ "$HTTP" != "200" ]]; then
 fi
 
 printf "${YELLOW}>>> burst exhaustion should yield 429${NC}\n"
-# rate_limit.burst=1 を直前のリクエストで使い切っている状態で、ここでさらに 3 件連続送信する
-# CI の負荷で 1 秒以上経過してバケットが充填され 200 が混ざる可能性があるため、
-# 3 リクエストのうち少なくとも 1 件が 429 になれば PASS とする許容判定にする
+# rate_limit.burst=4 を直前までのリクエスト (4 件) で使い切っている状態で
+# 10 件連続送信し、少なくとも 1 件が 429 になれば PASS とする
+# RateLimit を Auth より外に置く middleware 順序のため、認証 brute-force 連打も対象
 GOT_429=0
-for _ in 1 2 3; do
+for _ in 1 2 3 4 5 6 7 8 9 10; do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $AGENT_LOCAL_TOKEN" http://127.0.0.1:14004/v1/models)
   if [[ "$CODE" == "429" ]]; then
     GOT_429=1
@@ -117,7 +120,7 @@ for _ in 1 2 3; do
   fi
 done
 if [[ "$GOT_429" -ne 1 ]]; then
-  printf "${RED}FAIL: 3 連続リクエストで 429 を 1 度も観測できませんでした${NC}\n"
+  printf "${RED}FAIL: 10 連続リクエストで 429 を 1 度も観測できませんでした${NC}\n"
   exit 1
 fi
 
