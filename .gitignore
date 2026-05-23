@@ -12,5 +12,15 @@
 # 個人ローカル設定はコミット対象外。サンプルは config.yaml.example を参照
 /config.yaml
 
-# 設計書と実装計画書はローカル保持とし公開しません
-/docs/
+# docs/design/ は公開設計書として git 管理する
+# それ以外の docs サブディレクトリ（plans, specs）と usage.md は個人ローカル保持のままにする
+/docs/plans/
+/docs/specs/
+/docs/usage.md
+
+# 15 番設計書 mTLS 用の証明書ファイル
+# ルートにある実証明書のみを除外し、tests/ や docs/ 配下の任意の test fixture は許容する
+/*.pem
+/*.crt
+/*.key
+/certs/

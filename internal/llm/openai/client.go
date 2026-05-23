@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -14,9 +15,10 @@ import (
 
 // Options クライアント生成オプション
 type Options struct {
-	BaseURL    string
-	APIKey     string
-	HTTPClient *http.Client
+	BaseURL               string
+	APIKey                string
+	HTTPClient            *http.Client
+	RequestTimeoutSeconds int
 }
 
 // Client OpenAI Chat Completions API クライアント
@@ -26,11 +28,21 @@ type Client struct {
 	http    *http.Client
 }
 
+// maxRequestTimeoutSeconds RequestTimeoutSeconds の上限 (24 時間)
+// time.Duration は int64 で約 292 年分の表現があるためオーバーフロー自体は珍しいが、
+// 設定誤りで巨大値が入ったときに sanity-check として 24h でクランプする
+const maxRequestTimeoutSeconds = 24 * 60 * 60
+
 // New Options からクライアントを生成
 func New(o Options) *Client {
 	c := o.HTTPClient
 	if c == nil {
-		c = &http.Client{Timeout: 120 * time.Second}
+		timeout := 120 * time.Second
+		if o.RequestTimeoutSeconds > 0 {
+			sec := min(o.RequestTimeoutSeconds, maxRequestTimeoutSeconds)
+			timeout = time.Duration(sec) * time.Second
+		}
+		c = &http.Client{Timeout: timeout}
 	}
 	if o.BaseURL == "" {
 		o.BaseURL = "https://api.openai.com/v1"
@@ -42,10 +54,11 @@ func New(o Options) *Client {
 func (c *Client) Name() string { return "openai" }
 
 type chatPayload struct {
-	Model    string            `json:"model"`
-	Messages []chatPayloadMsg  `json:"messages"`
-	Stream   bool              `json:"stream"`
-	Tools    []chatPayloadTool `json:"tools,omitempty"`
+	Model      string            `json:"model"`
+	Messages   []chatPayloadMsg  `json:"messages"`
+	Stream     bool              `json:"stream"`
+	Tools      []chatPayloadTool `json:"tools,omitempty"`
+	ToolChoice any               `json:"tool_choice,omitempty"`
 }
 
 type chatPayloadMsg struct {
@@ -157,5 +170,41 @@ func toPayload(req llm.ChatRequest, stream bool) chatPayload {
 	for _, t := range req.Tools {
 		p.Tools = append(p.Tools, chatPayloadTool{Type: "function", Function: chatPayloadFunc{Name: t.Name, Arguments: t.Schema}})
 	}
+	if req.ToolChoice != nil {
+		p.ToolChoice = toolChoiceJSON(req.ToolChoice)
+	}
 	return p
+}
+
+// toolChoiceJSON ChatRequest.ToolChoice を OpenAI 仕様の値に変換する
+// auto/required/none は文字列、tool 指定はオブジェクト形式で返す
+// OpenAI の "any" 概念は無いが、llm.ToolChoice.Mode "any" は「必ずツール呼び出し」を意図するため
+// 本実装では "required" にマップして Anthropic / Gemini 側の強制セマンティクスと整合させる
+func toolChoiceJSON(tc *llm.ToolChoice) any {
+	switch tc.Mode {
+	case "auto", "":
+		return "auto"
+	case "required", "any":
+		// llm.ToolChoice.Mode "any" は「強制ツール呼び出し」を意図しているため
+		// OpenAI 互換でも "required" にマップして強制セマンティクスを維持する
+		// (旧実装は "any" を "auto" に倒していたが、Anthropic / Gemini 側の挙動と矛盾していた)
+		return "required"
+	case "none":
+		return "none"
+	case "tool":
+		if tc.Name == "" {
+			// tool mode は tc.Name 必須。空指定は設定ミスとして警告ログを残し auto にフォールバックする
+			slog.Warn("openai: tool_choice mode=tool with empty Name, falling back to auto")
+			return "auto"
+		}
+		return map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": tc.Name},
+		}
+	default:
+		// 未知の Mode は "auto" にフォールバックさせるが、設定ミスを発見しやすくするため
+		// 警告ログを出す。サイレントフォールバックを避ける
+		slog.Warn("openai: unknown tool_choice mode, falling back to auto", "mode", tc.Mode)
+		return "auto"
+	}
 }

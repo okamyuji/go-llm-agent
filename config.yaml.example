@@ -15,18 +15,37 @@ providers:
     allow_models:
       - gpt-4.1-mini
       - gpt-4o-mini
+    # 1,000,000 トークンあたりの円換算単価。未指定なら CostJPY は 0 として集計される。
+    pricing:
+      input_per_million_jpy: 450
+      output_per_million_jpy: 1800
+    # 429 や 5xx の retryable エラーに対するリトライ設定。max_attempts<=1 でリトライ無効。
+    request_timeout_seconds: 60
+    retry:
+      max_attempts: 4
+      initial_backoff_ms: 200
+      max_backoff_ms: 5000
+      jitter_ratio: 0.2
+    # 連続失敗した場合のフォールバック先プロバイダー名。未指定で無効。
+    fallback_to: anthropic
   anthropic:
     base_url: https://api.anthropic.com
     api_key_env: ANTHROPIC_API_KEY
     allow_models:
       - claude-3-5-sonnet-latest
       - claude-3-5-haiku-latest
+    pricing:
+      input_per_million_jpy: 480
+      output_per_million_jpy: 2400
   gemini:
     base_url: https://generativelanguage.googleapis.com/v1beta
     api_key_env: GEMINI_API_KEY
     allow_models:
       - gemini-2.5-pro
       - gemini-2.5-flash
+    pricing:
+      input_per_million_jpy: 300
+      output_per_million_jpy: 1200
   ollama:
     base_url: http://localhost:11434
     # ローカル Ollama はモデル列挙を端的にしづらいため allow_models は空のままにする
@@ -42,6 +61,43 @@ agent:
     ユーザーの依頼を達成するために必要なら提供されたツールを使い、
     破壊的な操作を行う前に意図を確認してください。
     回答は日本語で簡潔にまとめます。
+  # 予算上限。0 は無制限を意味し、上限到達時は agent.Run が ErrBudgetExceeded で停止する。
+  # storage.sessions_dir 配下に billing.jsonl が追記される。
+  budget:
+    session_max_tokens: 200000
+    daily_max_cost_jpy: 1000
+  # tool_choice の既定値。mode は auto / required / none / tool のいずれか。
+  # tool 指定時は name にツール名を入れる。
+  tool_choice:
+    mode: auto
+    name: ""
+  # ツール引数の JSON Schema 検証。max_retries 回まで自動修正試行する。
+  tool_validation:
+    enabled: true
+    max_retries: 2
+  # HITL ツール承認。required_tools に含まれるツールは人間承認まで実行を保留する。
+  # default_decision: "deny" のみサポート (timeout 時の fail-closed)。"allow" は
+  # 廃止され、起動時に config エラーで弾かれる。
+  # timeout_seconds は required_tools 指定時に正の整数で必須 (起動時 validate)。
+  approval:
+    required_tools: []
+    timeout_seconds: 30
+    default_decision: deny
+  # 実行戦略の切替。react / planner_executor / reflection から選ぶ。
+  strategy: react
+  planner_executor:
+    planner_model: openai/gpt-4o
+    executor_model: openai/gpt-4o-mini
+    max_steps: 8
+  reflection:
+    max_iterations: 3
+    trigger_consecutive_failures: 2
+    trigger_hop_budget: 6
+  # 並列ツール実行。require_approval ツールが含まれる場合は自動的に直列化される。
+  parallel_tools:
+    enabled: false
+    max_concurrency: 4
+    fail_fast: false
 
 tools:
   fs:
@@ -72,10 +128,101 @@ tools:
 
 server:
   addr: 127.0.0.1:14000
+  # Bearer Token 認証。secret_env のみサポートで、値の直書きは config loader が reject する。
+  auth:
+    enabled: false
+    bearer_tokens:
+      - id: local
+        secret_env: AGENT_LOCAL_TOKEN
+  # token bucket レート制限。rps と burst が 0 のときは適用されない。
+  rate_limit:
+    enabled: false
+    rps: 5
+    burst: 10
+    per_token: true
+  # IP allowlist。CIDR を 1 つも書かないと適用されない。
+  allowlist:
+    cidrs:
+      - 127.0.0.1/32
+  # CORS プリフライト対応。enabled=true のときだけ反映される。
+  cors:
+    enabled: false
+    allow_origins: []
+    allow_methods: [GET, POST, OPTIONS]
+    allow_headers: [Authorization, Content-Type]
 
 storage:
   sessions_dir: ~/.local/state/go-llm-agent/sessions
+  # ノート保存先 JSONL。空のときは sessions_dir/notes.jsonl を使う。
+  notes_path: ""
 
 logging:
   format: text
   level: info
+
+# 入出力フィルタとプロンプトインジェクション検知。output_redactor は既定 on で
+# DeltaText / Final / ツール出力に対して機微情報をマスキングする。
+safety:
+  input_scanner:
+    enabled: true
+    block_on_match: false
+    # ignore_previous / system_role_inject はヒューリスティックな汎用ルール
+      # 想定外の自然文に対する偽陽性のリスクがあるため、本番運用ではプロジェクト固有の
+      # patterns を追記し、必要なら以下のサンプルルールを差し替えてください
+    patterns:
+      - id: ignore_previous
+        regex: "(?i)ignore (the )?previous instructions"
+      - id: system_role_inject
+        regex: "(?i)\\[system\\]"
+  output_redactor:
+    enabled: true
+    rules:
+      - id: openai_key
+        regex: "sk-[A-Za-z0-9]{20,}"
+        replacement: "[REDACTED:OPENAI]"
+      - id: jwt
+        regex: "eyJ[0-9A-Za-z_-]{8,}\\.[0-9A-Za-z_-]{8,}\\.[0-9A-Za-z_-]{8,}"
+        replacement: "[REDACTED:JWT]"
+      - id: private_key_header
+        regex: "-----BEGIN [A-Z ]+PRIVATE KEY-----"
+        replacement: "[REDACTED:PRIVATE_KEY]"
+      # credit_card はオプション。ID 番号や注文番号など同程度の数字列に対する偽陽性が
+      # 出やすいため、本番運用では Luhn 検証を行う別段の OutputRedactor と chain することを推奨する
+      # 不要なら以下の 3 行を削除してください
+      - id: credit_card
+        regex: "\\b(?:\\d[ -]*?){13,19}\\b"
+        replacement: "[REDACTED:CARD]"
+  # 14 番設計書: PII リダクタ。output_redactor の後段で動作する。
+  pii_redactor:
+    enabled: true
+    rules:
+      - id: email
+        regex: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
+        replacement: "[REDACTED:EMAIL]"
+      - id: jp_phone
+        regex: "0\\d{1,4}-\\d{1,4}-\\d{3,4}"
+        replacement: "[REDACTED:JP_PHONE]"
+      - id: jp_mynumber
+        regex: "\\b\\d{4}\\s?\\d{4}\\s?\\d{4}\\b"
+        replacement: "[REDACTED:JP_MYNUMBER]"
+      # ipv4 は 0-255 のオクテット範囲を厳密に判定し、version 番号 (例: 1.2.3.4) 風の文字列に
+      # 過剰反応しないようにする
+      # 注意 "1.2.3.4" のような短い valid IPv4 はそれ自体がセマンティックバージョンの命名と
+      # 衝突するため、リリースノート等のアプリ文脈で偽陽性が出る可能性がある
+      # その場合はこのルールを無効化するか、negative lookbehind 非対応の RE2 制約下で
+      # 単純な "version|v" 文字列を先頭で弾く別ルールを足すことを検討する
+      - id: ipv4
+        regex: "\\b(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(\\.(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}\\b"
+        replacement: "[REDACTED:IPV4]"
+
+# OpenTelemetry 計装。enabled: true で OTLP HTTP exporter にトレースとメトリクスを送る。
+# 既定は無効で、有効化しても他機能の挙動は変えない。詳細は docs/design/01-otel-instrumentation.md を参照する。
+observability:
+  otel:
+    enabled: false
+    exporter: otlp_http
+    endpoint: 127.0.0.1:4318
+    insecure: true
+    sample_ratio: 1.0
+    service_name: go-llm-agent
+    metrics_interval_seconds: 30

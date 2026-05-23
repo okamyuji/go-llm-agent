@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -15,9 +16,10 @@ import (
 
 // Options クライアント生成オプション
 type Options struct {
-	BaseURL    string
-	APIKey     string
-	HTTPClient *http.Client
+	BaseURL               string
+	APIKey                string
+	HTTPClient            *http.Client
+	RequestTimeoutSeconds int
 }
 
 // Client Google Gemini API クライアント
@@ -31,7 +33,11 @@ type Client struct {
 func New(o Options) *Client {
 	c := o.HTTPClient
 	if c == nil {
-		c = &http.Client{Timeout: 120 * time.Second}
+		timeout := 120 * time.Second
+		if o.RequestTimeoutSeconds > 0 {
+			timeout = time.Duration(o.RequestTimeoutSeconds) * time.Second
+		}
+		c = &http.Client{Timeout: timeout}
 	}
 	if o.BaseURL == "" {
 		o.BaseURL = "https://generativelanguage.googleapis.com/v1beta"
@@ -67,6 +73,16 @@ type gemPayload struct {
 	SystemInstruction *gemContent     `json:"systemInstruction,omitempty"`
 	Contents          []gemContent    `json:"contents"`
 	Tools             []gemToolsBlock `json:"tools,omitempty"`
+	ToolConfig        *gemToolConfig  `json:"toolConfig,omitempty"`
+}
+
+type gemToolConfig struct {
+	FunctionCallingConfig gemFCCConfig `json:"functionCallingConfig"`
+}
+
+type gemFCCConfig struct {
+	Mode                 string   `json:"mode"`
+	AllowedFunctionNames []string `json:"allowedFunctionNames,omitempty"`
 }
 
 type gemToolsBlock struct {
@@ -191,5 +207,35 @@ func toPayload(req llm.ChatRequest) gemPayload {
 		}
 		p.Tools = []gemToolsBlock{{FunctionDeclarations: decls}}
 	}
+	if tc := req.ToolChoice; tc != nil {
+		p.ToolConfig = toolChoiceConfig(tc)
+	}
 	return p
+}
+
+// toolChoiceConfig ChatRequest.ToolChoice を Gemini の functionCallingConfig に変換する
+// Gemini は AUTO / ANY / NONE と allowedFunctionNames を使う
+// 未知の Mode は AUTO にフォールバックし、設定ミスを発見しやすくするため警告ログを残す
+// "required" と "any" は OpenAI / Anthropic でも「ツール呼び出し強制」相当として揃えるため
+// Gemini でもどちらも ANY にマップする
+func toolChoiceConfig(tc *llm.ToolChoice) *gemToolConfig {
+	switch tc.Mode {
+	case "auto", "":
+		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "AUTO"}}
+	case "required", "any":
+		// 他プロバイダと意味を揃え、ツール呼び出しを強制する
+		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "ANY"}}
+	case "none":
+		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "NONE"}}
+	case "tool":
+		if tc.Name == "" {
+			// tool mode は tc.Name 必須。空指定は設定ミスとして警告ログを残し AUTO にフォールバックする
+			slog.Warn("gemini: tool_choice mode=tool with empty Name, falling back to AUTO")
+			return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "AUTO"}}
+		}
+		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "ANY", AllowedFunctionNames: []string{tc.Name}}}
+	default:
+		slog.Warn("gemini: unknown tool_choice mode, falling back to AUTO", "mode", tc.Mode)
+		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "AUTO"}}
+	}
 }

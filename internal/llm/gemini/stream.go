@@ -56,6 +56,8 @@ func (c *Client) Stream(ctx context.Context, req llm.ChatRequest) (llm.ChatStrea
 }
 
 // Recv 次の StreamEvent を返す
+// Gemini の SSE は最後のチャンクで usageMetadata を返すため、Usage を抜き出して
+// StreamEvent.Usage に詰める。billing.Accumulator がトークンを集計できるようになる
 func (r *streamReader) Recv() (llm.StreamEvent, bool) {
 	if r.closed {
 		return llm.StreamEvent{}, false
@@ -73,11 +75,21 @@ func (r *streamReader) Recv() (llm.StreamEvent, bool) {
 		if err := json.Unmarshal([]byte(data), &parsed); err != nil {
 			return llm.StreamEvent{Err: err}, true
 		}
+		ev := llm.StreamEvent{}
+		if parsed.UsageMetadata.PromptTokenCount > 0 || parsed.UsageMetadata.CandidatesTokenCount > 0 {
+			ev.Usage = &llm.Usage{
+				InputTokens:  parsed.UsageMetadata.PromptTokenCount,
+				OutputTokens: parsed.UsageMetadata.CandidatesTokenCount,
+			}
+		}
 		if len(parsed.Candidates) == 0 {
+			if ev.Usage != nil {
+				return ev, true
+			}
 			continue
 		}
 		cand := parsed.Candidates[0]
-		ev := llm.StreamEvent{Finish: cand.FinishReason}
+		ev.Finish = cand.FinishReason
 		for _, part := range cand.Content.Parts {
 			if part.Text != "" {
 				ev.DeltaText += part.Text
@@ -93,6 +105,11 @@ func (r *streamReader) Recv() (llm.StreamEvent, bool) {
 			}
 		}
 		return ev, true
+	}
+	// Scanner ループ脱出後に Err を必ず確認する
+	// ネットワーク切断やバッファ超過などの非 EOF 失敗をサイレント無視しないため
+	if err := r.scan.Err(); err != nil {
+		return llm.StreamEvent{Err: fmt.Errorf("gemini stream scan: %w", err)}, true
 	}
 	return llm.StreamEvent{}, false
 }

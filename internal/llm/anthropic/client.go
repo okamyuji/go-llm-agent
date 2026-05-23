@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -15,10 +16,13 @@ import (
 const apiVersion = "2023-06-01"
 
 // Options クライアント生成オプション
+// HTTPClient が指定されている場合、RequestTimeoutSeconds は無視される
+// (タイムアウト管理は呼び出し側の HTTPClient.Timeout に委ねる設計)
 type Options struct {
-	BaseURL    string
-	APIKey     string
-	HTTPClient *http.Client
+	BaseURL               string
+	APIKey                string
+	HTTPClient            *http.Client
+	RequestTimeoutSeconds int
 }
 
 // Client Anthropic Messages API クライアント
@@ -32,7 +36,11 @@ type Client struct {
 func New(o Options) *Client {
 	c := o.HTTPClient
 	if c == nil {
-		c = &http.Client{Timeout: 120 * time.Second}
+		timeout := 120 * time.Second
+		if o.RequestTimeoutSeconds > 0 {
+			timeout = time.Duration(o.RequestTimeoutSeconds) * time.Second
+		}
+		c = &http.Client{Timeout: timeout}
 	}
 	if o.BaseURL == "" {
 		o.BaseURL = "https://api.anthropic.com"
@@ -44,12 +52,13 @@ func New(o Options) *Client {
 func (c *Client) Name() string { return "anthropic" }
 
 type msgPayload struct {
-	Model     string         `json:"model"`
-	MaxTokens int            `json:"max_tokens"`
-	System    string         `json:"system,omitempty"`
-	Messages  []msgPayloadIn `json:"messages"`
-	Stream    bool           `json:"stream,omitempty"`
-	Tools     []toolDecl     `json:"tools,omitempty"`
+	Model      string         `json:"model"`
+	MaxTokens  int            `json:"max_tokens"`
+	System     string         `json:"system,omitempty"`
+	Messages   []msgPayloadIn `json:"messages"`
+	Stream     bool           `json:"stream,omitempty"`
+	Tools      []toolDecl     `json:"tools,omitempty"`
+	ToolChoice any            `json:"tool_choice,omitempty"`
 }
 
 type msgPayloadIn struct {
@@ -188,5 +197,33 @@ func toPayload(req llm.ChatRequest, stream bool) msgPayload {
 			Name: t.Name, Description: t.Description, InputSchema: t.Schema,
 		})
 	}
+	if req.ToolChoice != nil {
+		p.ToolChoice = toolChoiceJSON(req.ToolChoice)
+	}
 	return p
+}
+
+// toolChoiceJSON ChatRequest.ToolChoice を Anthropic Messages API の値に変換する
+// Anthropic は {"type":"auto"} / {"type":"any"} / {"type":"none"} / {"type":"tool","name":"..."}
+// の 4 種類を受け付ける。"none" は明示的に type=none を返し、tools 全体の挙動を制御する
+// 未知の Mode は auto にフォールバックし、設定ミスを発見しやすくするため警告ログを残す
+func toolChoiceJSON(tc *llm.ToolChoice) any {
+	switch tc.Mode {
+	case "auto", "":
+		return map[string]any{"type": "auto"}
+	case "required", "any":
+		return map[string]any{"type": "any"}
+	case "none":
+		return map[string]any{"type": "none"}
+	case "tool":
+		if tc.Name == "" {
+			// tool mode は tc.Name 必須。空指定は設定ミスとして警告ログを残し auto にフォールバックする
+			slog.Warn("anthropic: tool_choice mode=tool with empty Name, falling back to auto")
+			return map[string]any{"type": "auto"}
+		}
+		return map[string]any{"type": "tool", "name": tc.Name}
+	default:
+		slog.Warn("anthropic: unknown tool_choice mode, falling back to auto", "mode", tc.Mode)
+		return map[string]any{"type": "auto"}
+	}
 }

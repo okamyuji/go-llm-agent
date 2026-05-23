@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -14,8 +15,9 @@ import (
 
 // Options クライアント生成オプション
 type Options struct {
-	BaseURL    string
-	HTTPClient *http.Client
+	BaseURL               string
+	HTTPClient            *http.Client
+	RequestTimeoutSeconds int
 }
 
 // Client Ollama API クライアント
@@ -24,11 +26,20 @@ type Client struct {
 	http    *http.Client
 }
 
+// maxRequestTimeoutSeconds RequestTimeoutSeconds の上限 (24 時間)
+// 設定誤りで巨大値が入ったときの sanity-check として上限を設ける
+const maxRequestTimeoutSeconds = 24 * 60 * 60
+
 // New Options からクライアントを生成
 func New(o Options) *Client {
 	c := o.HTTPClient
 	if c == nil {
-		c = &http.Client{Timeout: 300 * time.Second}
+		timeout := 300 * time.Second
+		if o.RequestTimeoutSeconds > 0 {
+			sec := min(o.RequestTimeoutSeconds, maxRequestTimeoutSeconds)
+			timeout = time.Duration(sec) * time.Second
+		}
+		c = &http.Client{Timeout: timeout}
 	}
 	if o.BaseURL == "" {
 		o.BaseURL = "http://localhost:11434"
@@ -65,10 +76,11 @@ type ollamaToolDecl struct {
 }
 
 type ollamaPayload struct {
-	Model    string           `json:"model"`
-	Messages []ollamaMsg      `json:"messages"`
-	Stream   bool             `json:"stream"`
-	Tools    []ollamaToolDecl `json:"tools,omitempty"`
+	Model      string           `json:"model"`
+	Messages   []ollamaMsg      `json:"messages"`
+	Stream     bool             `json:"stream"`
+	Tools      []ollamaToolDecl `json:"tools,omitempty"`
+	ToolChoice any              `json:"tool_choice,omitempty"`
 }
 
 type ollamaResp struct {
@@ -150,5 +162,39 @@ func toPayload(req llm.ChatRequest, stream bool) ollamaPayload {
 		td.Function.Parameters = t.Schema
 		p.Tools = append(p.Tools, td)
 	}
+	if req.ToolChoice != nil {
+		p.ToolChoice = toolChoiceJSON(req.ToolChoice)
+	}
 	return p
+}
+
+// toolChoiceJSON ChatRequest.ToolChoice を Ollama の OpenAI 互換値に変換する
+// Ollama 0.4 系では tool_choice をサポートする model がある
+// OpenAI 互換の有効値は "auto" / "none" / function 指定オブジェクトのみで、"required" は受け付けない
+// "required" / "any" / "tool" のいずれも、特定 tool 名が指定されていれば function 指定として送り、
+// 未指定なら "auto" にフォールバックする
+// 未知の Mode は "auto" にフォールバックし、設定ミス発見のため警告ログを残す
+func toolChoiceJSON(tc *llm.ToolChoice) any {
+	switch tc.Mode {
+	case "auto", "":
+		return "auto"
+	case "none":
+		return "none"
+	case "tool", "required", "any":
+		if tc.Name != "" {
+			return map[string]any{
+				"type":     "function",
+				"function": map[string]any{"name": tc.Name},
+			}
+		}
+		// Ollama は OpenAI 互換ながら "required" 文字列を受け付けないため、
+		// tc.Name 未指定の "required" は強制呼び出しを実現できず auto にフォールバックする
+		// 設定ミス発見のため警告ログを残す
+		slog.Warn("ollama: tool_choice with empty Name cannot enforce required, falling back to auto",
+			"mode", tc.Mode, "name", tc.Name)
+		return "auto"
+	default:
+		slog.Warn("ollama: unknown tool_choice mode, falling back to auto", "mode", tc.Mode)
+		return "auto"
+	}
 }
