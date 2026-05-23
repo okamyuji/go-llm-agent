@@ -129,6 +129,32 @@ func TestSpinner_Stop_Idempotent(t *testing.T) {
 	s.Stop()
 }
 
+// TestSpinner_ConcurrentStartStop 並行 Start/SetPhase/Stop でも race / leak / panic しない
+// goleak.VerifyTestMain 下で goroutine が確実に終了することを確認する
+func TestSpinner_ConcurrentStartStop(t *testing.T) {
+	buf := &safeBuffer{}
+	enabled := true
+	s := cliui.NewSpinner(cliui.SpinnerOptions{
+		Out:      buf,
+		Enabled:  &enabled,
+		Model:    "M",
+		Now:      func() time.Time { return time.Unix(1700000000, 0) },
+		Interval: 1 * time.Hour,
+		Frames:   []string{"x"},
+	})
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Go(func() {
+			s.Start(cliui.PhaseThinking, "")
+			s.SetPhase(cliui.PhaseTool, "t")
+			s.Stop()
+		})
+	}
+	wg.Wait()
+	// 念のため最後の goroutine も確実に止める
+	s.Stop()
+}
+
 // TestSpinner_RestartAfterStop Stop 後に再度 Start できる
 func TestSpinner_RestartAfterStop(t *testing.T) {
 	buf := &safeBuffer{}

@@ -3,6 +3,7 @@ package main_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -134,7 +135,16 @@ func TestE2E_Chat_NoSpinnerFlagAccepted(t *testing.T) {
 	cmd.Stdin = strings.NewReader("/quit\n")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	_ = cmd.Run() // exit code は問わない。unknown flag になっていないことだけ確認
+	err := cmd.Run() // 非ゼロ終了は許容するが、実行失敗（タイムアウト等）は落とす
+	if runCtx.Err() != nil {
+		t.Fatalf("chat timed out: %v", runCtx.Err())
+	}
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("chat execution failed: %v (stderr=%s)", err, stderr.String())
+		}
+	}
 	if strings.Contains(stderr.String(), "flag provided but not defined") {
 		t.Fatalf("flag not recognized: %s", stderr.String())
 	}

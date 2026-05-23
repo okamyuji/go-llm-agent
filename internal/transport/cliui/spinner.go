@@ -96,66 +96,67 @@ func NewSpinner(opt SpinnerOptions) *Spinner {
 }
 
 // Start 指定フェーズで描画ループを開始する。enabled=false の場合は no-op
-// 既に started の場合は SetPhase に振り替える
+// 既に started の場合は SetPhase 相当として cmds へ opSet を送信する
+//
+// 並行する Stop/SetPhase からのレースを避けるため、ライフサイクル制御は全て
+// s.mu の保持中に完結させてシングルライター goroutine の重複起動を防ぐ
 func (s *Spinner) Start(phase Phase, label string) {
 	if !s.enabled {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.started {
-		s.mu.Unlock()
-		s.SetPhase(phase, label)
+		// Lock 保持中なので cmds は close されない。安全に送信できる
+		select {
+		case s.cmds <- spinnerCmd{op: opSet, phase: phase, label: label}:
+		default:
+		}
 		return
 	}
 	s.started = true
 	s.cmds = make(chan spinnerCmd, 4)
 	s.done = make(chan struct{})
-	cmds := s.cmds
-	done := s.done
-	s.mu.Unlock()
-	go s.loop(phase, label, cmds, done)
+	go s.loop(phase, label, s.cmds, s.done)
 }
 
 // SetPhase フェーズ・ラベルを変える。enabled=false または stopped 時は no-op
 // バッファ満杯時は drop して呼出側をブロックさせない
+//
+// Lock 保持中に送信するので closed channel への send は発生しない
 func (s *Spinner) SetPhase(phase Phase, label string) {
 	if !s.enabled {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.started {
-		s.mu.Unlock()
 		return
 	}
-	cmds := s.cmds
-	s.mu.Unlock()
 	select {
-	case cmds <- spinnerCmd{op: opSet, phase: phase, label: label}:
+	case s.cmds <- spinnerCmd{op: opSet, phase: phase, label: label}:
 	default:
 	}
 }
 
 // Stop 行を消して描画ループを終了する。enabled=false または stopped 時は no-op
-// cmds の close を停止シグナルとして使い、goroutine の終了を <-done で待ち合わせる
+//
+// cmds の close を停止シグナルとして使い、<-done で goroutine の終了を待ち合わせる。
+// Lock 保持中に niling まで完了させ、並行する Start/SetPhase との race を防ぐ
 func (s *Spinner) Stop() {
 	if !s.enabled {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.started {
-		s.mu.Unlock()
 		return
 	}
-	cmds := s.cmds
-	done := s.done
+	close(s.cmds)
+	<-s.done
 	s.started = false
-	s.mu.Unlock()
-	close(cmds)
-	<-done
-	s.mu.Lock()
 	s.cmds = nil
 	s.done = nil
-	s.mu.Unlock()
 }
 
 // loop 1 本のレンダー goroutine。io.Writer への書込は全てここからのみ
