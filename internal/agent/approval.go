@@ -33,6 +33,10 @@ type Approver interface {
 // ErrApprovalTimeout 承認待ちが ctx で timeout したことを示す sentinel error
 var ErrApprovalTimeout = errors.New("approval: timed out waiting for decision")
 
+// ErrApprovalAlreadyPending 同一 runID/callID に対する併走 Request を示す sentinel error
+// 同じキーで複数の goroutine が同時に待機すると Submit が片方しか起こさない race のため拒否する
+var ErrApprovalAlreadyPending = errors.New("approval: another request is already pending for this runID/callID")
+
 // approvalKey RunID と CallID を結合した型安全なマップキー
 // 文字列連結だと ID 内の ":" が衝突を生むため struct で持つ
 type approvalKey struct {
@@ -57,14 +61,17 @@ func NewHTTPApprover() *HTTPApprover {
 
 // Request 承認待ち channel を登録し ctx 監視で Decision を待つ
 // timeout 時は Allowed=false の Decision と ErrApprovalTimeout を返す fail-closed 設計
+// 同じ runID/callID に対する併走 Request は ErrApprovalAlreadyPending で拒否する
+// (同一キーで複数 goroutine が待機すると Submit が一方の channel しか起こさず race を生む)
 func (a *HTTPApprover) Request(ctx context.Context, r ApprovalRequest) (ApprovalDecision, error) {
 	k := approvalKey{RunID: r.RunID, CallID: r.CallID}
 	a.mu.Lock()
-	ch, ok := a.pending[k]
-	if !ok {
-		ch = make(chan ApprovalDecision, 1)
-		a.pending[k] = ch
+	if _, exists := a.pending[k]; exists {
+		a.mu.Unlock()
+		return ApprovalDecision{RunID: r.RunID, CallID: r.CallID, Allowed: false, Reason: "duplicate pending request"}, ErrApprovalAlreadyPending
 	}
+	ch := make(chan ApprovalDecision, 1)
+	a.pending[k] = ch
 	a.mu.Unlock()
 
 	cleanup := func() {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -214,6 +215,7 @@ func toPayload(req llm.ChatRequest) gemPayload {
 
 // toolChoiceConfig ChatRequest.ToolChoice を Gemini の functionCallingConfig に変換する
 // Gemini は AUTO / ANY / NONE と allowedFunctionNames を使う
+// 未知の Mode は AUTO にフォールバックし、設定ミスを発見しやすくするため警告ログを残す
 func toolChoiceConfig(tc *llm.ToolChoice) *gemToolConfig {
 	switch tc.Mode {
 	case "required", "any":
@@ -226,6 +228,7 @@ func toolChoiceConfig(tc *llm.ToolChoice) *gemToolConfig {
 		}
 		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "ANY", AllowedFunctionNames: []string{tc.Name}}}
 	default:
+		slog.Warn("gemini: unknown tool_choice mode, falling back to AUTO", "mode", tc.Mode)
 		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "AUTO"}}
 	}
 }

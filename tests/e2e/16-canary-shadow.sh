@@ -13,12 +13,16 @@ RED='\033[31m'
 NC='\033[0m'
 
 printf "${YELLOW}>>> running TestRouter_*${NC}\n"
+# go test 全量出力を残しつつ末尾だけ stdout に簡約表示する
+LOG=$(mktemp)
+trap 'rm -f "$LOG"' EXIT
 set +e
-go test -race -run TestRouter ./internal/agent/... 2>&1 | tail -5
-RUN_EXIT=${PIPESTATUS[0]}
+go test -race -run TestRouter ./internal/agent/... > "$LOG" 2>&1
+RUN_EXIT=$?
 set -e
+tail -n 200 "$LOG"
 if [[ "$RUN_EXIT" -ne 0 ]]; then
-  printf "${RED}FAIL: Router tests failed${NC}\n"
-  exit 1
+  printf "${RED}FAIL: Router tests failed (see %s)${NC}\n" "$LOG"
+  exit "$RUN_EXIT"
 fi
 printf "${GREEN}OK: Router.Pick is deterministic and shadow ratio is capped at 0.5${NC}\n"

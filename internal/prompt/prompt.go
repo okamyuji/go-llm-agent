@@ -63,10 +63,19 @@ func (f *fileLoader) Load(ref string) (Template, error) {
 		path = filepath.Join(f.dir, name+".tmpl")
 	}
 	// 念のため解決後のパスが dir 配下に収まることも検査する
+	// filepath.EvalSymlinks も併用してシンボリックリンク経由で loader dir 外へ抜ける経路を遮断する
+	// テンプレートファイルがまだ存在しない場合は EvalSymlinks がエラーになるため、
+	// Abs ベースの prefix チェックに自動でフォールバックする
 	cleanedDir, errDir := filepath.Abs(f.dir)
 	cleanedPath, errPath := filepath.Abs(path)
 	if errDir != nil || errPath != nil {
 		return Template{}, fmt.Errorf("prompt: resolve path failed: %v / %v", errDir, errPath)
+	}
+	if resolved, err := filepath.EvalSymlinks(cleanedDir); err == nil {
+		cleanedDir = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(cleanedPath); err == nil {
+		cleanedPath = resolved
 	}
 	if !strings.HasPrefix(cleanedPath, cleanedDir+string(filepath.Separator)) && cleanedPath != cleanedDir {
 		return Template{}, fmt.Errorf("prompt: path escapes loader dir got=%q", path)

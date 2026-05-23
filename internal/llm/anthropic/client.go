@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -203,6 +204,7 @@ func toPayload(req llm.ChatRequest, stream bool) msgPayload {
 // toolChoiceJSON ChatRequest.ToolChoice を Anthropic Messages API の値に変換する
 // Anthropic は {"type":"auto"} / {"type":"any"} / {"type":"none"} / {"type":"tool","name":"..."}
 // の 4 種類を受け付ける。"none" は明示的に type=none を返し、tools 全体の挙動を制御する
+// 未知の Mode は auto にフォールバックし、設定ミスを発見しやすくするため警告ログを残す
 func toolChoiceJSON(tc *llm.ToolChoice) any {
 	switch tc.Mode {
 	case "required", "any":
@@ -215,6 +217,7 @@ func toolChoiceJSON(tc *llm.ToolChoice) any {
 		}
 		return map[string]any{"type": "tool", "name": tc.Name}
 	default:
+		slog.Warn("anthropic: unknown tool_choice mode, falling back to auto", "mode", tc.Mode)
 		return map[string]any{"type": "auto"}
 	}
 }
