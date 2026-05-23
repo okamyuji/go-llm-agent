@@ -50,7 +50,8 @@ func TestRouter_ShadowRatioCappedAt05(t *testing.T) {
 			on++
 		}
 	}
-	// 0.5 cap で 100 件中 70 件未満になることを期待
+	// 0.5 cap が効いていれば 100 件中 75 件未満に収まるはず
+	// 厳密な 50/100 ではなく統計的な揺れを許容するため境界は 75 に置く
 	if on >= 75 {
 		t.Errorf("expected shadow capped at 0.5, observed %d/100", on)
 	}

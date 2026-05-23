@@ -186,11 +186,15 @@ func TestWrapProvider_DefaultsAppliedWhenZeros(t *testing.T) {
 	t.Parallel()
 
 	prov := &retryProvider{failures: 1}
-	wrapped := WrapProvider("retryfake", prov, Config{MaxAttempts: 2}).(*wrapped)
-	if wrapped.cfg.InitialBackoff <= 0 {
+	// 二値型アサーションで実装変更時の panic を避け、テスト失敗として明示する
+	w, ok := WrapProvider("retryfake", prov, Config{MaxAttempts: 2}).(*wrapped)
+	if !ok {
+		t.Fatalf("WrapProvider must return *wrapped, got %T", w)
+	}
+	if w.cfg.InitialBackoff <= 0 {
 		t.Error("InitialBackoff must default when 0 was provided")
 	}
-	if wrapped.cfg.MaxBackoff <= 0 {
+	if w.cfg.MaxBackoff <= 0 {
 		t.Error("MaxBackoff must default when 0 was provided")
 	}
 }
