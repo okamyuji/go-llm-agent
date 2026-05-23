@@ -101,6 +101,11 @@ func (r *streamReader) Recv() (llm.StreamEvent, bool) {
 					Name:      part.FunctionCall.Name,
 					Arguments: part.FunctionCall.Args,
 				}
+				// thinking model が functionCall を含む part に付与する
+				// thoughtSignature を保持し、次ターンに送り返せるようにする
+				if part.ThoughtSignature != "" {
+					tc.Metadata = map[string]string{metaKeyThoughtSignature: part.ThoughtSignature}
+				}
 				ev.ToolCall = &tc
 			}
 		}

@@ -27,6 +27,10 @@ type ToolCall struct {
 	ID        string
 	Name      string
 	Arguments json.RawMessage
+	// Metadata プロバイダ固有の往復データ
+	// 例 Gemini thinking model の thoughtSignature
+	// 受信時にプロバイダが書き込み、次ターンの送信時に同じプロバイダが読み出して payload に詰める
+	Metadata map[string]string
 }
 
 // ToolSpec ツール定義 (LLM に渡す)

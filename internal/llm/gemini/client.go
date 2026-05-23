@@ -57,12 +57,20 @@ type gemPart struct {
 	Text             string           `json:"text,omitempty"`
 	FunctionCall     *gemFunctionCall `json:"functionCall,omitempty"`
 	FunctionResponse *gemFunctionResp `json:"functionResponse,omitempty"`
+	// ThoughtSignature Gemini thinking model が functionCall を含む part に付与する
+	// 不透明トークン。次ターンの API リクエストに同じ値を含めないと
+	// 400 (INVALID_ARGUMENT) で失敗する
+	// 詳細は https://ai.google.dev/gemini-api/docs/thought-signatures
+	ThoughtSignature string `json:"thoughtSignature,omitempty"`
 }
 
 type gemFunctionCall struct {
 	Name string          `json:"name"`
 	Args json.RawMessage `json:"args"`
 }
+
+// metaKeyThoughtSignature llm.ToolCall.Metadata の thoughtSignature 用キー
+const metaKeyThoughtSignature = "thoughtSignature"
 
 type gemFunctionResp struct {
 	Name     string          `json:"name"`
@@ -156,11 +164,15 @@ func (c *Client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 		}
 		if part.FunctionCall != nil {
 			idx++
-			out.Message.ToolCalls = append(out.Message.ToolCalls, llm.ToolCall{
+			tc := llm.ToolCall{
 				ID:        fmt.Sprintf("call_%d", idx),
 				Name:      part.FunctionCall.Name,
 				Arguments: part.FunctionCall.Args,
-			})
+			}
+			if part.ThoughtSignature != "" {
+				tc.Metadata = map[string]string{metaKeyThoughtSignature: part.ThoughtSignature}
+			}
+			out.Message.ToolCalls = append(out.Message.ToolCalls, tc)
 		}
 	}
 	return out, nil
@@ -196,7 +208,11 @@ func toPayload(req llm.ChatRequest) gemPayload {
 			parts = append(parts, gemPart{Text: m.Content})
 		}
 		for _, tc := range m.ToolCalls {
-			parts = append(parts, gemPart{FunctionCall: &gemFunctionCall{Name: tc.Name, Args: tc.Arguments}})
+			gp := gemPart{FunctionCall: &gemFunctionCall{Name: tc.Name, Args: tc.Arguments}}
+			if sig, ok := tc.Metadata[metaKeyThoughtSignature]; ok {
+				gp.ThoughtSignature = sig
+			}
+			parts = append(parts, gp)
 		}
 		p.Contents = append(p.Contents, gemContent{Role: role, Parts: parts})
 	}
