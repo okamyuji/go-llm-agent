@@ -251,6 +251,17 @@ agent:
 
 E2E スクリプトは `tests/e2e/05-tool-choice-validation.sh` です。fixtures/tool_choice_exercise の OpenAI 互換 fake サーバが受信するペイロードに `tool_choice: required` が正しくマッピングされていることを確認します。設計の詳細は `docs/design/05-tool-choice-schema-validation.md` を参照してください。
 
+## カナリアとシャドウデプロイ
+
+`internal/agent.Router` でリクエスト単位の canary 振り分けと shadow 実行設定を表現できます。`Pick(seed)` は決定論的で、同じ seed には常に同じ Decision を返します。shadow ratio は副作用拡大を抑えるため 0.5 を上限としてハードキャップします。
+
+```go
+r := agent.NewRouter("openai/gpt-4o-mini", "anthropic/claude-3-5-sonnet-latest", 0.05, "openai/gpt-4o", 0.10)
+d := r.Pick(seedFromRequest)
+```
+
+E2E スクリプトは `tests/e2e/16-canary-shadow.sh` で TestRouter_* を -race 付きで実行し、ratio=0/1 の境界値と 0.5 cap、同一 seed の決定論性を確認します。設計の詳細は `docs/design/16-canary-shadow.md` を参照してください。
+
 ## mTLS と OAuth2
 
 `internal/transport/httpapi.BuildTLSConfig` で TLS 終端と mTLS を構築できます。`ClientCAFile` を指定すると `RequireAndVerifyClientCert` で mTLS を強制します。`MinVersion` で TLS の最低バージョンも指定できます。
