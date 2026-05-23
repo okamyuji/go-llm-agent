@@ -26,7 +26,7 @@ set -e
 cat "$WORK/out.log"
 if [[ "$RUN_EXIT" -ne 0 ]]; then
   printf "${RED}FAIL: eval exerciser exited with %d${NC}\n" "$RUN_EXIT"
-  exit 1
+  exit "$RUN_EXIT"
 fi
 if ! grep -q 'aggregate_cases=1' "$WORK/out.log"; then
   printf "${RED}FAIL: expected aggregate_cases=1${NC}\n"

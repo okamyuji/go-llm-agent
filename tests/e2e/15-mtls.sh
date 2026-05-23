@@ -14,7 +14,7 @@ NC='\033[0m'
 
 printf "${YELLOW}>>> running TestBuildTLSConfig_* / TestResolveMinVersion / TestNewJWTVerifier_*${NC}\n"
 set +e
-go test -race -run 'TestBuildTLSConfig|TestResolveMinVersion|TestNewJWTVerifier' ./internal/transport/httpapi/... 2>&1 | tail -5
+go test -race -timeout 60s -run 'TestBuildTLSConfig|TestResolveMinVersion|TestNewJWTVerifier' ./internal/transport/httpapi/... 2>&1 | tail -5
 RUN_EXIT=${PIPESTATUS[0]}
 set -e
 if [[ "$RUN_EXIT" -ne 0 ]]; then

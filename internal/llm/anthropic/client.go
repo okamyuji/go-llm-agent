@@ -16,6 +16,8 @@ import (
 const apiVersion = "2023-06-01"
 
 // Options クライアント生成オプション
+// HTTPClient が指定されている場合、RequestTimeoutSeconds は無視される
+// (タイムアウト管理は呼び出し側の HTTPClient.Timeout に委ねる設計)
 type Options struct {
 	BaseURL               string
 	APIKey                string

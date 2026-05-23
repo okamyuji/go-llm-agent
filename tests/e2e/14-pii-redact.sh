@@ -13,7 +13,7 @@ NC='\033[0m'
 
 printf "${YELLOW}>>> running TestPIIRedactor_* and TestChainRedactor_*${NC}\n"
 set +e
-go test -race -run 'TestPIIRedactor|TestChainRedactor' ./internal/safety/... 2>&1 | tail -5
+go test -race -timeout 60s -run 'TestPIIRedactor|TestChainRedactor' ./internal/safety/... 2>&1 | tail -5
 RUN_EXIT=${PIPESTATUS[0]}
 set -e
 if [[ "$RUN_EXIT" -ne 0 ]]; then
