@@ -13,7 +13,7 @@ NC='\033[0m'
 
 printf "${YELLOW}>>> running TestLoader_* and TestRenderer_*${NC}\n"
 go test -race -run 'TestLoader|TestRenderer' ./internal/prompt/... 2>&1 | tail -5
-RUN_EXIT=$?
+RUN_EXIT=${PIPESTATUS[0]}
 if [[ "$RUN_EXIT" -ne 0 ]]; then
   printf "${RED}FAIL: prompt template tests failed${NC}\n"
   exit 1

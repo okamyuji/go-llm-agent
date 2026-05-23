@@ -14,7 +14,7 @@ NC='\033[0m'
 
 printf "${YELLOW}>>> running TestRouter_*${NC}\n"
 go test -race -run TestRouter ./internal/agent/... 2>&1 | tail -5
-RUN_EXIT=$?
+RUN_EXIT=${PIPESTATUS[0]}
 if [[ "$RUN_EXIT" -ne 0 ]]; then
   printf "${RED}FAIL: Router tests failed${NC}\n"
   exit 1

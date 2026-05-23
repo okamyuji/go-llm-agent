@@ -13,7 +13,7 @@ NC='\033[0m'
 
 printf "${YELLOW}>>> running TestPIIRedactor_* and TestChainRedactor_*${NC}\n"
 go test -race -run 'TestPIIRedactor|TestChainRedactor' ./internal/safety/... 2>&1 | tail -5
-RUN_EXIT=$?
+RUN_EXIT=${PIPESTATUS[0]}
 if [[ "$RUN_EXIT" -ne 0 ]]; then
   printf "${RED}FAIL: PII redactor tests failed${NC}\n"
   exit 1

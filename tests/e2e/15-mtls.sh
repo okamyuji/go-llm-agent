@@ -14,7 +14,7 @@ NC='\033[0m'
 
 printf "${YELLOW}>>> running TestBuildTLSConfig_* / TestResolveMinVersion / TestNewJWTVerifier_*${NC}\n"
 go test -race -run 'TestBuildTLSConfig|TestResolveMinVersion|TestNewJWTVerifier' ./internal/transport/httpapi/... 2>&1 | tail -5
-RUN_EXIT=$?
+RUN_EXIT=${PIPESTATUS[0]}
 if [[ "$RUN_EXIT" -ne 0 ]]; then
   printf "${RED}FAIL: mTLS / OAuth2 tests failed${NC}\n"
   exit 1

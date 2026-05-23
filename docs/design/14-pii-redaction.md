@@ -36,15 +36,19 @@ safety:
         regex: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
         replacement: "[REDACTED:EMAIL]"
       - id: jp_phone
-        regex: "0\\d{1,4}-\\d{1,4}-\\d{3,4}"
+        # ハイフンあり/なし双方を許容し、国際表記 +81 にも対応する
+        regex: "(?:\\+?81[- ]?|0)\\d{1,4}[- ]?\\d{1,4}[- ]?\\d{3,4}"
         replacement: "[REDACTED:JP_PHONE]"
       - id: jp_mynumber
         regex: "\\b\\d{4}\\s?\\d{4}\\s?\\d{4}\\b"
         replacement: "[REDACTED:JP_MYNUMBER]"
       - id: ipv4
-        regex: "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b"
+        # 0-255 のオクテット範囲を厳密にチェックして version 番号などへの誤マッチを防ぐ
+        regex: "\\b(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(\\.(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}\\b"
         replacement: "[REDACTED:IPV4]"
 ```
+
+上記は設計書の参考例です。実装側 (`config.yaml.example` と `cmd/agent/main.go`) では同じパターンを採用し、ユニットテストで偽陽性 (例: `192.300.1.1` / `09011112222a` のような部分文字列) を弾けることを確認します。
 
 ### 5.3 公開インターフェース
 
