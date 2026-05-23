@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -111,7 +110,8 @@ func (s *FileStore) queryAll(pred func(Snapshot) bool) ([]Snapshot, error) {
 			out = append(out, snap)
 		}
 	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
+	if err := scanner.Err(); err != nil {
+		// bufio.Scanner は EOF を err として返さないため err != nil は実エラーのみ
 		return nil, fmt.Errorf("billing scan: %w", err)
 	}
 	return out, nil

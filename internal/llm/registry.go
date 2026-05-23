@@ -80,10 +80,18 @@ func (r *registry) ResolveWithFallback(model string) (Provider, string, Provider
 	var fallback Provider
 	var fallbackModel string
 	if fbName, hasFB := r.fallback[pname]; hasFB && fbName != "" {
-		if fp, ok := r.providers[fbName]; ok {
-			fallback = fp
-			fallbackModel = name
+		fp, ok := r.providers[fbName]
+		if !ok {
+			// 未登録の fallback 先は nil 扱い。将来 logger 注入時に warn を出す
+			return primary, name, nil, "", nil
 		}
+		// fallback 側の allow_models に model 名が含まれていなければ不許可モデル
+		// 呼び出しを防ぐため fallback を nil で skip する
+		if allow := r.allowModels[fbName]; len(allow) > 0 && !slices.Contains(allow, name) {
+			return primary, name, nil, "", nil
+		}
+		fallback = fp
+		fallbackModel = name
 	}
 	return primary, name, fallback, fallbackModel, nil
 }

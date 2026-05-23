@@ -56,7 +56,7 @@ func TestClient_UnknownMethodReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.Close() }()
-	if _, err := c.call("nonexistent/method", nil); err == nil {
+	if _, err := c.call(context.Background(), "nonexistent/method", nil); err == nil {
 		t.Fatal("expected error from unknown method")
 	}
 }

@@ -156,8 +156,12 @@ func TestAccumulator_StoreFailurePropagates(t *testing.T) {
 }
 
 // fixedNow テスト用に固定日付を返す
+// 不正な date 文字列が渡されたら panic で早期失敗させる
 func fixedNow(date string) func() time.Time {
-	parsed, _ := time.Parse("2006-01-02", date)
+	parsed, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		panic("fixedNow: invalid date " + date + ": " + err.Error())
+	}
 	return func() time.Time { return parsed }
 }
 

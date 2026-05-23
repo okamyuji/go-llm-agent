@@ -133,13 +133,6 @@ func (a *accumulator) Add(ctx context.Context, sessionID, providerName, model st
 	dailySoFar.At = now
 	a.daily[date] = dailySoFar
 	a.dailyCost[date] = projectedDailyCost
-	// rollback 用に直前のスナップショットを取り戻すための値を保存
-	prevSess := a.sessions[sessionID]
-	prevDaily := a.daily[date]
-	prevDailyCost := a.dailyCost[date]
-	_ = prevSess // 直近の値で上書きされている
-	_ = prevDaily
-	_ = prevDailyCost
 	a.mu.Unlock()
 
 	if err := a.store.Append(ctx, snap); err != nil {

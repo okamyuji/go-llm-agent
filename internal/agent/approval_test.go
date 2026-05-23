@@ -23,22 +23,32 @@ func TestHTTPApprover_SubmitReleasesPendingRequest(t *testing.T) {
 	t.Parallel()
 	a := NewHTTPApprover(true)
 	got := make(chan ApprovalDecision, 1)
+	errCh := make(chan error, 1)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		d, err := a.Request(ctx, ApprovalRequest{RunID: "r1", CallID: "c1", ToolName: "shell"})
-		if err != nil {
-			t.Errorf("unexpected err: %v", err)
-		}
+		errCh <- err
 		got <- d
 	}()
-	// 少し待ってから Submit
-	time.Sleep(50 * time.Millisecond)
-	if !a.Submit(ApprovalDecision{RunID: "r1", CallID: "c1", Allowed: true, Reviewer: "user"}) {
+	// Request の内部 channel 登録が完了するまで Submit が失敗するため、短い間隔でリトライ
+	deadline := time.Now().Add(2 * time.Second)
+	submitted := false
+	for time.Now().Before(deadline) {
+		if a.Submit(ApprovalDecision{RunID: "r1", CallID: "c1", Allowed: true, Reviewer: "user"}) {
+			submitted = true
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !submitted {
 		t.Fatal("Submit must succeed against registered channel")
 	}
 	select {
 	case d := <-got:
+		if err := <-errCh; err != nil {
+			t.Errorf("unexpected err from Request: %v", err)
+		}
 		if !d.Allowed {
 			t.Errorf("expected Allowed=true, got %+v", d)
 		}

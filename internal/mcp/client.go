@@ -56,7 +56,9 @@ func NewStdioClient(ctx context.Context, command []string) (*Client, error) {
 		return nil, fmt.Errorf("mcp start: %w", err)
 	}
 	sc := bufio.NewScanner(out)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	// 大きな tools/list 応答（多数の tool スキーマ）に耐えるため、初期 64KiB から
+	// 最大 16MiB まで自動拡張する設定にする
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	return &Client{cmd: cmd, in: in, out: sc}, nil
 }
 
@@ -100,10 +102,15 @@ type rpcError struct {
 }
 
 // call JSON-RPC を 1 往復する
-// 並列呼び出しは mu で直列化する。実用は十分なシリアル化粒度
-func (c *Client) call(method string, params any) (json.RawMessage, error) {
+// 並列呼び出しは mu で直列化する。実用は十分なシリアル化粒度。
+// ctx 経由のキャンセルは I/O ブロック中の中断を実現するため、リクエスト送信前と
+// 応答受信を別 goroutine で待つことで実現する。MVP 範囲のシンプルな実装
+func (c *Client) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	id := c.nextID.Add(1)
 	var p json.RawMessage
 	if params != nil {
@@ -121,14 +128,36 @@ func (c *Client) call(method string, params any) (json.RawMessage, error) {
 	if _, err := c.in.Write(append(b, '\n')); err != nil {
 		return nil, fmt.Errorf("mcp write: %w", err)
 	}
-	if !c.out.Scan() {
-		if err := c.out.Err(); err != nil {
-			return nil, fmt.Errorf("mcp read: %w", err)
+
+	type scanResult struct {
+		ok  bool
+		err error
+		raw []byte
+	}
+	rch := make(chan scanResult, 1)
+	go func() {
+		if c.out.Scan() {
+			// Scanner の内部バッファは次回 Scan で上書きされるためコピーする
+			line := append([]byte(nil), c.out.Bytes()...)
+			rch <- scanResult{ok: true, raw: line}
+			return
+		}
+		rch <- scanResult{ok: false, err: c.out.Err()}
+	}()
+	var sr scanResult
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case sr = <-rch:
+	}
+	if !sr.ok {
+		if sr.err != nil {
+			return nil, fmt.Errorf("mcp read: %w", sr.err)
 		}
 		return nil, errors.New("mcp: server closed connection")
 	}
 	var resp rpcResponse
-	if err := json.Unmarshal(c.out.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(sr.raw, &resp); err != nil {
 		return nil, fmt.Errorf("mcp unmarshal: %w", err)
 	}
 	if resp.ID != id {
@@ -141,8 +170,8 @@ func (c *Client) call(method string, params any) (json.RawMessage, error) {
 }
 
 // ListTools tools/list を呼び ToolInfo の配列を返す
-func (c *Client) ListTools(_ context.Context) ([]ToolInfo, error) {
-	res, err := c.call("tools/list", nil)
+func (c *Client) ListTools(ctx context.Context) ([]ToolInfo, error) {
+	res, err := c.call(ctx, "tools/list", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -156,12 +185,12 @@ func (c *Client) ListTools(_ context.Context) ([]ToolInfo, error) {
 }
 
 // Call tools/call を呼ぶ
-func (c *Client) Call(_ context.Context, name string, args json.RawMessage) (CallResult, error) {
+func (c *Client) Call(ctx context.Context, name string, args json.RawMessage) (CallResult, error) {
 	params := struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
 	}{Name: name, Arguments: args}
-	res, err := c.call("tools/call", params)
+	res, err := c.call(ctx, "tools/call", params)
 	if err != nil {
 		return CallResult{}, err
 	}

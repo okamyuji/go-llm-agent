@@ -127,6 +127,16 @@ func InitTelemetry(ctx context.Context, c TelemetryConfig, logger *slog.Logger) 
 	otel.SetMeterProvider(mp)
 
 	if err := installInstruments(mp); err != nil {
+		// 既に作成済みの TracerProvider と MeterProvider を best-effort で閉じる
+		// 親 ctx から派生させて contextcheck を満たしつつ、独自の短いタイムアウトを掛ける
+		shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if shutErr := tp.Shutdown(shutdownCtx); shutErr != nil && logger != nil {
+			logger.Warn("otel: tracer provider shutdown failed after install error", "err", shutErr)
+		}
+		if shutErr := mp.Shutdown(shutdownCtx); shutErr != nil && logger != nil {
+			logger.Warn("otel: meter provider shutdown failed after install error", "err", shutErr)
+		}
 		return nil, err
 	}
 

@@ -87,7 +87,7 @@ printf "${YELLOW}>>> waiting for collector to flush${NC}\n"
 wait "$COLLECTOR_PID" || true
 cat "$WORK/collector.log"
 
-if ! grep -qE 'trace_hits=[1-9]' "$WORK/collector.log"; then
+if ! grep -qE 'trace_hits=[1-9][0-9]*' "$WORK/collector.log"; then
   printf "${RED}FAIL: collector received zero trace_hits${NC}\n"
   exit 1
 fi

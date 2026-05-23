@@ -2,11 +2,16 @@ package httpapi
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 )
+
+// maxApprovalBodyBytes /v1/runs/<id>/approve のリクエストボディ上限 (1MiB)
+// 過大なペイロードによるメモリ枯渇を防ぐ
+const maxApprovalBodyBytes int64 = 1 << 20
 
 // approveRequest /v1/runs/<id>/approve のリクエストペイロード
 type approveRequest struct {
@@ -34,8 +39,9 @@ func (s *Server) handleRunsApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	runID := parts[0]
 	var body approveRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid json body", http.StatusBadRequest)
+	limited := io.LimitReader(r.Body, maxApprovalBodyBytes)
+	if err := json.NewDecoder(limited).Decode(&body); err != nil {
+		http.Error(w, "invalid json body (or body exceeds 1MiB)", http.StatusBadRequest)
 		return
 	}
 	if body.CallID == "" {

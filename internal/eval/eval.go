@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -231,9 +232,14 @@ func paramsMatch(expected map[string]any, args json.RawMessage) bool {
 }
 
 // equalAny JSON 値 2 つを比較する
+// json.Marshal が失敗した場合は reflect.DeepEqual にフォールバックして
+// 空 byte 列の偽陽性一致を防ぐ
 func equalAny(a, b any) bool {
-	ab, _ := json.Marshal(a)
-	bb, _ := json.Marshal(b)
+	ab, errA := json.Marshal(a)
+	bb, errB := json.Marshal(b)
+	if errA != nil || errB != nil {
+		return reflect.DeepEqual(a, b)
+	}
 	return string(ab) == string(bb)
 }
 

@@ -201,15 +201,14 @@ func toPayload(req llm.ChatRequest, stream bool) msgPayload {
 }
 
 // toolChoiceJSON ChatRequest.ToolChoice を Anthropic Messages API の値に変換する
-// Anthropic は {"type":"auto"} / {"type":"any"} / {"type":"tool","name":"..."} を使う
-// "none" は API 側に直接対応がないため tools を空にすべきだが、現状 ToolChoice はそのままで API
-// 側の挙動に委ねるため nil を返す
+// Anthropic は {"type":"auto"} / {"type":"any"} / {"type":"none"} / {"type":"tool","name":"..."}
+// の 4 種類を受け付ける。"none" は明示的に type=none を返し、tools 全体の挙動を制御する
 func toolChoiceJSON(tc *llm.ToolChoice) any {
 	switch tc.Mode {
 	case "required", "any":
 		return map[string]any{"type": "any"}
 	case "none":
-		return nil
+		return map[string]any{"type": "none"}
 	case "tool":
 		if tc.Name == "" {
 			return map[string]any{"type": "auto"}

@@ -19,7 +19,7 @@ func TestFileStore_AppendAndQuerySession(t *testing.T) {
 
 	ctx := context.Background()
 	for i := range 3 {
-		_ = store.Append(ctx, Snapshot{
+		if err := store.Append(ctx, Snapshot{
 			SessionID:    "sess-a",
 			Provider:     "openai",
 			Model:        "gpt",
@@ -27,14 +27,18 @@ func TestFileStore_AppendAndQuerySession(t *testing.T) {
 			OutputTokens: 5 * (i + 1),
 			CostJPY:      float64(i + 1),
 			At:           time.Date(2026, 5, 23, 12, 0, i, 0, time.UTC),
-		})
+		}); err != nil {
+			t.Fatalf("Append sess-a #%d: %v", i, err)
+		}
 	}
-	_ = store.Append(ctx, Snapshot{
+	if err := store.Append(ctx, Snapshot{
 		SessionID: "sess-b",
 		Provider:  "openai",
 		Model:     "gpt",
 		At:        time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC),
-	})
+	}); err != nil {
+		t.Fatalf("Append sess-b: %v", err)
+	}
 
 	got, err := store.QuerySession(ctx, "sess-a")
 	if err != nil {
@@ -61,9 +65,15 @@ func TestFileStore_QueryDate(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	ctx := context.Background()
-	_ = store.Append(ctx, Snapshot{SessionID: "a", At: time.Date(2026, 5, 23, 1, 0, 0, 0, time.UTC)})
-	_ = store.Append(ctx, Snapshot{SessionID: "b", At: time.Date(2026, 5, 24, 1, 0, 0, 0, time.UTC)})
-	_ = store.Append(ctx, Snapshot{SessionID: "c", At: time.Date(2026, 5, 23, 23, 59, 0, 0, time.UTC)})
+	for _, s := range []Snapshot{
+		{SessionID: "a", At: time.Date(2026, 5, 23, 1, 0, 0, 0, time.UTC)},
+		{SessionID: "b", At: time.Date(2026, 5, 24, 1, 0, 0, 0, time.UTC)},
+		{SessionID: "c", At: time.Date(2026, 5, 23, 23, 59, 0, 0, time.UTC)},
+	} {
+		if err := store.Append(ctx, s); err != nil {
+			t.Fatalf("Append %s: %v", s.SessionID, err)
+		}
+	}
 
 	got, err := store.QueryDate(ctx, "2026-05-23")
 	if err != nil {
