@@ -10,12 +10,14 @@ import (
 
 // Input エージェント Run 入力
 type Input struct {
-	Model        string
-	SystemPrompt string
-	Messages     []llm.Message
-	MaxToolHops  int
-	EnabledTools []string
-	SessionID    string
+	Model                string
+	SystemPrompt         string
+	Messages             []llm.Message
+	MaxToolHops          int
+	EnabledTools         []string
+	SessionID            string
+	ToolChoice           *llm.ToolChoice
+	ValidationMaxRetries int
 }
 
 // EventKind イベント種別
@@ -57,9 +59,12 @@ type Service interface {
 }
 
 type service struct {
-	reg     llm.Registry
-	tools   tool.Registry
-	billing billing.Accumulator
+	reg               llm.Registry
+	tools             tool.Registry
+	billing           billing.Accumulator
+	validator         SchemaValidator
+	defaultToolChoice *llm.ToolChoice
+	defaultMaxRetries int
 }
 
 // New Service を構築する。billing.Accumulator は nil 可で、その場合は集計を無効にする
@@ -77,4 +82,19 @@ type Option func(*service)
 // WithBilling Service に billing.Accumulator を注入する
 func WithBilling(acc billing.Accumulator) Option {
 	return func(s *service) { s.billing = acc }
+}
+
+// WithValidator Service にツール引数 JSON Schema 検証を注入する
+func WithValidator(v SchemaValidator) Option {
+	return func(s *service) { s.validator = v }
+}
+
+// WithDefaultToolChoice Input.ToolChoice が nil のときの既定値を設定する
+func WithDefaultToolChoice(tc *llm.ToolChoice) Option {
+	return func(s *service) { s.defaultToolChoice = tc }
+}
+
+// WithDefaultValidationRetries Input.ValidationMaxRetries が 0 のときの既定値を設定する
+func WithDefaultValidationRetries(n int) Option {
+	return func(s *service) { s.defaultMaxRetries = n }
 }

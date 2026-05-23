@@ -148,6 +148,22 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 	return cfg, llmReg, toolReg, store, nil
 }
 
+// agentOptions config に基づき agent.Service のオプション集合を組み立てる
+func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulator) []agent.Option {
+	var opts []agent.Option
+	if acc != nil {
+		opts = append(opts, agent.WithBilling(acc))
+	}
+	if cfg.Agent.ToolValidation.Enabled {
+		opts = append(opts, agent.WithValidator(agent.NewSchemaValidator(tools)))
+		opts = append(opts, agent.WithDefaultValidationRetries(cfg.Agent.ToolValidation.MaxRetries))
+	}
+	if cfg.Agent.ToolChoice.Mode != "" {
+		opts = append(opts, agent.WithDefaultToolChoice(&llm.ToolChoice{Mode: cfg.Agent.ToolChoice.Mode, Name: cfg.Agent.ToolChoice.Name}))
+	}
+	return opts
+}
+
 // wrapWithRetry RetryConfig を retry.Config に変換して Provider をラップする
 // MaxAttempts <= 1 のとき WrapProvider は inner をそのまま返すため互換性が保たれる
 func wrapWithRetry(name string, p llm.Provider, rc config.RetryConfig) llm.Provider {
@@ -205,10 +221,7 @@ func cmdChat(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	var opts []agent.Option
-	if acc != nil {
-		opts = append(opts, agent.WithBilling(acc))
-	}
+	opts := agentOptions(cfg, tools, acc)
 	svc := agent.New(reg, tools, opts...)
 	r := cliui.NewREPL(svc, cliui.Options{Model: m, SystemPrompt: cfg.Agent.SystemPrompt, MaxToolHops: cfg.Agent.MaxToolHops})
 	return r.Run(ctx)
@@ -234,10 +247,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	var opts []agent.Option
-	if acc != nil {
-		opts = append(opts, agent.WithBilling(acc))
-	}
+	opts := agentOptions(cfg, tools, acc)
 	svc := agent.New(reg, tools, opts...)
 	return cliui.RunOneShot(ctx, svc, m, cfg.Agent.SystemPrompt, *prompt, cfg.Agent.MaxToolHops, os.Stdout)
 }
@@ -261,10 +271,7 @@ func cmdServe(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	var opts []agent.Option
-	if acc != nil {
-		opts = append(opts, agent.WithBilling(acc))
-	}
+	opts := agentOptions(cfg, tools, acc)
 	svc := agent.New(reg, tools, opts...)
 	return httpapi.ListenAndServe(ctx, a, svc, cfg, acc)
 }

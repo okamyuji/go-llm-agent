@@ -49,12 +49,13 @@ func New(o Options) *Client {
 func (c *Client) Name() string { return "anthropic" }
 
 type msgPayload struct {
-	Model     string         `json:"model"`
-	MaxTokens int            `json:"max_tokens"`
-	System    string         `json:"system,omitempty"`
-	Messages  []msgPayloadIn `json:"messages"`
-	Stream    bool           `json:"stream,omitempty"`
-	Tools     []toolDecl     `json:"tools,omitempty"`
+	Model      string         `json:"model"`
+	MaxTokens  int            `json:"max_tokens"`
+	System     string         `json:"system,omitempty"`
+	Messages   []msgPayloadIn `json:"messages"`
+	Stream     bool           `json:"stream,omitempty"`
+	Tools      []toolDecl     `json:"tools,omitempty"`
+	ToolChoice any            `json:"tool_choice,omitempty"`
 }
 
 type msgPayloadIn struct {
@@ -193,5 +194,28 @@ func toPayload(req llm.ChatRequest, stream bool) msgPayload {
 			Name: t.Name, Description: t.Description, InputSchema: t.Schema,
 		})
 	}
+	if req.ToolChoice != nil {
+		p.ToolChoice = toolChoiceJSON(req.ToolChoice)
+	}
 	return p
+}
+
+// toolChoiceJSON ChatRequest.ToolChoice を Anthropic Messages API の値に変換する
+// Anthropic は {"type":"auto"} / {"type":"any"} / {"type":"tool","name":"..."} を使う
+// "none" は API 側に直接対応がないため tools を空にすべきだが、現状 ToolChoice はそのままで API
+// 側の挙動に委ねるため nil を返す
+func toolChoiceJSON(tc *llm.ToolChoice) any {
+	switch tc.Mode {
+	case "required", "any":
+		return map[string]any{"type": "any"}
+	case "none":
+		return nil
+	case "tool":
+		if tc.Name == "" {
+			return map[string]any{"type": "auto"}
+		}
+		return map[string]any{"type": "tool", "name": tc.Name}
+	default:
+		return map[string]any{"type": "auto"}
+	}
 }

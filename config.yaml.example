@@ -66,6 +66,15 @@ agent:
   budget:
     session_max_tokens: 200000
     daily_max_cost_jpy: 1000
+  # tool_choice の既定値。mode は auto / required / none / tool のいずれか。
+  # tool 指定時は name にツール名を入れる。
+  tool_choice:
+    mode: auto
+    name: ""
+  # ツール引数の JSON Schema 検証。max_retries 回まで自動修正試行する。
+  tool_validation:
+    enabled: true
+    max_retries: 2
 
 tools:
   fs:

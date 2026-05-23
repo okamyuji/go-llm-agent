@@ -7,8 +7,17 @@ type ChatRequest struct {
 	Model       string
 	Messages    []Message
 	Tools       []ToolSpec
+	ToolChoice  *ToolChoice
 	Temperature *float64
 	MaxTokens   *int
+}
+
+// ToolChoice ツール呼び出しの強制度を表す
+// Mode は "auto" / "required" / "none" / "tool" のいずれかを取り、
+// Mode=="tool" のとき Name に具体的なツール名を指定する
+type ToolChoice struct {
+	Mode string
+	Name string
 }
 
 // ChatResponse 同期応答

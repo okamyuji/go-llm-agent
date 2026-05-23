@@ -72,6 +72,16 @@ type gemPayload struct {
 	SystemInstruction *gemContent     `json:"systemInstruction,omitempty"`
 	Contents          []gemContent    `json:"contents"`
 	Tools             []gemToolsBlock `json:"tools,omitempty"`
+	ToolConfig        *gemToolConfig  `json:"toolConfig,omitempty"`
+}
+
+type gemToolConfig struct {
+	FunctionCallingConfig gemFCCConfig `json:"functionCallingConfig"`
+}
+
+type gemFCCConfig struct {
+	Mode                 string   `json:"mode"`
+	AllowedFunctionNames []string `json:"allowedFunctionNames,omitempty"`
 }
 
 type gemToolsBlock struct {
@@ -196,5 +206,26 @@ func toPayload(req llm.ChatRequest) gemPayload {
 		}
 		p.Tools = []gemToolsBlock{{FunctionDeclarations: decls}}
 	}
+	if tc := req.ToolChoice; tc != nil {
+		p.ToolConfig = toolChoiceConfig(tc)
+	}
 	return p
+}
+
+// toolChoiceConfig ChatRequest.ToolChoice を Gemini の functionCallingConfig に変換する
+// Gemini は AUTO / ANY / NONE と allowedFunctionNames を使う
+func toolChoiceConfig(tc *llm.ToolChoice) *gemToolConfig {
+	switch tc.Mode {
+	case "required", "any":
+		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "ANY"}}
+	case "none":
+		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "NONE"}}
+	case "tool":
+		if tc.Name == "" {
+			return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "AUTO"}}
+		}
+		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "ANY", AllowedFunctionNames: []string{tc.Name}}}
+	default:
+		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "AUTO"}}
+	}
 }

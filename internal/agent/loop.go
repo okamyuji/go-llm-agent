@@ -29,9 +29,18 @@ func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 	}
 	tools := s.specs()
 
+	validationRetries := 0
+	maxValidationRetries := max(in.ValidationMaxRetries, 0)
+	if maxValidationRetries == 0 {
+		maxValidationRetries = max(s.defaultMaxRetries, 0)
+	}
+	tc := in.ToolChoice
+	if tc == nil {
+		tc = s.defaultToolChoice
+	}
 	for hop := 0; hop <= in.MaxToolHops; hop++ {
 		llmCtx, llmSpan := obs.StartLLMSpan(ctx, prov.Name(), model)
-		stream, err := prov.Stream(llmCtx, llm.ChatRequest{Model: model, Messages: msgs, Tools: tools})
+		stream, err := prov.Stream(llmCtx, llm.ChatRequest{Model: model, Messages: msgs, Tools: tools, ToolChoice: tc})
 		if err != nil {
 			llmSpan.End()
 			out <- Event{Kind: EventError, Err: err}
@@ -111,6 +120,20 @@ func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 			err := fmt.Errorf("tool %q が見つかりません", pendingCall.Name)
 			out <- Event{Kind: EventError, Err: err}
 			return err
+		}
+		if s.validator != nil {
+			if vok, vmsg := s.validator.Validate(pendingCall.Name, pendingCall.Arguments); !vok {
+				if validationRetries < maxValidationRetries {
+					validationRetries++
+					tr := &ToolResult{CallID: pendingCall.ID, Name: pendingCall.Name, Content: "schema validation failed: " + vmsg + " — please correct the arguments to match the JSON schema and try again", IsError: true}
+					out <- Event{Kind: EventToolResult, ToolResult: tr}
+					msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: tr.Content, ToolCallID: pendingCall.ID, Name: pendingCall.Name})
+					continue
+				}
+				err := fmt.Errorf("schema validation max retries exceeded: %s", vmsg)
+				out <- Event{Kind: EventError, Err: err}
+				return err
+			}
 		}
 		execCtx := context.WithValue(ctx, tool.CorrelationKey(), pendingCall.ID)
 		execCtx, toolSpan := obs.StartToolSpan(execCtx, pendingCall.Name, pendingCall.ID)

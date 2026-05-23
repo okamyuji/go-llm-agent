@@ -70,10 +70,11 @@ type ollamaToolDecl struct {
 }
 
 type ollamaPayload struct {
-	Model    string           `json:"model"`
-	Messages []ollamaMsg      `json:"messages"`
-	Stream   bool             `json:"stream"`
-	Tools    []ollamaToolDecl `json:"tools,omitempty"`
+	Model      string           `json:"model"`
+	Messages   []ollamaMsg      `json:"messages"`
+	Stream     bool             `json:"stream"`
+	Tools      []ollamaToolDecl `json:"tools,omitempty"`
+	ToolChoice any              `json:"tool_choice,omitempty"`
 }
 
 type ollamaResp struct {
@@ -155,5 +156,29 @@ func toPayload(req llm.ChatRequest, stream bool) ollamaPayload {
 		td.Function.Parameters = t.Schema
 		p.Tools = append(p.Tools, td)
 	}
+	if req.ToolChoice != nil {
+		p.ToolChoice = toolChoiceJSON(req.ToolChoice)
+	}
 	return p
+}
+
+// toolChoiceJSON ChatRequest.ToolChoice を Ollama の OpenAI 互換値に変換する
+// Ollama 0.4 系では tool_choice をサポートする model がある
+func toolChoiceJSON(tc *llm.ToolChoice) any {
+	switch tc.Mode {
+	case "required", "any":
+		return "required"
+	case "none":
+		return "none"
+	case "tool":
+		if tc.Name == "" {
+			return "auto"
+		}
+		return map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": tc.Name},
+		}
+	default:
+		return "auto"
+	}
 }

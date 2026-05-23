@@ -62,10 +62,24 @@ type PricingConfig struct {
 
 // AgentConfig エージェントループ設定
 type AgentConfig struct {
-	MaxToolHops  int          `yaml:"max_tool_hops"`
-	EnabledTools []string     `yaml:"enabled_tools"`
-	SystemPrompt string       `yaml:"system_prompt"`
-	Budget       BudgetConfig `yaml:"budget"`
+	MaxToolHops    int                  `yaml:"max_tool_hops"`
+	EnabledTools   []string             `yaml:"enabled_tools"`
+	SystemPrompt   string               `yaml:"system_prompt"`
+	Budget         BudgetConfig         `yaml:"budget"`
+	ToolChoice     ToolChoiceConfig     `yaml:"tool_choice"`
+	ToolValidation ToolValidationConfig `yaml:"tool_validation"`
+}
+
+// ToolChoiceConfig tool_choice の設定
+type ToolChoiceConfig struct {
+	Mode string `yaml:"mode"`
+	Name string `yaml:"name"`
+}
+
+// ToolValidationConfig tool 引数 JSON Schema 検証の設定
+type ToolValidationConfig struct {
+	Enabled    bool `yaml:"enabled"`
+	MaxRetries int  `yaml:"max_retries"`
 }
 
 // BudgetConfig 予算上限の設定。0 は無制限として扱う

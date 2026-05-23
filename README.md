@@ -106,6 +106,24 @@ bash scripts/verify-hardening.sh
 | `agent tools`  | 有効な内蔵ツールを一覧表示します |
 | `agent config` | 設定ファイルの内容をダンプします |
 
+## ツール呼び出しの強制度とスキーマ検証
+
+`agent.tool_choice` で LLM のツール呼び出し挙動を制御できます。`mode` は `auto` / `required` / `none` / `tool` の 4 種類で、`tool` を指定したときは `name` に具体的なツール名を入れます。各プロバイダー (OpenAI / Anthropic / Gemini / Ollama) のネイティブな tool_choice 仕様にマッピングされます。
+
+`agent.tool_validation` で、ツール呼び出し時に LLM が生成する JSON 引数を `tool.Spec.Schema` に照らして検証できます。スキーマ違反のときは `max_retries` 回まで LLM に修正を促し、超過すると `EventError` で停止します。
+
+```yaml
+agent:
+  tool_choice:
+    mode: auto
+    name: ""
+  tool_validation:
+    enabled: true
+    max_retries: 2
+```
+
+E2E スクリプトは `tests/e2e/05-tool-choice-validation.sh` です。fixtures/tool_choice_exercise の OpenAI 互換 fake サーバが受信するペイロードに `tool_choice: required` が正しくマッピングされていることを確認します。設計の詳細は `docs/design/05-tool-choice-schema-validation.md` を参照してください。
+
 ## HTTP API の認証とレート制限
 
 `agent serve` の HTTP API は既定で無認証です。本番運用や 127.0.0.1 以外で待ち受ける場合は、Bearer Token 認証、レート制限、IP allowlist、CORS をまとめて有効化できます。

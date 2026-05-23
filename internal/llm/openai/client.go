@@ -47,10 +47,11 @@ func New(o Options) *Client {
 func (c *Client) Name() string { return "openai" }
 
 type chatPayload struct {
-	Model    string            `json:"model"`
-	Messages []chatPayloadMsg  `json:"messages"`
-	Stream   bool              `json:"stream"`
-	Tools    []chatPayloadTool `json:"tools,omitempty"`
+	Model      string            `json:"model"`
+	Messages   []chatPayloadMsg  `json:"messages"`
+	Stream     bool              `json:"stream"`
+	Tools      []chatPayloadTool `json:"tools,omitempty"`
+	ToolChoice any               `json:"tool_choice,omitempty"`
 }
 
 type chatPayloadMsg struct {
@@ -162,5 +163,29 @@ func toPayload(req llm.ChatRequest, stream bool) chatPayload {
 	for _, t := range req.Tools {
 		p.Tools = append(p.Tools, chatPayloadTool{Type: "function", Function: chatPayloadFunc{Name: t.Name, Arguments: t.Schema}})
 	}
+	if req.ToolChoice != nil {
+		p.ToolChoice = toolChoiceJSON(req.ToolChoice)
+	}
 	return p
+}
+
+// toolChoiceJSON ChatRequest.ToolChoice を OpenAI 仕様の値に変換する
+// auto/required/none は文字列、tool 指定はオブジェクト形式で返す
+func toolChoiceJSON(tc *llm.ToolChoice) any {
+	switch tc.Mode {
+	case "required", "any":
+		return "required"
+	case "none":
+		return "none"
+	case "tool":
+		if tc.Name == "" {
+			return "auto"
+		}
+		return map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": tc.Name},
+		}
+	default:
+		return "auto"
+	}
 }
