@@ -17,7 +17,7 @@ func buildMiddleware(cfg *config.Config) (*BearerAuth, *TokenBucketLimiter, *All
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
-		auth = NewBearerAuth(tokens, "eyJ")
+		auth = NewBearerAuth(tokens)
 	}
 	var limiter *TokenBucketLimiter
 	if cfg.Server.RateLimit.Enabled {

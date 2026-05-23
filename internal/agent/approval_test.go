@@ -21,7 +21,7 @@ func TestAutoApprover_ReturnsConfiguredDecision(t *testing.T) {
 
 func TestHTTPApprover_SubmitReleasesPendingRequest(t *testing.T) {
 	t.Parallel()
-	a := NewHTTPApprover(true)
+	a := NewHTTPApprover()
 	got := make(chan ApprovalDecision, 1)
 	errCh := make(chan error, 1)
 	go func() {
@@ -59,7 +59,7 @@ func TestHTTPApprover_SubmitReleasesPendingRequest(t *testing.T) {
 
 func TestHTTPApprover_TimeoutDefaultDeny(t *testing.T) {
 	t.Parallel()
-	a := NewHTTPApprover(true)
+	a := NewHTTPApprover()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	d, err := a.Request(ctx, ApprovalRequest{RunID: "r2", CallID: "c2", ToolName: "shell"})
@@ -71,24 +71,25 @@ func TestHTTPApprover_TimeoutDefaultDeny(t *testing.T) {
 	}
 }
 
-func TestHTTPApprover_TimeoutDefaultAllow(t *testing.T) {
+// TestHTTPApprover_TimeoutFailsClosed timeout 時は常に deny を返す fail-closed を確認する
+// 旧仕様の defaultDeny=false (timeout で Allowed=true) は fail-open のため廃止した
+func TestHTTPApprover_TimeoutFailsClosed(t *testing.T) {
 	t.Parallel()
-	a := NewHTTPApprover(false)
+	a := NewHTTPApprover()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	d, err := a.Request(ctx, ApprovalRequest{RunID: "r3", CallID: "c3"})
-	// default allow は意味的に「許可」なのでエラーは付けない (CodeRabbit 指摘 #17 反映)
-	if err != nil {
-		t.Fatalf("default allow timeout must not return error, got %v", err)
+	if !errors.Is(err, ErrApprovalTimeout) {
+		t.Fatalf("timeout は ErrApprovalTimeout, got %v", err)
 	}
-	if !d.Allowed {
-		t.Error("defaultDeny=false must return Allowed=true on timeout")
+	if d.Allowed {
+		t.Error("timeout 時は Allowed=false のはず")
 	}
 }
 
 func TestHTTPApprover_SubmitUnknownIsFalse(t *testing.T) {
 	t.Parallel()
-	a := NewHTTPApprover(true)
+	a := NewHTTPApprover()
 	if a.Submit(ApprovalDecision{RunID: "x", CallID: "y", Allowed: true}) {
 		t.Error("unknown RunID/CallID must return false")
 	}

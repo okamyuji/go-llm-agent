@@ -36,7 +36,7 @@ func mwGet(t *testing.T, h http.Handler, path string, headers map[string]string)
 
 func TestBearerAuth_AllowsKnownToken(t *testing.T) {
 	t.Parallel()
-	a := httpapi.NewBearerAuth(map[string]string{"abc": "local"}, "eyJ")
+	a := httpapi.NewBearerAuth(map[string]string{"abc": "local"})
 	res := mwGet(t, a.Handler(handlerOK(t)), "/v1/models", map[string]string{"Authorization": "Bearer abc"})
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
@@ -46,7 +46,7 @@ func TestBearerAuth_AllowsKnownToken(t *testing.T) {
 
 func TestBearerAuth_Rejects401WhenMissing(t *testing.T) {
 	t.Parallel()
-	a := httpapi.NewBearerAuth(map[string]string{"abc": "local"}, "eyJ")
+	a := httpapi.NewBearerAuth(map[string]string{"abc": "local"})
 	res := mwGet(t, a.Handler(handlerOK(t)), "/v1/models", nil)
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusUnauthorized {
@@ -56,7 +56,7 @@ func TestBearerAuth_Rejects401WhenMissing(t *testing.T) {
 
 func TestBearerAuth_Rejects401WhenInvalid(t *testing.T) {
 	t.Parallel()
-	a := httpapi.NewBearerAuth(map[string]string{"abc": "local"}, "eyJ")
+	a := httpapi.NewBearerAuth(map[string]string{"abc": "local"})
 	res := mwGet(t, a.Handler(handlerOK(t)), "/v1/models", map[string]string{"Authorization": "Bearer wrong"})
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusUnauthorized {
@@ -64,19 +64,21 @@ func TestBearerAuth_Rejects401WhenInvalid(t *testing.T) {
 	}
 }
 
-func TestBearerAuth_DeferJWTPrefixPasses(t *testing.T) {
+// TestBearerAuth_RejectsUnknownJWTShapedToken eyJ で始まる未登録トークンも 401 で弾く
+// 旧実装の DeferJWTPrefix は fail-open リスクのため削除した
+func TestBearerAuth_RejectsUnknownJWTShapedToken(t *testing.T) {
 	t.Parallel()
-	a := httpapi.NewBearerAuth(map[string]string{"abc": "local"}, "eyJ")
+	a := httpapi.NewBearerAuth(map[string]string{"abc": "local"})
 	res := mwGet(t, a.Handler(handlerOK(t)), "/v1/models", map[string]string{"Authorization": "Bearer eyJsomejwt"})
 	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("JWT-shaped token must pass-through, got %d", res.StatusCode)
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("eyJ で始まる未登録トークンは 401 のはず, got %d", res.StatusCode)
 	}
 }
 
 func TestBearerAuth_HealthzAlwaysOpen(t *testing.T) {
 	t.Parallel()
-	a := httpapi.NewBearerAuth(map[string]string{"abc": "local"}, "eyJ")
+	a := httpapi.NewBearerAuth(map[string]string{"abc": "local"})
 	res := mwGet(t, a.Handler(handlerOK(t)), "/healthz", nil)
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
@@ -86,7 +88,7 @@ func TestBearerAuth_HealthzAlwaysOpen(t *testing.T) {
 
 func TestBearerAuth_DisabledWhenEmpty(t *testing.T) {
 	t.Parallel()
-	a := httpapi.NewBearerAuth(nil, "eyJ")
+	a := httpapi.NewBearerAuth(nil)
 	res := mwGet(t, a.Handler(handlerOK(t)), "/v1/models", nil)
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -263,8 +264,12 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 		}
 	}
 	if len(cfg.Agent.Approval.RequiredTools) > 0 {
-		defaultDeny := cfg.Agent.Approval.DefaultDecision != "allow"
-		ap := agent.NewHTTPApprover(defaultDeny)
+		// 旧来の default_decision: allow は fail-open のため廃止した
+		// 設定が allow になっていても deny として扱い警告ログを出す
+		if cfg.Agent.Approval.DefaultDecision == "allow" {
+			slog.Warn("agent.approval.default_decision=allow は廃止されました timeout 時は常に deny として扱います")
+		}
+		ap := agent.NewHTTPApprover()
 		approvalRegistry = ap
 		timeout := time.Duration(cfg.Agent.Approval.TimeoutSeconds) * time.Second
 		if timeout <= 0 {

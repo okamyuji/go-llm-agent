@@ -35,6 +35,21 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 	if in.SystemPrompt != "" {
 		msgs = append([]llm.Message{{Role: llm.RoleSystem, Content: in.SystemPrompt}}, msgs...)
 	}
+	// 06 番設計書 入力スキャナを最初の LLM 呼び出し前にすべての user/system メッセージへ適用する
+	// 検出された場合は EventError で早期リターンする (fail-closed)
+	if s.scanner != nil {
+		for _, m := range msgs {
+			if m.Role != llm.RoleUser && m.Role != llm.RoleSystem {
+				continue
+			}
+			findings := s.scanner.Scan(m.Content)
+			if len(findings) > 0 {
+				err := fmt.Errorf("input scanner blocked role=%s pattern=%s", m.Role, findings[0].PatternID)
+				out <- Event{Kind: EventError, Err: err}
+				return err
+			}
+		}
+	}
 	tools := s.specs()
 
 	validationRetries := 0

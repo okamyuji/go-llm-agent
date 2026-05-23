@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"net"
 	"net/http"
 	"strings"
@@ -14,22 +15,26 @@ import (
 const healthPath = "/healthz"
 
 // BearerAuth Bearer Token 認証ミドルウェア
-// Tokens は token 値そのものをキーに ID を値として保持する
+// tokens マップは構築後に変更しない前提で、token 値をキーに ID を値として保持する
 type BearerAuth struct {
-	Tokens         map[string]string
-	DeferJWTPrefix string
+	tokens map[string]string
 }
 
 // NewBearerAuth secret_env 解決済みトークンマップから BearerAuth を構築する
-// deferJWTPrefix で始まる値は 15 番設計書の JWTVerifier に委譲する想定で素通しする
-func NewBearerAuth(tokens map[string]string, deferJWTPrefix string) *BearerAuth {
-	return &BearerAuth{Tokens: tokens, DeferJWTPrefix: deferJWTPrefix}
+// マップは内部にコピーして以後の外部書き換えから保護する
+func NewBearerAuth(tokens map[string]string) *BearerAuth {
+	cp := make(map[string]string, len(tokens))
+	for k, v := range tokens {
+		cp[k] = v
+	}
+	return &BearerAuth{tokens: cp}
 }
 
 // Handler 次の Handler を Bearer Auth で保護したラッパを返す
-// Tokens が空のとき認証は無効として扱う
+// tokens が空のとき認証は無効として扱う
+// 検証は crypto/subtle.ConstantTimeCompare で行いタイミングサイドチャネルを抑える
 func (a *BearerAuth) Handler(next http.Handler) http.Handler {
-	if a == nil || len(a.Tokens) == 0 {
+	if a == nil || len(a.tokens) == 0 {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,17 +49,26 @@ func (a *BearerAuth) Handler(next http.Handler) http.Handler {
 			return
 		}
 		value := strings.TrimPrefix(auth, prefix)
-		if a.DeferJWTPrefix != "" && strings.HasPrefix(value, a.DeferJWTPrefix) {
-			// 15 番の JWT 検証ミドルウェアに委譲するためここでは通過させる
-			next.ServeHTTP(w, r)
-			return
-		}
-		if _, ok := a.Tokens[value]; !ok {
+		if !a.lookup(value) {
 			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// lookup ConstantTimeCompare で全トークンを舐めて一致したかを返す
+// マップ直接ルックアップだとハッシュ比較のタイミングサイドチャネルが生じるため使わない
+func (a *BearerAuth) lookup(value string) bool {
+	got := []byte(value)
+	matched := 0
+	for stored := range a.tokens {
+		want := []byte(stored)
+		if subtle.ConstantTimeCompare(want, got) == 1 {
+			matched = 1
+		}
+	}
+	return matched == 1
 }
 
 // TokenBucketLimiter 全体またはトークン別の RPS 制限を提供する

@@ -147,6 +147,14 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 	var sr scanResult
 	select {
 	case <-ctx.Done():
+		// ctx キャンセル時は scanner goroutine がブロックしたままになる
+		// stdin を閉じて子プロセスを EOF 終了させ、Scan の戻りを促してから
+		// rch を回収することで goroutine leak を防ぐ
+		if c.in != nil {
+			_ = c.in.Close()
+			c.in = nil
+		}
+		<-rch
 		return nil, ctx.Err()
 	case sr = <-rch:
 	}

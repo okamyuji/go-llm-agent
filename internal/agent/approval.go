@@ -42,21 +42,21 @@ type approvalKey struct {
 
 // HTTPApprover HTTP 経由で外部システムからの承認を受け取る Approver
 // approvalKey をキーに channel を管理する
+// セキュリティ上 timeout 時は常に deny 扱いとして fail-closed で振る舞う
 type HTTPApprover struct {
-	mu          sync.Mutex
-	pending     map[approvalKey]chan ApprovalDecision
-	defaultDeny bool
+	mu      sync.Mutex
+	pending map[approvalKey]chan ApprovalDecision
 }
 
 // NewHTTPApprover HTTPApprover を構築する
-// defaultDeny=true のとき、サブミットされない CallID は最終的に拒否扱いになる
-func NewHTTPApprover(defaultDeny bool) *HTTPApprover {
-	return &HTTPApprover{pending: map[approvalKey]chan ApprovalDecision{}, defaultDeny: defaultDeny}
+// timeout 時は常に deny を返す fail-closed 設計
+// 旧 API シグネチャ NewHTTPApprover(defaultDeny bool) は fail-open 経路を生むため廃止した
+func NewHTTPApprover() *HTTPApprover {
+	return &HTTPApprover{pending: map[approvalKey]chan ApprovalDecision{}}
 }
 
 // Request 承認待ち channel を登録し ctx 監視で Decision を待つ
-// defaultDeny=false で timeout した場合は Allowed=true を返し、エラーは nil にする。
-// Decision と error の意味的不一致を避ける
+// timeout 時は Allowed=false の Decision と ErrApprovalTimeout を返す fail-closed 設計
 func (a *HTTPApprover) Request(ctx context.Context, r ApprovalRequest) (ApprovalDecision, error) {
 	k := approvalKey{RunID: r.RunID, CallID: r.CallID}
 	a.mu.Lock()
@@ -82,12 +82,7 @@ func (a *HTTPApprover) Request(ctx context.Context, r ApprovalRequest) (Approval
 		return d, nil
 	case <-ctx.Done():
 		cleanup()
-		if a.defaultDeny {
-			return ApprovalDecision{RunID: r.RunID, CallID: r.CallID, Allowed: false, Reason: "timeout default deny"}, ErrApprovalTimeout
-		}
-		// default allow は明示的な許可扱いとし、error は付けないことで呼び出し側の
-		// errors.Is(err, ErrApprovalTimeout) と Allowed 判定の意味的不一致を避ける
-		return ApprovalDecision{RunID: r.RunID, CallID: r.CallID, Allowed: true, Reason: "timeout default allow"}, nil
+		return ApprovalDecision{RunID: r.RunID, CallID: r.CallID, Allowed: false, Reason: "timeout default deny"}, ErrApprovalTimeout
 	}
 }
 

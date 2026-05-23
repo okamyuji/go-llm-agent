@@ -57,11 +57,16 @@ type sseChunk struct {
 	Choices []sseChoice `json:"choices"`
 }
 
+// maxChatBodyBytes /v1/chat/completions のリクエストボディ上限
+// 巨大ペイロードによるメモリ枯渇 DoS を防ぐため http.MaxBytesReader でクランプする
+const maxChatBodyBytes = 4 << 20
+
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxChatBodyBytes)
 	var req chatReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

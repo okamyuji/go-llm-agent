@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	ap := agent.NewHTTPApprover(true)
+	ap := agent.NewHTTPApprover()
 	resultCh := make(chan agent.ApprovalDecision, 1)
 
 	go func() {

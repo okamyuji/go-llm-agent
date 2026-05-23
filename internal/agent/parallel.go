@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -94,8 +95,9 @@ func (s *service) executeOne(ctx context.Context, sessionID string, call llm.Too
 		if apCancel != nil {
 			apCancel()
 		}
-		if aerr != nil && d.RunID == "" {
-			// Approver 自体が致命的に失敗した場合 (timeout 以外) は拒否扱い
+		// loop.go の runReAct と同じ判定 (errors.Is(aerr, ErrApprovalTimeout)) を使う
+		// timeout 以外のエラーは Approver 自体の致命的失敗として拒否扱い
+		if aerr != nil && !errors.Is(aerr, ErrApprovalTimeout) {
 			return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: "approver failure: " + aerr.Error(), IsError: true}
 		}
 		if !d.Allowed {
