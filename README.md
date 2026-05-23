@@ -132,6 +132,20 @@ metrics:
 
 E2E スクリプトは `tests/e2e/07-eval-suite.sh` です。fixtures/eval_exercise が LoadSuite / Score / WriteReport の動作を検証します。設計の詳細は `docs/design/07-eval-framework.md` を参照してください。
 
+## 並列ツール実行
+
+`service.ExecuteToolsParallel` で複数 ToolCall を semaphore 付きで並列実行できます。`require_approval` 対象のツールが 1 件でも含まれる場合は自動的に直列化 (バリア方式) し、人間オペレータの状況把握を優先します。`fail_fast=true` のときは最初の失敗で他の実行をキャンセルします。
+
+```yaml
+agent:
+  parallel_tools:
+    enabled: true
+    max_concurrency: 4
+    fail_fast: false
+```
+
+E2E スクリプトは `tests/e2e/10-parallel-tools.sh` で、`go test -race` 付きで `TestExecuteToolsParallel_*` を実行し、ゴルーチン競合や順序ずれが無いことを観測します。設計の詳細は `docs/design/10-parallel-tool-calls.md` を参照してください。
+
 ## 実行戦略の切替
 
 `agent.strategy` で実行戦略を選べます。`react` (既定) は従来通り、`planner_executor` はシステムプロンプトに計画指示を注入して executor_model でツール呼び出しを行い、`reflection` は self-check ヒントを差し込みます。

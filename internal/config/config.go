@@ -105,6 +105,15 @@ type AgentConfig struct {
 	Strategy        string                `yaml:"strategy"`
 	PlannerExecutor PlannerExecutorConfig `yaml:"planner_executor"`
 	Reflection      ReflectionConfig      `yaml:"reflection"`
+	ParallelTools   ParallelToolsConfig   `yaml:"parallel_tools"`
+}
+
+// ParallelToolsConfig 並列ツール実行の設定
+// require_approval ツールが含まれる場合はバリア方式で自動的に直列化する
+type ParallelToolsConfig struct {
+	Enabled        bool `yaml:"enabled"`
+	MaxConcurrency int  `yaml:"max_concurrency"`
+	FailFast       bool `yaml:"fail_fast"`
 }
 
 // PlannerExecutorConfig Planner-Executor 戦略の設定

@@ -91,6 +91,11 @@ agent:
     max_iterations: 3
     trigger_consecutive_failures: 2
     trigger_hop_budget: 6
+  # 並列ツール実行。require_approval ツールが含まれる場合は自動的に直列化される。
+  parallel_tools:
+    enabled: false
+    max_concurrency: 4
+    fail_fast: false
 
 tools:
   fs:

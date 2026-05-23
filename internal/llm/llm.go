@@ -28,9 +28,12 @@ type ChatResponse struct {
 }
 
 // StreamEvent ストリーム 1 イベント
+// ToolCalls は並列ツール呼び出し用の複数 ToolCall を表現する。
+// ToolCall は後方互換のための単数フィールドで、新規 provider は ToolCalls を使う
 type StreamEvent struct {
 	DeltaText string
 	ToolCall  *ToolCall
+	ToolCalls []ToolCall
 	Usage     *Usage
 	Finish    string
 	Err       error
