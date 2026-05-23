@@ -34,7 +34,7 @@ import (
 
 var version = "dev"
 
-// shutdownTelemetry main から呼ばれる shutdown フック。Init 失敗時は noop
+// shutdownTelemetry OTel shutdown フック。main から呼ぶ。Init 失敗時 noop
 var shutdownTelemetry obs.Shutdown = func(context.Context) error { return nil }
 
 func main() {
@@ -114,7 +114,7 @@ func cmdEval(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts, optsErr := agentOptions(cfg, tools, acc)
+	opts, _, optsErr := agentOptions(cfg, tools, acc)
 	if optsErr != nil {
 		return optsErr
 	}
@@ -224,9 +224,11 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 }
 
 // agentOptions config に基づき agent.Service のオプション集合を組み立てる
-// safety / billing / strategy などの構築でエラーになった場合は呼び出し側に伝播する
-func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulator) ([]agent.Option, error) {
+// safety / billing / strategy などの構築でエラーになった場合、呼び出し側に伝播する
+// HTTPApprover を生成した場合、第 2 戻り値で返す。chat/run サブコマンドでは捨ててよい
+func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulator) ([]agent.Option, *agent.HTTPApprover, error) {
 	var opts []agent.Option
+	var approver *agent.HTTPApprover
 	if acc != nil {
 		opts = append(opts, agent.WithBilling(acc))
 	}
@@ -239,14 +241,14 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 	}
 	sc, err := buildScanner(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("build safety scanner: %w", err)
+		return nil, nil, fmt.Errorf("build safety scanner: %w", err)
 	}
 	if sc != nil {
 		opts = append(opts, agent.WithScanner(sc))
 	}
 	rd, err := buildRedactor(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("build safety redactor: %w", err)
+		return nil, nil, fmt.Errorf("build safety redactor: %w", err)
 	}
 	if rd != nil {
 		opts = append(opts, agent.WithRedactor(rd))
@@ -269,19 +271,15 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 		if cfg.Agent.Approval.DefaultDecision == "allow" {
 			slog.Warn("agent.approval.default_decision=allow は廃止されました timeout 時は常に deny として扱います")
 		}
-		ap := agent.NewHTTPApprover()
-		approvalRegistry = ap
+		approver = agent.NewHTTPApprover()
 		timeout := time.Duration(cfg.Agent.Approval.TimeoutSeconds) * time.Second
 		if timeout <= 0 {
 			timeout = 30 * time.Second
 		}
-		opts = append(opts, agent.WithApprover(ap, cfg.Agent.Approval.RequiredTools, timeout))
+		opts = append(opts, agent.WithApprover(approver, cfg.Agent.Approval.RequiredTools, timeout))
 	}
-	return opts, nil
+	return opts, approver, nil
 }
-
-// approvalRegistry HTTP Approver の参照を保持し、serve サブコマンドで /v1/runs/<id>/approve に共有する
-var approvalRegistry *agent.HTTPApprover
 
 // buildScanner cfg.Safety.InputScanner から safety.Scanner を構築する
 func buildScanner(cfg *config.Config) (safety.Scanner, error) {
@@ -318,7 +316,7 @@ func buildRedactor(cfg *config.Config) (safety.Redactor, error) {
 }
 
 // wrapWithRetry RetryConfig を retry.Config に変換して Provider をラップする
-// MaxAttempts <= 1 のとき WrapProvider は inner をそのまま返すため互換性が保たれる
+// MaxAttempts <= 1 のとき WrapProvider が inner をそのまま返すため互換性が保たれる
 func wrapWithRetry(name string, p llm.Provider, rc config.RetryConfig) llm.Provider {
 	return retry.WrapProvider(name, p, retry.Config{
 		MaxAttempts:    rc.MaxAttempts,
@@ -374,7 +372,7 @@ func cmdChat(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts, optsErr := agentOptions(cfg, tools, acc)
+	opts, _, optsErr := agentOptions(cfg, tools, acc)
 	if optsErr != nil {
 		return optsErr
 	}
@@ -403,7 +401,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts, optsErr := agentOptions(cfg, tools, acc)
+	opts, _, optsErr := agentOptions(cfg, tools, acc)
 	if optsErr != nil {
 		return optsErr
 	}
@@ -430,12 +428,14 @@ func cmdServe(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts, optsErr := agentOptions(cfg, tools, acc)
+	opts, approver, optsErr := agentOptions(cfg, tools, acc)
 	if optsErr != nil {
 		return optsErr
 	}
 	svc := agent.New(reg, tools, opts...)
-	return httpapi.ListenAndServe(ctx, a, svc, cfg, acc, approvalRegistry)
+	// serve のみ HTTPApprover を /v1/runs/<id>/approve に渡す
+	// chat/run/eval は approver を保持せず必要に応じて捨てる
+	return httpapi.ListenAndServe(ctx, a, svc, cfg, acc, approver)
 }
 
 func cmdTools(args []string) error {

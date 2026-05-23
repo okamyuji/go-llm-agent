@@ -19,6 +19,7 @@ func (f *fakeProvider) Stream(_ context.Context, _ llm.ChatRequest) (llm.ChatStr
 }
 
 func TestRegistry_Resolve(t *testing.T) {
+	t.Parallel()
 	r := llm.NewRegistry(map[string]llm.Provider{
 		"openai":    &fakeProvider{name: "openai"},
 		"anthropic": &fakeProvider{name: "anthropic"},
@@ -37,6 +38,7 @@ func TestRegistry_Resolve(t *testing.T) {
 }
 
 func TestRegistry_ResolveUnknown(t *testing.T) {
+	t.Parallel()
 	r := llm.NewRegistry(map[string]llm.Provider{})
 	if _, _, err := r.Resolve("foo/bar"); err == nil {
 		t.Fatal("unknown provider err")
@@ -47,6 +49,7 @@ func TestRegistry_ResolveUnknown(t *testing.T) {
 }
 
 func TestProviderError_String(t *testing.T) {
+	t.Parallel()
 	e := &llm.ProviderError{Provider: "openai", StatusCode: 500, Retryable: true, Underlying: errors.New("x")}
 	if e.Error() == "" {
 		t.Fatal("error string")
@@ -57,6 +60,7 @@ func TestProviderError_String(t *testing.T) {
 }
 
 func TestRegistry_AllowModels_AcceptsListed(t *testing.T) {
+	t.Parallel()
 	r := llm.NewRegistryWithAllowlist(
 		map[string]llm.Provider{"openai": &fakeProvider{name: "openai"}},
 		map[string][]string{"openai": {"gpt-4.1-mini", "gpt-4o-mini"}},
@@ -67,6 +71,7 @@ func TestRegistry_AllowModels_AcceptsListed(t *testing.T) {
 }
 
 func TestRegistry_AllowModels_RejectsUnlisted(t *testing.T) {
+	t.Parallel()
 	r := llm.NewRegistryWithAllowlist(
 		map[string]llm.Provider{"openai": &fakeProvider{name: "openai"}},
 		map[string][]string{"openai": {"gpt-4.1-mini"}},
@@ -78,6 +83,7 @@ func TestRegistry_AllowModels_RejectsUnlisted(t *testing.T) {
 }
 
 func TestRegistry_AllowModels_EmptyMeansAll(t *testing.T) {
+	t.Parallel()
 	r := llm.NewRegistryWithAllowlist(
 		map[string]llm.Provider{"openai": &fakeProvider{name: "openai"}},
 		map[string][]string{"openai": {}},
@@ -88,6 +94,7 @@ func TestRegistry_AllowModels_EmptyMeansAll(t *testing.T) {
 }
 
 func TestRegistry_ResolveWithFallback_ReturnsBoth(t *testing.T) {
+	t.Parallel()
 	r := llm.NewRegistryWithFallback(
 		map[string]llm.Provider{
 			"openai":    &fakeProvider{name: "openai"},
@@ -109,6 +116,7 @@ func TestRegistry_ResolveWithFallback_ReturnsBoth(t *testing.T) {
 }
 
 func TestRegistry_ResolveWithFallback_NoFallbackReturnsNil(t *testing.T) {
+	t.Parallel()
 	r := llm.NewRegistryWithFallback(
 		map[string]llm.Provider{"openai": &fakeProvider{name: "openai"}},
 		nil,
@@ -124,6 +132,7 @@ func TestRegistry_ResolveWithFallback_NoFallbackReturnsNil(t *testing.T) {
 }
 
 func TestRegistry_ResolveWithFallback_InvalidModelString(t *testing.T) {
+	t.Parallel()
 	r := llm.NewRegistryWithFallback(map[string]llm.Provider{}, nil, nil)
 	if _, _, _, _, err := r.ResolveWithFallback("noslash"); err == nil {
 		t.Fatal("invalid model must error")
@@ -131,6 +140,7 @@ func TestRegistry_ResolveWithFallback_InvalidModelString(t *testing.T) {
 }
 
 func TestRegistry_ResolveWithFallback_UnknownPrimary(t *testing.T) {
+	t.Parallel()
 	r := llm.NewRegistryWithFallback(map[string]llm.Provider{}, nil, nil)
 	if _, _, _, _, err := r.ResolveWithFallback("missing/gpt"); err == nil {
 		t.Fatal("unknown primary must error")
@@ -138,6 +148,7 @@ func TestRegistry_ResolveWithFallback_UnknownPrimary(t *testing.T) {
 }
 
 func TestRegistry_ResolveWithFallback_AllowModelsRejection(t *testing.T) {
+	t.Parallel()
 	r := llm.NewRegistryWithFallback(
 		map[string]llm.Provider{"openai": &fakeProvider{name: "openai"}},
 		map[string][]string{"openai": {"only-this"}},
@@ -149,6 +160,7 @@ func TestRegistry_ResolveWithFallback_AllowModelsRejection(t *testing.T) {
 }
 
 func TestRegistry_ResolveWithFallback_FallbackNameUnknownReturnsNil(t *testing.T) {
+	t.Parallel()
 	r := llm.NewRegistryWithFallback(
 		map[string]llm.Provider{"openai": &fakeProvider{name: "openai"}},
 		nil,

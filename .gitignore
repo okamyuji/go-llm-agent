@@ -17,3 +17,9 @@
 /docs/plans/
 /docs/specs/
 /docs/usage.md
+
+# 15 番設計書 mTLS 用の証明書ファイルが誤コミットされないよう除外する
+*.pem
+*.crt
+*.key
+/certs/

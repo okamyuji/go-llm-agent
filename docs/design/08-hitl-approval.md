@@ -28,16 +28,18 @@ Ch11「Human-in-the-Loop Review」と Ch13「Escalation Design and Oversight」�
 ### 5.2 設定スキーマ
 
 ```yaml
-tools:
-  fs:
-    require_approval: write
-  shell:
-    require_approval: always
 agent:
   approval:
+    # 承認必須にしたいツール名を列挙する (ツール側に require_approval フラグを持たせない設計)
+    required_tools:
+      - shell
+      - fs_write
     timeout_seconds: 60
+    # default_decision は "deny" のみサポート (allow は fail-open のため廃止)
     default_decision: deny
 ```
+
+旧版の設計案では `tools.fs.require_approval: write` のようにツール定義側にフラグを持たせる案がありましたが、設定の集約性とランタイム判定の簡潔さを優先し、`agent.approval.required_tools` リスト形式に統一しています。
 
 ### 5.3 公開インターフェース
 

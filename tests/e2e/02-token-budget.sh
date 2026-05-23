@@ -61,12 +61,20 @@ export AGENT_DUMMY_KEY=dummy
 printf "${YELLOW}>>> starting agent serve in background${NC}\n"
 "$WORK/agent" serve --config "$WORK/cfg.yaml" > "$WORK/serve.log" 2>&1 &
 AGENT_PID=$!
+# /healthz が 200 で応答するまで最大 4 秒待機する
+SERVE_READY=0
 for _ in $(seq 1 20); do
   sleep 0.2
   if curl -sf http://127.0.0.1:14002/healthz > /dev/null; then
+    SERVE_READY=1
     break
   fi
 done
+if [[ "$SERVE_READY" -ne 1 ]]; then
+  printf "${RED}FAIL: agent serve did not become healthy within 4s${NC}\n"
+  cat "$WORK/serve.log"
+  exit 1
+fi
 
 printf "${YELLOW}>>> GET /v1/usage?session=missing (no data yet)${NC}\n"
 RESP=$(curl -sf http://127.0.0.1:14002/v1/usage?session=missing)
@@ -76,8 +84,9 @@ if ! echo "$RESP" | grep -q '"scope":"session"'; then
   exit 1
 fi
 
-printf "${YELLOW}>>> GET /v1/usage?date=2026-05-23${NC}\n"
-RESP=$(curl -sf "http://127.0.0.1:14002/v1/usage?date=2026-05-23")
+TODAY=$(date -u +%Y-%m-%d)
+printf "${YELLOW}>>> GET /v1/usage?date=%s${NC}\n" "$TODAY"
+RESP=$(curl -sf "http://127.0.0.1:14002/v1/usage?date=${TODAY}")
 echo "$RESP"
 if ! echo "$RESP" | grep -q '"scope":"date"'; then
   printf "${RED}FAIL: date scope not present in response${NC}\n"

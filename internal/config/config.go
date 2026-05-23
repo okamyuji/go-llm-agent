@@ -123,7 +123,7 @@ type AgentConfig struct {
 }
 
 // ParallelToolsConfig 並列ツール実行の設定
-// require_approval ツールが含まれる場合はバリア方式で自動的に直列化する
+// require_approval ツールが含まれる場合、バリア方式で自動的に直列化する
 type ParallelToolsConfig struct {
 	Enabled        bool `yaml:"enabled"`
 	MaxConcurrency int  `yaml:"max_concurrency"`
@@ -145,8 +145,8 @@ type ReflectionConfig struct {
 }
 
 // ApprovalConfig HITL ツール承認の設定
-// default_decision は "deny" または "allow"。
-// required_tools は "shell" や "fs_write" など承認必須のツール名一覧
+// default_decision: "deny" を指定する (allow は廃止)
+// required_tools: "shell" や "fs_write" など承認必須のツール名一覧
 type ApprovalConfig struct {
 	RequiredTools   []string `yaml:"required_tools"`
 	TimeoutSeconds  int      `yaml:"timeout_seconds"`
@@ -165,7 +165,7 @@ type ToolValidationConfig struct {
 	MaxRetries int  `yaml:"max_retries"`
 }
 
-// BudgetConfig 予算上限の設定。0 は無制限として扱う
+// BudgetConfig 予算上限の設定。0 を指定すると無制限として扱う
 type BudgetConfig struct {
 	SessionMaxTokens int     `yaml:"session_max_tokens"`
 	DailyMaxCostJPY  float64 `yaml:"daily_max_cost_jpy"`

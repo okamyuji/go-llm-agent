@@ -168,7 +168,12 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 					msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: tr.Content, ToolCallID: pendingCall.ID, Name: pendingCall.Name})
 					continue
 				}
-				err := fmt.Errorf("schema validation max retries exceeded: %s", vmsg)
+				var err error
+				if maxValidationRetries == 0 {
+					err = fmt.Errorf("schema validation failed (retries disabled): %s", vmsg)
+				} else {
+					err = fmt.Errorf("schema validation max retries (%d) exceeded: %s", maxValidationRetries, vmsg)
+				}
 				out <- Event{Kind: EventError, Err: err}
 				return err
 			}

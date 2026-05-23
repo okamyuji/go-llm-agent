@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/okamyuji/go-llm-agent/internal/memory"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
@@ -42,14 +43,5 @@ func main() {
 		fmt.Fprintln(os.Stderr, "search fail:", r.Content)
 		os.Exit(5)
 	}
-	fmt.Printf("search_top=%t\n", contains(r.Content, "OTel"))
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+	fmt.Printf("search_top=%t\n", strings.Contains(r.Content, "OTel"))
 }

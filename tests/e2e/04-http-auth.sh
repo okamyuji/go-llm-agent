@@ -62,12 +62,19 @@ export AGENT_LOCAL_TOKEN=local-token-secret-1234
 printf "${YELLOW}>>> starting agent serve${NC}\n"
 "$WORK/agent" serve --config "$WORK/cfg.yaml" > "$WORK/serve.log" 2>&1 &
 AGENT_PID=$!
+SERVE_READY=0
 for _ in $(seq 1 20); do
   sleep 0.2
   if curl -sf http://127.0.0.1:14004/healthz > /dev/null; then
+    SERVE_READY=1
     break
   fi
 done
+if [[ "$SERVE_READY" -ne 1 ]]; then
+  printf "${RED}FAIL: agent serve did not become healthy within 4s${NC}\n"
+  cat "$WORK/serve.log"
+  exit 1
+fi
 
 printf "${YELLOW}>>> /healthz should be open without auth${NC}\n"
 HTTP=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:14004/healthz)

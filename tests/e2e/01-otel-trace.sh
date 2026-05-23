@@ -14,14 +14,28 @@ RED='\033[31m'
 NC='\033[0m'
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+COLLECTOR_PID=""
+# 異常終了時にもバックグラウンドコレクターを必ず回収する
+cleanup() {
+  if [[ -n "$COLLECTOR_PID" ]]; then
+    kill "$COLLECTOR_PID" 2>/dev/null || true
+  fi
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
 
 # 1. fake collector を 4318 にバインドして起動する
 printf "${YELLOW}>>> starting fake OTLP collector on 127.0.0.1:4318${NC}\n"
 go build -o "$WORK/collector" ./tests/e2e/fixtures/otel_collector
 "$WORK/collector" -addr 127.0.0.1:4318 -duration 6s > "$WORK/collector.log" 2>&1 &
 COLLECTOR_PID=$!
-sleep 1
+# 固定 sleep でなく TCP バインドを実待ちすることで CI 負荷でも flaky を避ける
+for _ in $(seq 1 50); do
+  if (echo > /dev/tcp/127.0.0.1/4318) 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
 
 # 2. agent をビルドする
 printf "${YELLOW}>>> building agent binary${NC}\n"
@@ -70,8 +84,8 @@ observability:
     service_name: go-llm-agent-e2e
     metrics_interval_seconds: 1
 EOF
+# BSD/GNU sed 双方互換のため -i.bak を使う。.bak ファイルは trap で $WORK ごと削除される
 sed -i.bak "s|SESSIONS_DIR_PLACEHOLDER|$WORK/sessions|" "$WORK/cfg.yaml"
-rm -f "$WORK/cfg.yaml.bak"
 export AGENT_DUMMY_KEY=dummy
 
 # 4. agent run を実行し、LLM 呼び出し失敗による非ゼロ終了を許容する

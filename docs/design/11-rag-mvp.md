@@ -23,23 +23,25 @@ Ch6「Foundational Approaches to Memory」「Note-Taking」「Retrieval-Augmente
 
 ### 5.1 アーキテクチャ概要
 
-`internal/memory` パッケージを新設し、`Summarizer`、`NoteStore`、`Retriever` の 3 抽象を定義します。Summarizer は LLM を使い、NoteStore は SQLite + FTS5 で全文検索を提供します。Retriever は近似類似度を Bag-of-Words + cosine で計算します。
+`internal/memory` パッケージを新設し、`Summarizer`、`NoteStore`、`Retriever` の 3 抽象を定義します。Summarizer は LLM を使い、NoteStore は MVP として JSONL ファイル (`internal/memory.FileNoteStore`) を用いた追記型ストアで全文検索を提供します。Retriever は近似類似度を Bag-of-Words + 重み付きスコア (title=3, tags=2, body=1) で計算します。将来フェーズで SQLite + FTS5 やベクター DB に差し替え可能なよう、`NoteStore` を interface として切り出しておきます。
 
 ### 5.2 設定スキーマ
 
 ```yaml
+storage:
+  # MVP では JSONL 追記ファイルを使う
+  notes_path: ~/.local/state/go-llm-agent/notes.jsonl
 memory:
   summary:
     enabled: true
     trigger_tokens: 4000
     target_tokens: 500
     model: openai/gpt-4o-mini
-  notes:
-    store: sqlite
-    path: ~/.local/state/go-llm-agent/notes.db
   retrieval:
     top_k: 5
 ```
+
+MVP の `storage.notes_path` 未指定時は `storage.sessions_dir/notes.jsonl` へフォールバックします。SQLite + FTS5 への切り替えは将来フェーズで `memory.notes.store: sqlite` のような設定を追加して実装します。
 
 ### 5.3 公開インターフェース
 
@@ -75,7 +77,7 @@ type Retriever interface {
 | # | フェーズ | 作業 |
 | --- | --- | --- |
 | 11.1 | RED | NoteStore Add と Search のテスト |
-| 11.2 | GREEN | SQLite FTS5 で実装 |
+| 11.2 | GREEN | MVP として JSONL ベースの FileNoteStore を実装 (SQLite + FTS5 は将来フェーズ) |
 | 11.3 | RED | Summarizer の fake LLM テスト |
 | 11.4 | GREEN | summarizer.go を実装 |
 | 11.5 | RED | Retriever の BM25 ランキングテスト |
@@ -88,8 +90,8 @@ type Retriever interface {
 
 ### 7.1 ユニット
 
-- FTS5 が日本語の bigram tokenizer で検索可能であること。
-- Retriever の top_k がランキング順に返ること。
+- JSONL FileNoteStore が複数の Add でレコードを追記すること。
+- Retriever の top_k がスコア順に返ること。
 
 ### 7.2 統合
 
@@ -97,16 +99,17 @@ type Retriever interface {
 
 ### 7.3 E2E
 
-`tests/e2e/11-rag-mvp.sh` で `note_add` と `note_search` の呼び出しを CLI 経由で実行し、SQLite に保存されたことを `sqlite3 :path: "SELECT count(*) FROM notes"` で確認します。
+`tests/e2e/11-rag-mvp.sh` で `note_add` と `note_search` の呼び出しを fixture バイナリ経由で実行し、JSONL ファイルに追記されたレコードを `grep` で確認します。SQLite + FTS5 を導入した将来フェーズでは `sqlite3 :path: "SELECT count(*) FROM notes"` 形式の検証に切り替える想定です。
 
 ## 8. ロールアウト
 
-SQLite を新規依存にするため `modernc.org/sqlite` を採用します。`memory.summary.enabled=false` の場合は要約なしで現状互換です。
+MVP は JSONL ベースのため新規依存を追加しません。将来 SQLite に切り替える際は `modernc.org/sqlite` の採用を想定しています。`memory.summary.enabled=false` の場合は要約なしで現状互換です。
 
 ## 9. リスクと対策
 
-- SQLite ファイルの権限を 600 にし、誤って公開しないようにします。
+- JSONL ファイルの権限を 0600、親ディレクトリを 0700 にして誤って公開しないようにします。SQLite に切り替える将来フェーズでも同じ権限制御を継承します。
 - Summarizer の余計な LLM 呼び出しでコストが増えるため、trigger_tokens に達したときだけ実行します。
+- JSONL の線形スキャンは大規模運用には不向きです。本番運用フェーズではインデックス付きストアへの切り替えを優先課題とします。
 
 ## 10. 完了基準
 

@@ -101,7 +101,7 @@ func RegisterMCPServers(ctx context.Context, cfg []ServerConfig, reg tool.Regist
 
 ### 7.3 E2E
 
-`tests/e2e/12-mcp-discovery.sh` でリポジトリ内の `tests/e2e/fixtures/mcp_echo_server.go` をビルドして stdio で起動し、agent からツール呼び出し可能なことを assert します。
+`tests/e2e/12-mcp-discovery.sh` でリポジトリ内の `tests/e2e/fixtures/mcp_echo_server/` (main.go 配下) をビルドして stdio で起動し、内部ユニットテストで tools/list と tools/call を検証します。`agent` バイナリ経由の統合検証は将来フェーズで追加予定です。
 
 ## 8. ロールアウト
 

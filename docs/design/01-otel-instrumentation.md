@@ -40,7 +40,11 @@ observability:
   otel:
     enabled: false
     exporter: otlp_http
-    endpoint: http://127.0.0.1:4318
+    # OTLP HTTP exporter は WithEndpoint が host:port のみを期待するため
+    # 設定は scheme なしの "127.0.0.1:4318" 形式で記述します
+    # config loader 側で受け取った値の "http://" または "https://" プレフィックスは
+    # 自動で除去するため、両方の書式で動作します
+    endpoint: 127.0.0.1:4318
     insecure: true
     sample_ratio: 1.0
     service_name: go-llm-agent

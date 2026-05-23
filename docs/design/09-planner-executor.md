@@ -23,7 +23,7 @@ Ch5「Planner-Executor Agents」「Reflection Agents」を参照します。書�
 
 ### 5.1 アーキテクチャ概要
 
-`internal/agent/strategy` パッケージを新設し、`Strategy` インターフェースで Run を共通化します。既存の loop.go を `strategy/react.go` にリネームします。Service は Strategy を受け取り Run に委譲します。
+MVP 実装では `internal/agent/strategy.go` を 1 ファイルにまとめ、同一パッケージ内で `Strategy` インターフェースと 3 戦略 (reactStrategy / plannerExecutorStrategy / reflectionStrategy) を定義します。`Strategy.run` は内部メソッドとして `*service` を受け取り、loop.go の `runReAct` に委譲します。Service は Strategy を受け取り Run に委譲します。サブパッケージ化は本実装の成熟後に検討します。
 
 ### 5.2 設定スキーマ
 
@@ -71,8 +71,8 @@ func New(cfg config.AgentConfig, reg llm.Registry, tools tool.Registry) (Strateg
 | --- | --- | --- |
 | 9.1 | RED | Strategy インターフェースとファクトリの単体テスト |
 | 9.2 | GREEN | strategy パッケージを骨組みごと実装 |
-| 9.3 | RED | `internal/agent/loop_test.go` を `internal/agent/strategy/react_test.go` に移植する。package 宣言を `package strategy_test` に変更し、importer の参照を `agent.New` から `strategy.New` に置き換える。元の `loop_test.go` は内容ごと削除する |
-| 9.4 | GREEN | react.go を実装 |
+| 9.3 | RED | `internal/agent/loop_test.go` の ReAct シナリオを `internal/agent/strategy_test.go` 側でカバーする (MVP では同一パッケージのため import は変更不要)。サブパッケージ化を行う将来フェーズで初めてファイル移送を検討する |
+| 9.4 | GREEN | strategy.go の reactStrategy を実装 |
 | 9.5 | RED | PlannerExecutor の計画 JSON パーステスト |
 | 9.6 | GREEN | planner_executor.go を実装 |
 | 9.7 | RED | Reflection の self_check トリガーテスト |

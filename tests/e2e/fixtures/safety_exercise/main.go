@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/okamyuji/go-llm-agent/internal/safety"
 )
@@ -37,18 +38,9 @@ func main() {
 		os.Exit(3)
 	}
 	redacted := rd.Redact("the key is sk-ABCDEFGHIJKLMNOP1234 do not share")
-	if !contains(redacted, "[REDACTED:OPENAI]") {
+	if !strings.Contains(redacted, "[REDACTED:OPENAI]") {
 		fmt.Fprintln(os.Stderr, "redactor did not mask key:", redacted)
 		os.Exit(4)
 	}
 	fmt.Printf("redacted=%q\n", redacted)
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
