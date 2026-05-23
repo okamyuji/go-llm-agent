@@ -139,6 +139,33 @@ func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 				return err
 			}
 		}
+		if s.approver != nil && s.approvalRequired[pendingCall.Name] {
+			runID := in.SessionID
+			if runID == "" {
+				runID = "default"
+			}
+			apCtx := ctx
+			var apCancel context.CancelFunc
+			if s.approvalTimeout > 0 {
+				apCtx, apCancel = context.WithTimeout(ctx, s.approvalTimeout)
+			}
+			d, aerr := s.approver.Request(apCtx, ApprovalRequest{
+				RunID: runID, CallID: pendingCall.ID, ToolName: pendingCall.Name, Arguments: pendingCall.Arguments,
+			})
+			if apCancel != nil {
+				apCancel()
+			}
+			if aerr != nil && !errors.Is(aerr, ErrApprovalTimeout) {
+				out <- Event{Kind: EventError, Err: aerr}
+				return aerr
+			}
+			if !d.Allowed {
+				tr := &ToolResult{CallID: pendingCall.ID, Name: pendingCall.Name, Content: "tool execution denied by reviewer: " + d.Reason, IsError: true}
+				out <- Event{Kind: EventToolResult, ToolResult: tr}
+				msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: tr.Content, ToolCallID: pendingCall.ID, Name: pendingCall.Name})
+				continue
+			}
+		}
 		execCtx := context.WithValue(ctx, tool.CorrelationKey(), pendingCall.ID)
 		execCtx, toolSpan := obs.StartToolSpan(execCtx, pendingCall.Name, pendingCall.ID)
 		start := time.Now()

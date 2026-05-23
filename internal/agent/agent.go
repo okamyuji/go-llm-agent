@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
@@ -68,6 +69,9 @@ type service struct {
 	defaultMaxRetries int
 	scanner           safety.Scanner
 	redactor          safety.Redactor
+	approver          Approver
+	approvalRequired  map[string]bool
+	approvalTimeout   time.Duration
 }
 
 // New Service を構築する。billing.Accumulator は nil 可で、その場合は集計を無効にする
@@ -110,4 +114,17 @@ func WithScanner(sc safety.Scanner) Option {
 // WithRedactor 出力リダクタを注入する
 func WithRedactor(r safety.Redactor) Option {
 	return func(s *service) { s.redactor = r }
+}
+
+// WithApprover 承認ハンドラを注入する。required ツールセットも合わせて指定する
+func WithApprover(ap Approver, requiredTools []string, timeout time.Duration) Option {
+	set := make(map[string]bool, len(requiredTools))
+	for _, t := range requiredTools {
+		set[t] = true
+	}
+	return func(s *service) {
+		s.approver = ap
+		s.approvalRequired = set
+		s.approvalTimeout = timeout
+	}
 }

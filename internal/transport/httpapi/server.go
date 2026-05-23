@@ -17,6 +17,7 @@ type Server struct {
 	svc       agent.Service
 	cfg       *config.Config
 	billing   billing.Accumulator
+	approver  *agent.HTTPApprover
 	mux       *http.ServeMux
 	auth      *BearerAuth
 	limiter   *TokenBucketLimiter
@@ -31,9 +32,16 @@ func New(svc agent.Service, cfg *config.Config, acc billing.Accumulator) *Server
 	s.mux.HandleFunc("/v1/chat/completions", s.handleChat)
 	s.mux.HandleFunc("/v1/models", s.handleModels)
 	s.mux.HandleFunc("/v1/usage", s.handleUsage)
+	s.mux.HandleFunc("/v1/runs/", s.handleRunsApprove)
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
+	return s
+}
+
+// WithApprover HTTP Approver を保持し /v1/runs/<id>/approve に接続する
+func (s *Server) WithApprover(a *agent.HTTPApprover) *Server {
+	s.approver = a
 	return s
 }
 
@@ -56,10 +64,10 @@ func (s *Server) Handler() http.Handler {
 	return h
 }
 
-// ListenAndServe アドレスで Server を起動する。acc は nil 可
+// ListenAndServe アドレスで Server を起動する。acc と ap は nil 可
 // config の auth / rate_limit / allowlist / cors 設定を解釈してミドルウェアを構築する
-func ListenAndServe(ctx context.Context, addr string, svc agent.Service, cfg *config.Config, acc billing.Accumulator) error {
-	server := New(svc, cfg, acc)
+func ListenAndServe(ctx context.Context, addr string, svc agent.Service, cfg *config.Config, acc billing.Accumulator, ap *agent.HTTPApprover) error {
+	server := New(svc, cfg, acc).WithApprover(ap)
 	auth, limiter, allowlist, cors, err := buildMiddleware(cfg)
 	if err != nil {
 		return err

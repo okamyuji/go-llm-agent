@@ -132,6 +132,20 @@ metrics:
 
 E2E スクリプトは `tests/e2e/07-eval-suite.sh` です。fixtures/eval_exercise が LoadSuite / Score / WriteReport の動作を検証します。設計の詳細は `docs/design/07-eval-framework.md` を参照してください。
 
+## HITL ツール承認
+
+`agent.approval.required_tools` に含まれるツールは、実行前に承認が必要になります。HTTP モードでは `/v1/runs/<runID>/approve` に JSON で `{call_id, allowed, reason, reviewer}` を POST すると該当の承認待ちが解放されます。timeout を過ぎると `default_decision` (`deny` または `allow`) に従います。
+
+```yaml
+agent:
+  approval:
+    required_tools: [shell, fs_write]
+    timeout_seconds: 30
+    default_decision: deny
+```
+
+E2E スクリプトは `tests/e2e/08-hitl-approval.sh` です。fixtures/approval_exercise が Request / Submit / timeout の挙動を確認します。設計の詳細は `docs/design/08-hitl-approval.md` を参照してください。
+
 ## プロンプトインジェクション検知と出力リダクション
 
 `safety.input_scanner` で入力テキストに対する正規表現スキャン、`safety.output_redactor` で出力テキストに対する機微情報マスキングを行います。すべてのツール返却テキストは `[UNTRUSTED INPUT: tool=<name>]` で始まる untrusted マーカーで包まれ、LLM に untrusted ソースであることを明示します。

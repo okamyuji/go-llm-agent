@@ -101,6 +101,16 @@ type AgentConfig struct {
 	Budget         BudgetConfig         `yaml:"budget"`
 	ToolChoice     ToolChoiceConfig     `yaml:"tool_choice"`
 	ToolValidation ToolValidationConfig `yaml:"tool_validation"`
+	Approval       ApprovalConfig       `yaml:"approval"`
+}
+
+// ApprovalConfig HITL ツール承認の設定
+// default_decision は "deny" または "allow"。
+// required_tools は "shell" や "fs_write" など承認必須のツール名一覧
+type ApprovalConfig struct {
+	RequiredTools   []string `yaml:"required_tools"`
+	TimeoutSeconds  int      `yaml:"timeout_seconds"`
+	DefaultDecision string   `yaml:"default_decision"`
 }
 
 // ToolChoiceConfig tool_choice の設定

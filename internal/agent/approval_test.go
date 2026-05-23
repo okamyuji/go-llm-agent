@@ -1,0 +1,84 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
+
+func TestAutoApprover_ReturnsConfiguredDecision(t *testing.T) {
+	t.Parallel()
+	a := AutoApprover{Allow: true}
+	d, err := a.Request(context.Background(), ApprovalRequest{RunID: "r", CallID: "c", ToolName: "shell"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Allowed {
+		t.Error("auto approver with Allow=true must return Allowed=true")
+	}
+}
+
+func TestHTTPApprover_SubmitReleasesPendingRequest(t *testing.T) {
+	t.Parallel()
+	a := NewHTTPApprover(true)
+	got := make(chan ApprovalDecision, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		d, err := a.Request(ctx, ApprovalRequest{RunID: "r1", CallID: "c1", ToolName: "shell"})
+		if err != nil {
+			t.Errorf("unexpected err: %v", err)
+		}
+		got <- d
+	}()
+	// 少し待ってから Submit
+	time.Sleep(50 * time.Millisecond)
+	if !a.Submit(ApprovalDecision{RunID: "r1", CallID: "c1", Allowed: true, Reviewer: "user"}) {
+		t.Fatal("Submit must succeed against registered channel")
+	}
+	select {
+	case d := <-got:
+		if !d.Allowed {
+			t.Errorf("expected Allowed=true, got %+v", d)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for decision")
+	}
+}
+
+func TestHTTPApprover_TimeoutDefaultDeny(t *testing.T) {
+	t.Parallel()
+	a := NewHTTPApprover(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	d, err := a.Request(ctx, ApprovalRequest{RunID: "r2", CallID: "c2", ToolName: "shell"})
+	if !errors.Is(err, ErrApprovalTimeout) {
+		t.Fatalf("expected ErrApprovalTimeout, got %v", err)
+	}
+	if d.Allowed {
+		t.Error("defaultDeny=true must return Allowed=false on timeout")
+	}
+}
+
+func TestHTTPApprover_TimeoutDefaultAllow(t *testing.T) {
+	t.Parallel()
+	a := NewHTTPApprover(false)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	d, err := a.Request(ctx, ApprovalRequest{RunID: "r3", CallID: "c3"})
+	if !errors.Is(err, ErrApprovalTimeout) {
+		t.Fatalf("expected ErrApprovalTimeout, got %v", err)
+	}
+	if !d.Allowed {
+		t.Error("defaultDeny=false must return Allowed=true on timeout")
+	}
+}
+
+func TestHTTPApprover_SubmitUnknownIsFalse(t *testing.T) {
+	t.Parallel()
+	a := NewHTTPApprover(true)
+	if a.Submit(ApprovalDecision{RunID: "x", CallID: "y", Allowed: true}) {
+		t.Error("unknown RunID/CallID must return false")
+	}
+}

@@ -226,8 +226,21 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 	if rd, err := buildRedactor(cfg); err == nil && rd != nil {
 		opts = append(opts, agent.WithRedactor(rd))
 	}
+	if len(cfg.Agent.Approval.RequiredTools) > 0 {
+		defaultDeny := cfg.Agent.Approval.DefaultDecision != "allow"
+		ap := agent.NewHTTPApprover(defaultDeny)
+		approvalRegistry = ap
+		timeout := time.Duration(cfg.Agent.Approval.TimeoutSeconds) * time.Second
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+		opts = append(opts, agent.WithApprover(ap, cfg.Agent.Approval.RequiredTools, timeout))
+	}
 	return opts
 }
+
+// approvalRegistry HTTP Approver の参照を保持し、serve サブコマンドで /v1/runs/<id>/approve に共有する
+var approvalRegistry *agent.HTTPApprover
 
 // buildScanner cfg.Safety.InputScanner から safety.Scanner を構築する
 func buildScanner(cfg *config.Config) (safety.Scanner, error) {
@@ -359,7 +372,7 @@ func cmdServe(ctx context.Context, args []string) error {
 	}
 	opts := agentOptions(cfg, tools, acc)
 	svc := agent.New(reg, tools, opts...)
-	return httpapi.ListenAndServe(ctx, a, svc, cfg, acc)
+	return httpapi.ListenAndServe(ctx, a, svc, cfg, acc, approvalRegistry)
 }
 
 func cmdTools(args []string) error {

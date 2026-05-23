@@ -75,6 +75,12 @@ agent:
   tool_validation:
     enabled: true
     max_retries: 2
+  # HITL ツール承認。required_tools に含まれるツールは人間承認まで実行を保留する。
+  # default_decision は "deny" または "allow" で、timeout 到達時の挙動を決める。
+  approval:
+    required_tools: []
+    timeout_seconds: 30
+    default_decision: deny
 
 tools:
   fs:
