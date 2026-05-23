@@ -472,7 +472,13 @@ func cmdServe(ctx context.Context, args []string) error {
 	svc := agent.New(reg, tools, opts...)
 	// serve のみ HTTPApprover を /v1/runs/<id>/approve に渡す
 	// chat/run/eval は approver を保持せず必要に応じて捨てる
-	return httpapi.ListenAndServe(ctx, a, svc, cfg, acc, approver)
+	// non-stream の最終 content に再適用する Redactor も渡す
+	// (loop の chunk-by-chunk redact だけだと PII が chunk 境界を跨いで取りこぼされる)
+	rd, err := buildRedactor(cfg)
+	if err != nil {
+		return fmt.Errorf("build safety redactor: %w", err)
+	}
+	return httpapi.ListenAndServe(ctx, a, svc, cfg, acc, approver, rd)
 }
 
 func cmdTools(ctx context.Context, args []string) error {

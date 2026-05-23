@@ -119,6 +119,13 @@ func (s *Server) syncChat(ctx context.Context, w http.ResponseWriter, in agent.I
 			return
 		}
 	}
+	final := content.String()
+	// agent loop は EventDelta 単位で redact するため、PII / JWT 等が chunk 境界を
+	// 跨ぐと取りこぼす。non-stream のレスポンスでは集約後の最終文字列に再度 Redactor を
+	// 適用して安全側に倒す。stream 経路は SSE の即時性と引き換えに chunk 単位 redact のみ
+	if s.redactor != nil {
+		final = s.redactor.Redact(final)
+	}
 	out := chatResp{
 		ID:      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
 		Object:  "chat.completion",
@@ -126,7 +133,7 @@ func (s *Server) syncChat(ctx context.Context, w http.ResponseWriter, in agent.I
 		Model:   in.Model,
 		Choices: []chatRespChoice{{
 			Index:        0,
-			Message:      chatRespMsg{Role: "assistant", Content: content.String()},
+			Message:      chatRespMsg{Role: "assistant", Content: final},
 			FinishReason: "stop",
 		}},
 	}

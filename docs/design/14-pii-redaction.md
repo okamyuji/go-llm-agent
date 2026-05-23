@@ -112,6 +112,7 @@ agent.Service の初期化時に `safety.ChainRedactor(outputRedactor, piiRedact
 
 - IPv4 の正規表現が version 番号などを誤マッチする可能性があります。文字境界 `\b` を必ず付け、テストで誤マッチを抑止します。
 - JP phone 正規表現は将来の電話番号体系変更に脆いため、設定で上書き可能にします。
+- agent loop は `EventDelta` 単位で Redactor を適用するため、PII / JWT 等が複数 chunk に跨ると 1 つの chunk だけでは正規表現がマッチせず取りこぼします。HTTP API の `/v1/chat/completions` (non-stream) では集約した最終 content に対して `Server.WithRedactor` 経由で再度 Redactor を掛けて補正します。一方 SSE ストリーミング経路は即時送出と引き換えに chunk 単位 redact のみとなるため、機密性が最優先のユースケースでは `stream: false` を選択してください。
 
 ## 10. 完了基準
 

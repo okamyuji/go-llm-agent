@@ -10,14 +10,20 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/config"
+	"github.com/okamyuji/go-llm-agent/internal/safety"
 )
 
 // Server HTTP サーバ
+//
+// redactor は OpenAI 互換レスポンスの最終 content に再適用するための参照を保持する
+// agent loop は EventDelta 単位で redact するが、PII や JWT が chunk 境界を跨ぐと
+// 取りこぼすため、syncChat / streamChat の集約後にもう 1 度全文に対して redact を掛ける
 type Server struct {
 	svc       agent.Service
 	cfg       *config.Config
 	billing   billing.Accumulator
 	approver  *agent.HTTPApprover
+	redactor  safety.Redactor
 	mux       *http.ServeMux
 	auth      *BearerAuth
 	limiter   *TokenBucketLimiter
@@ -42,6 +48,13 @@ func New(svc agent.Service, cfg *config.Config, acc billing.Accumulator) *Server
 // WithApprover HTTP Approver を保持し /v1/runs/<id>/approve に接続する
 func (s *Server) WithApprover(a *agent.HTTPApprover) *Server {
 	s.approver = a
+	return s
+}
+
+// WithRedactor チャンク境界跨ぎの取りこぼし対策で最終 content に再適用する Redactor を設定する
+// nil の場合は再適用しない
+func (s *Server) WithRedactor(r safety.Redactor) *Server {
+	s.redactor = r
 	return s
 }
 
@@ -77,10 +90,12 @@ func (s *Server) Handler() http.Handler {
 	return h
 }
 
-// ListenAndServe アドレスで Server を起動する。acc と ap は nil 可
+// ListenAndServe アドレスで Server を起動する。acc / ap / rd はすべて nil 可
 // config の auth / rate_limit / allowlist / cors 設定を解釈してミドルウェアを構築する
-func ListenAndServe(ctx context.Context, addr string, svc agent.Service, cfg *config.Config, acc billing.Accumulator, ap *agent.HTTPApprover) error {
-	server := New(svc, cfg, acc).WithApprover(ap)
+// rd は OpenAI 互換レスポンス (/v1/chat/completions, stream=false) の最終 content に
+// chunk 境界跨ぎの取りこぼし対策で再適用する
+func ListenAndServe(ctx context.Context, addr string, svc agent.Service, cfg *config.Config, acc billing.Accumulator, ap *agent.HTTPApprover, rd safety.Redactor) error {
+	server := New(svc, cfg, acc).WithApprover(ap).WithRedactor(rd)
 	auth, limiter, allowlist, cors, err := buildMiddleware(cfg)
 	if err != nil {
 		return err
