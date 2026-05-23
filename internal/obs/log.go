@@ -15,6 +15,7 @@ type LoggerOptions struct {
 }
 
 // NewLogger オプションから slog.Logger を生成して返す
+// OTel が初期化済みの場合は TraceContextHandler でラップして trace_id を付与する
 func NewLogger(opt LoggerOptions) *slog.Logger {
 	w := opt.Writer
 	if w == nil {
@@ -28,7 +29,7 @@ func NewLogger(opt LoggerOptions) *slog.Logger {
 	default:
 		h = slog.NewTextHandler(w, &slog.HandlerOptions{Level: lvl})
 	}
-	return slog.New(h)
+	return slog.New(NewTraceContextHandler(h))
 }
 
 func parseLevel(s string) slog.Level {

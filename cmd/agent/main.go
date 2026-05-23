@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/config"
@@ -27,49 +28,80 @@ import (
 
 var version = "dev"
 
+// shutdownTelemetry main から呼ばれる shutdown フック。Init 失敗時は noop
+var shutdownTelemetry obs.Shutdown = func(context.Context) error { return nil }
+
 func main() {
+	code := mainEntry()
+	// shutdownTelemetry を必ず走らせるため os.Exit はここでのみ呼ぶ
+	shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+	defer c()
+	if err := shutdownTelemetry(shutdownCtx); err != nil {
+		fmt.Fprintln(os.Stderr, "telemetry shutdown:", err)
+	}
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+// mainEntry サブコマンド処理を内側関数に分離し、defer と shutdown を確実に実行する
+func mainEntry() int {
 	if len(os.Args) < 2 {
 		usage()
-		os.Exit(2)
+		return 2
 	}
 	sub := os.Args[1]
 	args := os.Args[2:]
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	var err error
 	switch sub {
 	case "chat":
-		mustRun(cmdChat(ctx, args))
+		err = cmdChat(ctx, args)
 	case "run":
-		mustRun(cmdRun(ctx, args))
+		err = cmdRun(ctx, args)
 	case "serve":
-		mustRun(cmdServe(ctx, args))
+		err = cmdServe(ctx, args)
 	case "tools":
-		mustRun(cmdTools(args))
+		err = cmdTools(args)
 	case "config":
-		mustRun(cmdConfig(args))
+		err = cmdConfig(args)
 	case "version", "--version", "-v":
 		fmt.Println(version)
+		return 0
 	default:
 		usage()
-		os.Exit(2)
+		return 2
 	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	return 0
 }
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: agent {chat|run|serve|tools|config|version} [flags]")
 }
 
-func mustRun(err error) {
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
-}
-
-func loadDeps(configPath string) (*config.Config, llm.Registry, tool.Registry, storage.SessionStore, error) {
+func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Registry, tool.Registry, storage.SessionStore, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, nil, nil, nil, err
+	}
+	if cfg.Observability.OTel.Enabled {
+		sd, terr := obs.InitTelemetry(ctx, obs.TelemetryConfig{
+			Enabled:                cfg.Observability.OTel.Enabled,
+			Endpoint:               cfg.Observability.OTel.Endpoint,
+			Insecure:               cfg.Observability.OTel.Insecure,
+			SampleRatio:            cfg.Observability.OTel.SampleRatio,
+			ServiceName:            cfg.Observability.OTel.ServiceName,
+			MetricsIntervalSeconds: cfg.Observability.OTel.MetricsIntervalSeconds,
+		}, nil)
+		if terr != nil {
+			return nil, nil, nil, nil, fmt.Errorf("init telemetry: %w", terr)
+		}
+		shutdownTelemetry = sd
 	}
 	resolver := secret.NewResolver(".env")
 	provs := map[string]llm.Provider{}
@@ -117,7 +149,7 @@ func cmdChat(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, reg, tools, _, err := loadDeps(*configPath)
+	cfg, reg, tools, _, err := loadDeps(ctx, *configPath)
 	if err != nil {
 		return err
 	}
@@ -138,7 +170,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, reg, tools, _, err := loadDeps(*configPath)
+	cfg, reg, tools, _, err := loadDeps(ctx, *configPath)
 	if err != nil {
 		return err
 	}
@@ -157,7 +189,7 @@ func cmdServe(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, reg, tools, _, err := loadDeps(*configPath)
+	cfg, reg, tools, _, err := loadDeps(ctx, *configPath)
 	if err != nil {
 		return err
 	}
@@ -175,7 +207,7 @@ func cmdTools(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	_, _, tools, _, err := loadDeps(*configPath)
+	_, _, tools, _, err := loadDeps(context.Background(), *configPath)
 	if err != nil {
 		return err
 	}

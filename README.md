@@ -106,6 +106,36 @@ bash scripts/verify-hardening.sh
 | `agent tools`  | 有効な内蔵ツールを一覧表示します |
 | `agent config` | 設定ファイルの内容をダンプします |
 
+## オブザーバビリティ
+
+`config.yaml` の `observability.otel` セクションで OpenTelemetry の OTLP HTTP exporter を有効化できます。既定は無効で、有効化しても他機能の挙動は変わりません。
+
+```yaml
+observability:
+  otel:
+    enabled: true
+    exporter: otlp_http
+    endpoint: 127.0.0.1:4318
+    insecure: true
+    sample_ratio: 1.0
+    service_name: go-llm-agent
+    metrics_interval_seconds: 30
+```
+
+エクスポート対象は次のとおりです。
+
+- スパン: `agent.run`、`llm.call`、`tool.execute`。親子関係が trace 上で 1 本につながります。
+- メトリクス: `llm.tokens.input`、`llm.tokens.output`、`tool.duration_ms`、`tool.success`、`tool.failure`、`llm.retry.attempts`、`llm.fallback.total`。
+- ログ: `obs.NewLogger` でラップした slog レコードに `trace_id` と `span_id` の属性が付きます。
+
+実動作確認はリポジトリ同梱の E2E スクリプトで再現できます。Go と bash のみで動き、ローカル PC 固有の設定には依存しません。
+
+```bash
+bash tests/e2e/01-otel-trace.sh
+```
+
+このスクリプトは `tests/e2e/fixtures/otel_collector` で OTLP HTTP の `/v1/traces` と `/v1/metrics` を受け取るだけのモックを起動し、`agent run` の実行でモックにトレースとメトリクスが届くことを確認します。設計の詳細は `docs/design/01-otel-instrumentation.md` を参照してください。
+
 ## 開発者向け
 
 ```bash

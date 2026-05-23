@@ -9,13 +9,30 @@ import (
 
 // Config 全体設定
 type Config struct {
-	DefaultModel string                    `yaml:"default_model"`
-	Providers    map[string]ProviderConfig `yaml:"providers"`
-	Agent        AgentConfig               `yaml:"agent"`
-	Tools        ToolsConfig               `yaml:"tools"`
-	Server       ServerConfig              `yaml:"server"`
-	Storage      StorageConfig             `yaml:"storage"`
-	Logging      LoggingConfig             `yaml:"logging"`
+	DefaultModel  string                    `yaml:"default_model"`
+	Providers     map[string]ProviderConfig `yaml:"providers"`
+	Agent         AgentConfig               `yaml:"agent"`
+	Tools         ToolsConfig               `yaml:"tools"`
+	Server        ServerConfig              `yaml:"server"`
+	Storage       StorageConfig             `yaml:"storage"`
+	Logging       LoggingConfig             `yaml:"logging"`
+	Observability ObservabilityConfig       `yaml:"observability"`
+}
+
+// ObservabilityConfig OTel 計装の設定をまとめる
+type ObservabilityConfig struct {
+	OTel OTelConfig `yaml:"otel"`
+}
+
+// OTelConfig OTLP HTTP exporter とサンプリングの設定
+type OTelConfig struct {
+	Enabled                bool    `yaml:"enabled"`
+	Exporter               string  `yaml:"exporter"`
+	Endpoint               string  `yaml:"endpoint"`
+	Insecure               bool    `yaml:"insecure"`
+	SampleRatio            float64 `yaml:"sample_ratio"`
+	ServiceName            string  `yaml:"service_name"`
+	MetricsIntervalSeconds int     `yaml:"metrics_interval_seconds"`
 }
 
 // ProviderConfig プロバイダー固有設定

@@ -4,13 +4,18 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/llm"
+	"github.com/okamyuji/go-llm-agent/internal/obs"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
 )
 
 // Run LLM とツールを最大 MaxToolHops 回交互に呼ぶ
 func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
+	ctx, agentSpan := obs.StartAgentSpan(ctx, in.Model)
+	defer agentSpan.End()
+
 	prov, model, err := s.reg.Resolve(in.Model)
 	if err != nil {
 		out <- Event{Kind: EventError, Err: err}
@@ -23,13 +28,16 @@ func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 	tools := s.specs()
 
 	for hop := 0; hop <= in.MaxToolHops; hop++ {
-		stream, err := prov.Stream(ctx, llm.ChatRequest{Model: model, Messages: msgs, Tools: tools})
+		llmCtx, llmSpan := obs.StartLLMSpan(ctx, prov.Name(), model)
+		stream, err := prov.Stream(llmCtx, llm.ChatRequest{Model: model, Messages: msgs, Tools: tools})
 		if err != nil {
+			llmSpan.End()
 			out <- Event{Kind: EventError, Err: err}
 			return err
 		}
 		var contentBuilder strings.Builder
 		var pendingCall *llm.ToolCall
+		var lastUsage *llm.Usage
 		for {
 			ev, ok := stream.Recv()
 			if !ok {
@@ -37,6 +45,7 @@ func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 			}
 			if ev.Err != nil {
 				_ = stream.Close()
+				llmSpan.End()
 				out <- Event{Kind: EventError, Err: ev.Err}
 				return ev.Err
 			}
@@ -48,12 +57,20 @@ func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 				pendingCall = ev.ToolCall
 				out <- Event{Kind: EventToolCall, ToolCall: ev.ToolCall}
 			}
+			if ev.Usage != nil {
+				lastUsage = ev.Usage
+			}
 		}
 		assistantContent := contentBuilder.String()
 		if err := stream.Close(); err != nil {
+			llmSpan.End()
 			out <- Event{Kind: EventError, Err: err}
 			return err
 		}
+		if lastUsage != nil {
+			obs.RecordTokens(llmCtx, prov.Name(), model, lastUsage.InputTokens, lastUsage.OutputTokens)
+		}
+		llmSpan.End()
 
 		assistant := llm.Message{Role: llm.RoleAssistant, Content: assistantContent}
 		if pendingCall != nil {
@@ -74,7 +91,12 @@ func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 			return err
 		}
 		execCtx := context.WithValue(ctx, tool.CorrelationKey(), pendingCall.ID)
+		execCtx, toolSpan := obs.StartToolSpan(execCtx, pendingCall.Name, pendingCall.ID)
+		start := time.Now()
 		res, terr := t.Execute(execCtx, pendingCall.Arguments)
+		ok2 := terr == nil && !res.IsError
+		obs.RecordToolOutcome(execCtx, pendingCall.Name, ok2, time.Since(start))
+		toolSpan.End()
 		tr := &ToolResult{CallID: pendingCall.ID, Name: pendingCall.Name, Content: res.Content, IsError: terr != nil || res.IsError}
 		if terr != nil {
 			tr.Content = terr.Error()

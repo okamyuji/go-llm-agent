@@ -79,3 +79,15 @@ storage:
 logging:
   format: text
   level: info
+
+# OpenTelemetry 計装。enabled: true で OTLP HTTP exporter にトレースとメトリクスを送る。
+# 既定は無効で、有効化しても他機能の挙動は変えない。詳細は docs/design/01-otel-instrumentation.md を参照する。
+observability:
+  otel:
+    enabled: false
+    exporter: otlp_http
+    endpoint: 127.0.0.1:4318
+    insecure: true
+    sample_ratio: 1.0
+    service_name: go-llm-agent
+    metrics_interval_seconds: 30
