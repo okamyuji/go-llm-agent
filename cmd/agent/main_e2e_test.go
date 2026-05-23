@@ -103,3 +103,39 @@ func TestE2E_VersionCommand(t *testing.T) {
 		t.Fatalf("version empty")
 	}
 }
+
+// TestE2E_Chat_NoSpinnerFlagAccepted -no-spinner フラグが unknown flag に
+// ならないことを検証する。chat は stdin から /quit で即終了させて検証する
+func TestE2E_Chat_NoSpinnerFlagAccepted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short")
+	}
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "agent")
+	buildCtx, buildCancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer buildCancel()
+	build := exec.CommandContext(buildCtx, "go", "build", "-o", binary, ".")
+	build.Stdout = os.Stdout
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	// providers を持たない最小 config を書き出して config 解決のみ通す
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgBody := "default_model: stub/none\nproviders:\n  ollama:\n    base_url: http://127.0.0.1:1\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgBody), 0o600); err != nil {
+		t.Fatalf("config: %v", err)
+	}
+
+	runCtx, runCancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer runCancel()
+	cmd := exec.CommandContext(runCtx, binary, "chat", "-no-spinner", "-config", cfgPath, "-model", "ollama/none")
+	cmd.Stdin = strings.NewReader("/quit\n")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	_ = cmd.Run() // exit code は問わない。unknown flag になっていないことだけ確認
+	if strings.Contains(stderr.String(), "flag provided but not defined") {
+		t.Fatalf("flag not recognized: %s", stderr.String())
+	}
+}

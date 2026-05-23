@@ -394,6 +394,7 @@ func cmdChat(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("chat", flag.ExitOnError)
 	configPath := fs.String("config", "config.yaml", "config file path")
 	model := fs.String("model", "", "model id (provider/name)")
+	noSpinner := fs.Bool("no-spinner", false, "disable progress indicator and turn summary")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -414,7 +415,12 @@ func cmdChat(ctx context.Context, args []string) error {
 		return optsErr
 	}
 	svc := agent.New(reg, tools, opts...)
-	r := cliui.NewREPL(svc, cliui.Options{Model: m, SystemPrompt: cfg.Agent.SystemPrompt, MaxToolHops: cfg.Agent.MaxToolHops})
+	r := cliui.NewREPL(svc, cliui.Options{
+		Model:          m,
+		SystemPrompt:   cfg.Agent.SystemPrompt,
+		MaxToolHops:    cfg.Agent.MaxToolHops,
+		DisableSpinner: *noSpinner,
+	})
 	return r.Run(ctx)
 }
 
