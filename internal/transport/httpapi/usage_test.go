@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/config"
@@ -46,7 +47,9 @@ func TestUsageEndpoint_SessionScope(t *testing.T) {
 		"openai": {InputPerMillionJPY: 1, OutputPerMillionJPY: 1},
 	}
 	acc := billing.NewAccumulator(billing.Config{Pricing: pricing}, &fakeStore{})
-	_, _ = acc.Add(context.Background(), "sess-1", "openai", "gpt", 100_000, 50_000)
+	if _, err := acc.Add(context.Background(), "sess-1", "openai", "gpt", 100_000, 50_000); err != nil {
+		t.Fatalf("acc.Add: %v", err)
+	}
 
 	srv := httptest.NewServer(httpapi.New(fakeSvc{}, cfg, acc).Handler())
 	defer srv.Close()
@@ -82,15 +85,38 @@ func TestUsageEndpoint_DateScope(t *testing.T) {
 		"openai": {InputPerMillionJPY: 1, OutputPerMillionJPY: 1},
 	}
 	acc := billing.NewAccumulator(billing.Config{Pricing: pricing}, &fakeStore{})
-	_, _ = acc.Add(context.Background(), "sess-a", "openai", "gpt", 200_000, 100_000)
+	if _, err := acc.Add(context.Background(), "sess-a", "openai", "gpt", 200_000, 100_000); err != nil {
+		t.Fatalf("acc.Add: %v", err)
+	}
 
 	srv := httptest.NewServer(httpapi.New(fakeSvc{}, cfg, acc).Handler())
 	defer srv.Close()
 
-	res := doGet(t, srv.URL+"/v1/usage?date=2026-05-23")
+	// 過去のテストはハードコード日付 "2026-05-23" を使っていたため、UTC の実日付を採用する形に直す
+	date := time.Now().UTC().Format("2006-01-02")
+	res := doGet(t, srv.URL+"/v1/usage?date="+date)
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d want 200", res.StatusCode)
+	}
+	var body struct {
+		Scope string `json:"scope"`
+		Key   string `json:"key"`
+		Date  string `json:"date"`
+		Total struct {
+			InputTokens  int     `json:"input_tokens"`
+			OutputTokens int     `json:"output_tokens"`
+			CostJPY      float64 `json:"cost_jpy"`
+		} `json:"total"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Scope != "date" || body.Date != date {
+		t.Errorf("scope=%q date=%q want scope=date date=%s", body.Scope, body.Date, date)
+	}
+	if body.Total.InputTokens != 200_000 || body.Total.OutputTokens != 100_000 {
+		t.Errorf("totals unexpected: %+v", body.Total)
 	}
 }
 

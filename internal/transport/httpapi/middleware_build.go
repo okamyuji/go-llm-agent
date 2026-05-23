@@ -33,6 +33,7 @@ func buildMiddleware(cfg *config.Config) (*BearerAuth, *TokenBucketLimiter, *All
 
 // resolveBearerTokens 設定されたエントリの secret_env を環境変数から解決する
 // 値の直書きは未対応で secret_env が空または未設定の値だとエラー
+// 異なる ID で同一トークン値が解決された場合は、上書きによる権限混乱を防ぐためエラーで弾く
 func resolveBearerTokens(entries []config.ServerBearerToken) (map[string]string, error) {
 	out := map[string]string{}
 	for _, e := range entries {
@@ -42,6 +43,9 @@ func resolveBearerTokens(entries []config.ServerBearerToken) (map[string]string,
 		v, ok := os.LookupEnv(e.SecretEnv)
 		if !ok || v == "" {
 			return nil, fmt.Errorf("bearer token env %q is not set", e.SecretEnv)
+		}
+		if existing, dup := out[v]; dup {
+			return nil, fmt.Errorf("bearer token env %q resolves to a value already used by id %q (set distinct secret values per id)", e.SecretEnv, existing)
 		}
 		out[v] = e.ID
 	}

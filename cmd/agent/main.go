@@ -171,16 +171,32 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 	}
 	resolver := secret.NewResolver(".env")
 	provs := map[string]llm.Provider{}
+	// resolveAPIKey APIKeyEnv が未設定または resolver で解決失敗した場合に warn ログを残す
+	// providers 設定上はキー必須でも .env 経由でしか配布されないため、強制 error にはしない
+	resolveAPIKey := func(name, envKey string) string {
+		if envKey == "" {
+			return ""
+		}
+		key, err := resolver.Resolve(envKey)
+		if err != nil {
+			slog.Warn("provider api key resolve failed; provider may fail at first call", "provider", name, "env", envKey, "err", err)
+			return ""
+		}
+		if key == "" {
+			slog.Warn("provider api key resolved to empty value", "provider", name, "env", envKey)
+		}
+		return key
+	}
 	if pc, ok := cfg.Providers["openai"]; ok {
-		key, _ := resolver.Resolve(pc.APIKeyEnv)
+		key := resolveAPIKey("openai", pc.APIKeyEnv)
 		provs["openai"] = wrapWithRetry("openai", openai.New(openai.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
 	}
 	if pc, ok := cfg.Providers["anthropic"]; ok {
-		key, _ := resolver.Resolve(pc.APIKeyEnv)
+		key := resolveAPIKey("anthropic", pc.APIKeyEnv)
 		provs["anthropic"] = wrapWithRetry("anthropic", anthropic.New(anthropic.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
 	}
 	if pc, ok := cfg.Providers["gemini"]; ok {
-		key, _ := resolver.Resolve(pc.APIKeyEnv)
+		key := resolveAPIKey("gemini", pc.APIKeyEnv)
 		provs["gemini"] = wrapWithRetry("gemini", gemini.New(gemini.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
 	}
 	if pc, ok := cfg.Providers["ollama"]; ok {
@@ -216,9 +232,9 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 	if ns, err := memory.NewFileNoteStore(notesPath); err == nil {
 		tools = append(tools, &tool.NoteAddTool{Store: ns}, &tool.NoteSearchTool{Store: ns})
 	} else {
-		// 永続化レイヤの初期化失敗は無視せず Error として記録する
-		// note_add / note_search ツールは無効化される運用上の制約をログから検知できるようにする
-		logger.Error("notes store init failed; note_add / note_search will be disabled", "path", notesPath, "err", err)
+		// 永続化レイヤの初期化失敗は degraded mode への移行を意味する
+		// note_add / note_search ツールが無効化された状態で agent は引き続き起動する旨を明示する
+		logger.Error("degraded mode: notes store init failed; note_add and note_search are disabled but agent continues to start", "path", notesPath, "err", err)
 	}
 	toolReg := tool.NewRegistry(tools, cfg.Agent.EnabledTools)
 	store := storage.NewSessionStore(expand(cfg.Storage.SessionsDir))

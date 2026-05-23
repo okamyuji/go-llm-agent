@@ -33,6 +33,7 @@ agent:
 prompts:
   dir: ./prompts
   variables:
+    - user_id
     - now
     - tools_summary
 ```

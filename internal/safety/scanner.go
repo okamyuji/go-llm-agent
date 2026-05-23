@@ -25,6 +25,8 @@ type InputScannerRule struct {
 }
 
 // InputScannerConfig 入力スキャナ全体の設定
+// BlockOnMatch 現在 Scan 自体は finding を返すだけで、ブロック判定は呼び出し側 (agent.service.runReAct) が
+// 行う設計のため未参照のまま残っている。将来 Scanner 内で fail-closed なエラー返却を実装する際に参照する
 type InputScannerConfig struct {
 	Enabled      bool
 	BlockOnMatch bool

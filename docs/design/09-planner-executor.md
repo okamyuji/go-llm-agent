@@ -44,15 +44,18 @@ agent:
 ### 5.3 公開インターフェース
 
 ```go
-package strategy
+package agent
 
+// Strategy run() は非公開メソッドのため、外部パッケージからの直接実装は不能
+// 公開 API としては NewStrategy / WithStrategy 経由でのみ Service に渡せる
 type Strategy interface {
-    Run(ctx context.Context, in agent.Input, out chan<- agent.Event) error
+    Name() string
+    run(ctx context.Context, s *service, in Input, out chan<- Event) error
 }
 
-type ReAct struct{...}
-type PlannerExecutor struct{...}
-type Reflection struct{...}
+type reactStrategy struct{}
+type plannerExecutorStrategy struct{ PlannerModel, ExecutorModel string; MaxSteps int }
+type reflectionStrategy struct{ MaxIterations, ConsecutiveFailures, HopBudget int }
 
 func New(cfg config.AgentConfig, reg llm.Registry, tools tool.Registry) (Strategy, error)
 ```

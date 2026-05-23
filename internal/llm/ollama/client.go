@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -164,6 +165,7 @@ func toPayload(req llm.ChatRequest, stream bool) ollamaPayload {
 
 // toolChoiceJSON ChatRequest.ToolChoice を Ollama の OpenAI 互換値に変換する
 // Ollama 0.4 系では tool_choice をサポートする model がある
+// 未知の Mode は "auto" にフォールバックさせるが、設定ミスを発見しやすくするため警告ログを残す
 func toolChoiceJSON(tc *llm.ToolChoice) any {
 	switch tc.Mode {
 	case "required", "any":
@@ -179,6 +181,7 @@ func toolChoiceJSON(tc *llm.ToolChoice) any {
 			"function": map[string]any{"name": tc.Name},
 		}
 	default:
+		slog.Warn("ollama: unknown tool_choice mode, falling back to auto", "mode", tc.Mode)
 		return "auto"
 	}
 }

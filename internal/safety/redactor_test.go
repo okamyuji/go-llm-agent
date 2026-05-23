@@ -1,6 +1,9 @@
 package safety
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNewRedactor_DisabledIsNoop(t *testing.T) {
 	t.Parallel()
@@ -29,7 +32,7 @@ func TestRedactor_MasksOpenAIKey(t *testing.T) {
 	if got == "the key is sk-ABCDEFGHIJKLMNOP1234 and not safe" {
 		t.Fatal("redactor did not mask")
 	}
-	if !contains(got, "[REDACTED:OPENAI]") {
+	if !strings.Contains(got, "[REDACTED:OPENAI]") {
 		t.Errorf("expected mask in: %s", got)
 	}
 }
@@ -47,7 +50,7 @@ func TestRedactor_MasksMultipleSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := r.Redact("k=sk-AAAAAAAAAAAAAAAA1 token=eyJhbGciOi.eyJzdWIiOi.signature_part_here")
-	if !contains(got, "[OK]") || !contains(got, "[JWT]") {
+	if !strings.Contains(got, "[OK]") || !strings.Contains(got, "[JWT]") {
 		t.Errorf("expected both masks in: %s", got)
 	}
 }
@@ -88,13 +91,4 @@ func TestChainRedactor_SingleReturnsAsIs(t *testing.T) {
 	if got := c.Redact("ab"); got != "bb" {
 		t.Errorf("got %q want 'bb'", got)
 	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

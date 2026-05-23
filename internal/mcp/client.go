@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -72,6 +73,9 @@ func NewStdioClient(ctx context.Context, command []string) (*Client, error) {
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	// stderr が読み取られないとパイプバッファが満杯になり子プロセスがハングする
+	// MCP サーバ側のログを失わないよう親プロセスの stderr に流す
+	cmd.Stderr = os.Stderr
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("mcp stdin: %w", err)

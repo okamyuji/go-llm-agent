@@ -234,7 +234,10 @@ func setupForSpanTests(t *testing.T) (string, Shutdown, error) {
 }
 
 // resetGlobal テスト間で global instruments をクリアする内部ヘルパ
+// globalMu を取って globalInstruments() / InitTelemetry との race を避ける
 func resetGlobal() {
+	globalMu.Lock()
 	global = nil
+	globalMu.Unlock()
 	otel.SetTracerProvider(otel.GetTracerProvider())
 }

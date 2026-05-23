@@ -1,6 +1,9 @@
 package safety
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestPIIRedactor_DisabledIsNoop(t *testing.T) {
 	t.Parallel()
@@ -25,7 +28,7 @@ func TestPIIRedactor_MaskEmail(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := r.Redact("contact me at alice@example.com today")
-	if !contains(got, "[REDACTED:EMAIL]") {
+	if !strings.Contains(got, "[REDACTED:EMAIL]") {
 		t.Errorf("expected mask in %q", got)
 	}
 }
@@ -43,7 +46,7 @@ func TestPIIRedactor_MaskJPPhoneAndIPv4(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := r.Redact("call 03-1234-5678 from 10.0.0.5")
-	if !contains(got, "[REDACTED:PHONE]") || !contains(got, "[REDACTED:IPV4]") {
+	if !strings.Contains(got, "[REDACTED:PHONE]") || !strings.Contains(got, "[REDACTED:IPV4]") {
 		t.Errorf("expected both masks, got %q", got)
 	}
 }
@@ -68,7 +71,7 @@ func TestChainRedactor_WithPIIAndOutput(t *testing.T) {
 	}
 	chained := ChainRedactor(out, pii)
 	got := chained.Redact("k=sk-AAA mail=a@b.com")
-	if !contains(got, "[KEY]") || !contains(got, "[EMAIL]") {
+	if !strings.Contains(got, "[KEY]") || !strings.Contains(got, "[EMAIL]") {
 		t.Errorf("chain redactor missed: %q", got)
 	}
 }
