@@ -37,7 +37,10 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	case q.Get("date") != "":
 		date := q.Get("date")
-		if _, err := time.Parse("2006-01-02", date); err != nil {
+		// time.Parse は "2026-02-30" のような存在しない日も "2026-03-02" に補正して通すため、
+		// パース結果を Format で元の文字列に書き戻して厳密に一致するかを検査する
+		t, err := time.Parse("2006-01-02", date)
+		if err != nil || t.Format("2006-01-02") != date {
 			http.Error(w, "date must be YYYY-MM-DD", http.StatusBadRequest)
 			return
 		}

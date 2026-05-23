@@ -34,7 +34,7 @@ agent:
     required_tools:
       - shell
       - fs_write
-    timeout_seconds: 60
+    timeout_seconds: 30
     # default_decision は "deny" のみサポート (allow は fail-open のため廃止)
     default_decision: deny
 ```

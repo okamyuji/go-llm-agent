@@ -49,11 +49,25 @@ if [ "${RUN_E2E:-0}" = "1" ]; then
   echo "==> e2e (16 scripts)"
   # nullglob を有効化してマッチが 0 件のときにリテラルパターンを実行しないようにする
   shopt -s nullglob
+  # 実行順序を決定論的にするため bash の glob ソート (デフォルトで lexical) を明示的に期待する
+  # 01- から 16- まで番号を頭に付けているため、lexical 順 = 設計書の章順序になる
+  # set -e に従って最初の失敗で即抜けるため、一回の実行で複数 E2E の同時失敗を観測したい場合は
+  # RUN_E2E_KEEPGOING=1 を別途設定して個別実行する運用にする
+  e2e_failed=0
   for s in tests/e2e/*.sh; do
     echo "    > $s"
-    bash "$s"
+    if ! bash "$s"; then
+      e2e_failed=1
+      if [ "${RUN_E2E_KEEPGOING:-0}" != "1" ]; then
+        exit 1
+      fi
+    fi
   done
   shopt -u nullglob
+  if [ "$e2e_failed" -ne 0 ]; then
+    echo "==> one or more e2e scripts failed (keep-going mode)"
+    exit 1
+  fi
 fi
 
 echo "all quality checks passed"

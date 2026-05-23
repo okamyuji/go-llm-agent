@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"unicode"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 )
@@ -103,7 +104,9 @@ func sanitizeReviewer(v string) (string, bool) {
 		return "", false
 	}
 	for _, r := range v {
-		if r < 0x20 || r == 0x7f {
+		// ASCII 制御文字だけでなく Unicode 全体の制御文字を弾く
+		// 端末エスケープシーケンスやログインジェクション (改行/復帰など) も同時に排除する
+		if unicode.IsControl(r) {
 			return "", false
 		}
 	}

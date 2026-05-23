@@ -80,9 +80,11 @@ func (f *fileLoader) Load(ref string) (Template, error) {
 	if !strings.HasPrefix(cleanedPath, cleanedDir+string(filepath.Separator)) && cleanedPath != cleanedDir {
 		return Template{}, fmt.Errorf("prompt: path escapes loader dir got=%q", path)
 	}
-	b, err := os.ReadFile(path)
+	// 解決後の cleanedPath を実際に読む。元の path を読むと
+	// EvalSymlinks による検査をすり抜けるシンボリックリンクから別ファイルを読まされ得る
+	b, err := os.ReadFile(cleanedPath)
 	if err != nil {
-		return Template{}, fmt.Errorf("prompt read %s: %w", path, err)
+		return Template{}, fmt.Errorf("prompt read %s: %w", cleanedPath, err)
 	}
 	return Template{Name: name, Version: version, Body: string(b)}, nil
 }

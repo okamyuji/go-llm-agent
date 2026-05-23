@@ -35,9 +35,10 @@ type NoteStore interface {
 }
 
 // fileNoteStore JSONL ベースの簡易 NoteStore
+// Add は Lock を取り、Search は RLock で並行 reader を許容する
 type fileNoteStore struct {
 	path string
-	mu   sync.Mutex
+	mu   sync.RWMutex
 }
 
 // NewFileNoteStore 指定パスに JSONL でノートを永続化する Store を返す
@@ -88,8 +89,8 @@ func (s *fileNoteStore) Search(_ context.Context, query string, topK int) ([]Not
 	if topK > maxTopK {
 		topK = maxTopK
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	f, err := os.Open(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {

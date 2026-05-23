@@ -37,16 +37,26 @@ var version = "dev"
 var shutdownTelemetry obs.Shutdown = func(context.Context) error { return nil }
 
 func main() {
-	code := mainEntry()
-	// shutdownTelemetry を必ず走らせるため os.Exit はここでのみ呼ぶ
-	shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
-	defer c()
-	if err := shutdownTelemetry(shutdownCtx); err != nil {
-		fmt.Fprintln(os.Stderr, "telemetry shutdown:", err)
-	}
+	// runWithShutdown 内で mainEntry を defer 付きで包むことで、
+	// panic でも正常終了でも shutdownTelemetry が必ず走る
+	// os.Exit は defer を実行しないため、main の最終ステップとしてのみ呼ぶ
+	code := runWithShutdown()
 	if code != 0 {
 		os.Exit(code)
 	}
+}
+
+// runWithShutdown mainEntry を内部関数で実行し、defer で telemetry shutdown を保証する
+// panic でも defer は走るため、obs span/metric の取りこぼしを防ぐ
+func runWithShutdown() int {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	defer func() {
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			fmt.Fprintln(os.Stderr, "telemetry shutdown:", err)
+		}
+	}()
+	return mainEntry()
 }
 
 // mainEntry サブコマンド処理を内側関数に分離し、defer と shutdown を確実に実行する
