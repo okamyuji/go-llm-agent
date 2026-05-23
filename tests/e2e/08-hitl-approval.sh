@@ -19,8 +19,10 @@ printf "${YELLOW}>>> building approval exerciser${NC}\n"
 go build -o "$WORK/ap" ./tests/e2e/fixtures/approval_exercise
 
 printf "${YELLOW}>>> running approval exerciser${NC}\n"
+set +e
 "$WORK/ap" > "$WORK/out.log" 2>&1
 RUN_EXIT=$?
+set -e
 cat "$WORK/out.log"
 if [[ "$RUN_EXIT" -ne 0 ]]; then
   printf "${RED}FAIL: approval exerciser exited with %d${NC}\n" "$RUN_EXIT"

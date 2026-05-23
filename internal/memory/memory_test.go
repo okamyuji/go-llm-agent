@@ -36,13 +36,20 @@ func TestFileNoteStore_AddAndSearch(t *testing.T) {
 func TestFileNoteStore_TopKLimit(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	s, _ := NewFileNoteStore(filepath.Join(dir, "notes.jsonl"))
-	ctx := context.Background()
-	for i := range 5 {
-		_, _ = s.Add(ctx, Note{Title: "note", Body: "test"})
-		_ = i
+	s, err := NewFileNoteStore(filepath.Join(dir, "notes.jsonl"))
+	if err != nil {
+		t.Fatalf("NewFileNoteStore: %v", err)
 	}
-	got, _ := s.Search(ctx, "note", 2)
+	ctx := context.Background()
+	for range 5 {
+		if _, err := s.Add(ctx, Note{Title: "note", Body: "test"}); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+	}
+	got, err := s.Search(ctx, "note", 2)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
 	if len(got) != 2 {
 		t.Errorf("topK=2 expected, got %d", len(got))
 	}

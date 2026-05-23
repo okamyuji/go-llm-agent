@@ -19,8 +19,10 @@ printf "${YELLOW}>>> building eval exerciser${NC}\n"
 go build -o "$WORK/eval" ./tests/e2e/fixtures/eval_exercise
 
 printf "${YELLOW}>>> running eval exerciser${NC}\n"
+set +e
 "$WORK/eval" > "$WORK/out.log" 2>&1
 RUN_EXIT=$?
+set -e
 cat "$WORK/out.log"
 if [[ "$RUN_EXIT" -ne 0 ]]; then
   printf "${RED}FAIL: eval exerciser exited with %d${NC}\n" "$RUN_EXIT"

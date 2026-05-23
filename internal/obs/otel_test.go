@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 func newDiscardLogger() *slog.Logger {
@@ -235,9 +237,12 @@ func setupForSpanTests(t *testing.T) (string, Shutdown, error) {
 
 // resetGlobal テスト間で global instruments をクリアする内部ヘルパ
 // globalMu を取って globalInstruments() / InitTelemetry との race を避ける
+// 旧実装の otel.SetTracerProvider(otel.GetTracerProvider()) は前回の TracerProvider を
+// 上書きせず無効化にならなかったため、明示的に no-op の Tracer/Meter Provider を入れ直す
 func resetGlobal() {
 	globalMu.Lock()
 	global = nil
 	globalMu.Unlock()
-	otel.SetTracerProvider(otel.GetTracerProvider())
+	otel.SetTracerProvider(tracenoop.NewTracerProvider())
+	otel.SetMeterProvider(metricnoop.NewMeterProvider())
 }
