@@ -106,6 +106,33 @@ bash scripts/verify-hardening.sh
 | `agent tools`  | 有効な内蔵ツールを一覧表示します |
 | `agent config` | 設定ファイルの内容をダンプします |
 
+## トークンとコストの集計
+
+`providers.<name>.pricing` を設定すると、LLM 呼び出しごとの入出力トークン数から JPY コストを算出し、セッション単位と日次単位で集計します。集計結果は `storage.sessions_dir/billing.jsonl` に追記され、`agent.Event` の `Usage` と `Cost` フィールド経由でリアルタイムに観測できます。
+
+```yaml
+providers:
+  openai:
+    pricing:
+      input_per_million_jpy: 450
+      output_per_million_jpy: 1800
+agent:
+  budget:
+    session_max_tokens: 200000
+    daily_max_cost_jpy: 1000
+```
+
+予算上限を超える呼び出しは `billing.ErrBudgetExceeded` で停止します。0 は無制限の指定です。
+
+HTTP API には `/v1/usage` エンドポイントを追加しました。`?session=<id>` でセッション単位、`?date=YYYY-MM-DD`（UTC）で日次の集計を JSON で返します。
+
+```bash
+curl http://127.0.0.1:14000/v1/usage?session=sess-1
+curl http://127.0.0.1:14000/v1/usage?date=2026-05-23
+```
+
+E2E スクリプトは `tests/e2e/02-token-budget.sh` です。LLM への実通信は不要で、ローカル PC 固有の API キーや課金には依存しません。設計の詳細は `docs/design/02-token-cost-tracking.md` を参照してください。
+
 ## オブザーバビリティ
 
 `config.yaml` の `observability.otel` セクションで OpenTelemetry の OTLP HTTP exporter を有効化できます。既定は無効で、有効化しても他機能の挙動は変わりません。

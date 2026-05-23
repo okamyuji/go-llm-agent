@@ -15,18 +15,28 @@ providers:
     allow_models:
       - gpt-4.1-mini
       - gpt-4o-mini
+    # 1,000,000 トークンあたりの円換算単価。未指定なら CostJPY は 0 として集計される。
+    pricing:
+      input_per_million_jpy: 450
+      output_per_million_jpy: 1800
   anthropic:
     base_url: https://api.anthropic.com
     api_key_env: ANTHROPIC_API_KEY
     allow_models:
       - claude-3-5-sonnet-latest
       - claude-3-5-haiku-latest
+    pricing:
+      input_per_million_jpy: 480
+      output_per_million_jpy: 2400
   gemini:
     base_url: https://generativelanguage.googleapis.com/v1beta
     api_key_env: GEMINI_API_KEY
     allow_models:
       - gemini-2.5-pro
       - gemini-2.5-flash
+    pricing:
+      input_per_million_jpy: 300
+      output_per_million_jpy: 1200
   ollama:
     base_url: http://localhost:11434
     # ローカル Ollama はモデル列挙を端的にしづらいため allow_models は空のままにする
@@ -42,6 +52,11 @@ agent:
     ユーザーの依頼を達成するために必要なら提供されたツールを使い、
     破壊的な操作を行う前に意図を確認してください。
     回答は日本語で簡潔にまとめます。
+  # 予算上限。0 は無制限を意味し、上限到達時は agent.Run が ErrBudgetExceeded で停止する。
+  # storage.sessions_dir 配下に billing.jsonl が追記される。
+  budget:
+    session_max_tokens: 200000
+    daily_max_cost_jpy: 1000
 
 tools:
   fs:

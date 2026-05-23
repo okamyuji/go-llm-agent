@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 
+	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
 )
@@ -14,6 +15,7 @@ type Input struct {
 	Messages     []llm.Message
 	MaxToolHops  int
 	EnabledTools []string
+	SessionID    string
 }
 
 // EventKind イベント種別
@@ -26,6 +28,7 @@ const (
 	EventToolResult
 	EventFinal
 	EventError
+	EventUsage
 )
 
 // ToolResult tool 実行結果
@@ -44,6 +47,8 @@ type Event struct {
 	ToolResult *ToolResult
 	Final      *llm.Message
 	Err        error
+	Usage      *llm.Usage
+	Cost       *billing.Snapshot
 }
 
 // Service エージェント実行サービス
@@ -52,11 +57,24 @@ type Service interface {
 }
 
 type service struct {
-	reg   llm.Registry
-	tools tool.Registry
+	reg     llm.Registry
+	tools   tool.Registry
+	billing billing.Accumulator
 }
 
-// New Service を構築する
-func New(reg llm.Registry, tools tool.Registry) Service {
-	return &service{reg: reg, tools: tools}
+// New Service を構築する。billing.Accumulator は nil 可で、その場合は集計を無効にする
+func New(reg llm.Registry, tools tool.Registry, opts ...Option) Service {
+	s := &service{reg: reg, tools: tools}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// Option Service コンストラクタの関数オプション
+type Option func(*service)
+
+// WithBilling Service に billing.Accumulator を注入する
+func WithBilling(acc billing.Accumulator) Option {
+	return func(s *service) { s.billing = acc }
 }

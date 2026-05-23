@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/obs"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
@@ -69,6 +71,26 @@ func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 		}
 		if lastUsage != nil {
 			obs.RecordTokens(llmCtx, prov.Name(), model, lastUsage.InputTokens, lastUsage.OutputTokens)
+			ev := Event{Kind: EventUsage, Usage: lastUsage}
+			if s.billing != nil {
+				sessionID := in.SessionID
+				if sessionID == "" {
+					sessionID = "default"
+				}
+				snap, berr := s.billing.Add(ctx, sessionID, prov.Name(), model, lastUsage.InputTokens, lastUsage.OutputTokens)
+				if berr != nil {
+					llmSpan.End()
+					if errors.Is(berr, billing.ErrBudgetExceeded) {
+						out <- Event{Kind: EventError, Err: berr}
+						return berr
+					}
+					out <- Event{Kind: EventError, Err: berr}
+					return berr
+				}
+				snapCopy := snap
+				ev.Cost = &snapCopy
+			}
+			out <- ev
 		}
 		llmSpan.End()
 

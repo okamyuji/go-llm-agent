@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
+	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/config"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/llm/anthropic"
@@ -142,6 +143,33 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 	return cfg, llmReg, toolReg, store, nil
 }
 
+// buildBillingAccumulator config から billing.Accumulator を構築する
+// pricing が一切設定されていない、かつ budget も無指定なら nil を返す（集計無効）
+func buildBillingAccumulator(cfg *config.Config) (billing.Accumulator, error) {
+	pricing := map[string]billing.Pricing{}
+	for name, pc := range cfg.Providers {
+		if pc.Pricing.InputPerMillionJPY != 0 || pc.Pricing.OutputPerMillionJPY != 0 {
+			pricing[name] = billing.Pricing{
+				InputPerMillionJPY:  pc.Pricing.InputPerMillionJPY,
+				OutputPerMillionJPY: pc.Pricing.OutputPerMillionJPY,
+			}
+		}
+	}
+	budget := billing.Budget{
+		SessionMaxTokens: cfg.Agent.Budget.SessionMaxTokens,
+		DailyMaxCostJPY:  cfg.Agent.Budget.DailyMaxCostJPY,
+	}
+	if len(pricing) == 0 && budget.SessionMaxTokens == 0 && budget.DailyMaxCostJPY == 0 {
+		return nil, nil
+	}
+	storePath := filepath.Join(expand(cfg.Storage.SessionsDir), "billing.jsonl")
+	store, err := billing.NewFileStore(storePath)
+	if err != nil {
+		return nil, fmt.Errorf("billing store: %w", err)
+	}
+	return billing.NewAccumulator(billing.Config{Pricing: pricing, Budget: budget}, store), nil
+}
+
 func cmdChat(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("chat", flag.ExitOnError)
 	configPath := fs.String("config", "config.yaml", "config file path")
@@ -157,7 +185,15 @@ func cmdChat(ctx context.Context, args []string) error {
 	if m == "" {
 		m = cfg.DefaultModel
 	}
-	svc := agent.New(reg, tools)
+	acc, err := buildBillingAccumulator(cfg)
+	if err != nil {
+		return err
+	}
+	var opts []agent.Option
+	if acc != nil {
+		opts = append(opts, agent.WithBilling(acc))
+	}
+	svc := agent.New(reg, tools, opts...)
 	r := cliui.NewREPL(svc, cliui.Options{Model: m, SystemPrompt: cfg.Agent.SystemPrompt, MaxToolHops: cfg.Agent.MaxToolHops})
 	return r.Run(ctx)
 }
@@ -178,7 +214,15 @@ func cmdRun(ctx context.Context, args []string) error {
 	if m == "" {
 		m = cfg.DefaultModel
 	}
-	svc := agent.New(reg, tools)
+	acc, err := buildBillingAccumulator(cfg)
+	if err != nil {
+		return err
+	}
+	var opts []agent.Option
+	if acc != nil {
+		opts = append(opts, agent.WithBilling(acc))
+	}
+	svc := agent.New(reg, tools, opts...)
 	return cliui.RunOneShot(ctx, svc, m, cfg.Agent.SystemPrompt, *prompt, cfg.Agent.MaxToolHops, os.Stdout)
 }
 
@@ -197,8 +241,16 @@ func cmdServe(ctx context.Context, args []string) error {
 	if a == "" {
 		a = cfg.Server.Addr
 	}
-	svc := agent.New(reg, tools)
-	return httpapi.ListenAndServe(ctx, a, svc, cfg)
+	acc, err := buildBillingAccumulator(cfg)
+	if err != nil {
+		return err
+	}
+	var opts []agent.Option
+	if acc != nil {
+		opts = append(opts, agent.WithBilling(acc))
+	}
+	svc := agent.New(reg, tools, opts...)
+	return httpapi.ListenAndServe(ctx, a, svc, cfg, acc)
 }
 
 func cmdTools(args []string) error {

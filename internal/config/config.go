@@ -37,16 +37,30 @@ type OTelConfig struct {
 
 // ProviderConfig プロバイダー固有設定
 type ProviderConfig struct {
-	BaseURL     string   `yaml:"base_url"`
-	APIKeyEnv   string   `yaml:"api_key_env"`
-	AllowModels []string `yaml:"allow_models"`
+	BaseURL     string        `yaml:"base_url"`
+	APIKeyEnv   string        `yaml:"api_key_env"`
+	AllowModels []string      `yaml:"allow_models"`
+	Pricing     PricingConfig `yaml:"pricing"`
+}
+
+// PricingConfig 1 プロバイダーあたりの単価設定 (JPY per million tokens)
+type PricingConfig struct {
+	InputPerMillionJPY  float64 `yaml:"input_per_million_jpy"`
+	OutputPerMillionJPY float64 `yaml:"output_per_million_jpy"`
 }
 
 // AgentConfig エージェントループ設定
 type AgentConfig struct {
-	MaxToolHops  int      `yaml:"max_tool_hops"`
-	EnabledTools []string `yaml:"enabled_tools"`
-	SystemPrompt string   `yaml:"system_prompt"`
+	MaxToolHops  int          `yaml:"max_tool_hops"`
+	EnabledTools []string     `yaml:"enabled_tools"`
+	SystemPrompt string       `yaml:"system_prompt"`
+	Budget       BudgetConfig `yaml:"budget"`
+}
+
+// BudgetConfig 予算上限の設定。0 は無制限として扱う
+type BudgetConfig struct {
+	SessionMaxTokens int     `yaml:"session_max_tokens"`
+	DailyMaxCostJPY  float64 `yaml:"daily_max_cost_jpy"`
 }
 
 // ToolsConfig ツール群の設定

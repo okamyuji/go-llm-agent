@@ -35,7 +35,7 @@ func (fakeSvc) Run(_ context.Context, _ agent.Input, out chan<- agent.Event) err
 
 func TestChat_NonStreaming(t *testing.T) {
 	cfg := &config.Config{DefaultModel: "fake/m", Providers: map[string]config.ProviderConfig{"fake": {}}}
-	srv := httptest.NewServer(httpapi.New(fakeSvc{}, cfg).Handler())
+	srv := httptest.NewServer(httpapi.New(fakeSvc{}, cfg, nil).Handler())
 	defer srv.Close()
 
 	body := bytes.NewBufferString(`{"model":"fake/m","messages":[{"role":"user","content":"hi"}]}`)
@@ -61,7 +61,7 @@ func TestChat_NonStreaming(t *testing.T) {
 
 func TestChat_Streaming(t *testing.T) {
 	cfg := &config.Config{DefaultModel: "fake/m", Providers: map[string]config.ProviderConfig{"fake": {}}}
-	srv := httptest.NewServer(httpapi.New(fakeSvc{}, cfg).Handler())
+	srv := httptest.NewServer(httpapi.New(fakeSvc{}, cfg, nil).Handler())
 	defer srv.Close()
 
 	body := bytes.NewBufferString(`{"model":"fake/m","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
@@ -85,7 +85,7 @@ func TestChat_Streaming(t *testing.T) {
 
 func TestModels(t *testing.T) {
 	cfg := &config.Config{Providers: map[string]config.ProviderConfig{"openai": {}, "ollama": {}}}
-	srv := httptest.NewServer(httpapi.New(fakeSvc{}, cfg).Handler())
+	srv := httptest.NewServer(httpapi.New(fakeSvc{}, cfg, nil).Handler())
 	defer srv.Close()
 	res, err := getURL(t, srv.URL+"/v1/models")
 	if err != nil {
