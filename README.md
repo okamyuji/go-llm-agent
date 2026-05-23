@@ -100,7 +100,7 @@ bash scripts/verify-hardening.sh
 
 | コマンド | 説明 |
 |---------|------|
-| `agent chat`   | 対話 REPL を起動します |
+| `agent chat`   | 対話 REPL を起動します（`-no-spinner` で進捗インジケータとターン要約を無効化） |
 | `agent run -p` | ワンショットでプロンプトを 1 回送信します |
 | `agent serve`  | OpenAI 互換 HTTP API を起動します |
 | `agent tools`  | 有効な内蔵ツールを一覧表示します |
