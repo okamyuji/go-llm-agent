@@ -132,9 +132,10 @@ func TestExecuteToolsParallel_FallsBackToSerialWhenApprovalRequired(t *testing.T
 	if len(out) != 2 {
 		t.Fatalf("expected 2 outcomes, got %d", len(out))
 	}
-	// 直列で 60ms 以上かかる
-	if elapsed < 50*time.Millisecond {
-		t.Errorf("expected serial fallback (>=50ms), elapsed=%v", elapsed)
+	// 直列で 2 ツール × 30ms = 60ms 以上かかる。並列だったら 30ms 程度で済むので
+	// 55ms をボーダーとして直列フォールバックを検出する
+	if elapsed < 55*time.Millisecond {
+		t.Errorf("expected serial fallback (>=55ms), elapsed=%v", elapsed)
 	}
 }
 

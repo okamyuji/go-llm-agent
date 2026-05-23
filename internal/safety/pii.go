@@ -20,6 +20,7 @@ type PIIRedactorConfig struct {
 
 // PIIRedactor 06 番設計書の Redactor インターフェースを実装する PII 専用 Redactor
 // agent.Service は ChainRedactor(outputRedactor, piiRedactor) で 1 つの Redactor として扱う
+// 内部の redactRule 型は同じ safety パッケージの redactor.go で定義済み
 type PIIRedactor struct {
 	rules []redactRule
 }

@@ -82,11 +82,13 @@ func (r *registry) ResolveWithFallback(model string) (Provider, string, Provider
 	if fbName, hasFB := r.fallback[pname]; hasFB && fbName != "" {
 		fp, ok := r.providers[fbName]
 		if !ok {
-			// 未登録の fallback 先は nil 扱い。将来 logger 注入時に warn を出す
+			// 未登録の fallback 先は primary のみで処理を継続させるため nil で返す
+			// エラーを返すと primary の経路も阻害してしまうため、設定ミスは config.Load 側で
+			// validateFallbackChains が unknown reference として既に検知する
 			return primary, name, nil, "", nil
 		}
 		// fallback 側の allow_models に model 名が含まれていなければ不許可モデル
-		// 呼び出しを防ぐため fallback を nil で skip する
+		// 呼び出しを防ぐため fallback を nil で skip する (primary は引き続き利用可能)
 		if allow := r.allowModels[fbName]; len(allow) > 0 && !slices.Contains(allow, name) {
 			return primary, name, nil, "", nil
 		}

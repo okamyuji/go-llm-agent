@@ -20,12 +20,14 @@ printf "${YELLOW}>>> building tool_choice exerciser${NC}\n"
 go build -o "$WORK/exercise" ./tests/e2e/fixtures/tool_choice_exercise
 
 printf "${YELLOW}>>> running exerciser${NC}\n"
+set +e
 "$WORK/exercise" > "$WORK/out.log" 2>&1
 RUN_EXIT=$?
+set -e
 cat "$WORK/out.log"
 if [[ "$RUN_EXIT" -ne 0 ]]; then
   printf "${RED}FAIL: exerciser exited with %d${NC}\n" "$RUN_EXIT"
-  exit 1
+  exit "$RUN_EXIT"
 fi
 if ! grep -q 'tool_choice_payload=required' "$WORK/out.log"; then
   printf "${RED}FAIL: tool_choice payload was not required${NC}\n"

@@ -218,9 +218,11 @@ func toPayload(req llm.ChatRequest) gemPayload {
 // 未知の Mode は AUTO にフォールバックし、設定ミスを発見しやすくするため警告ログを残す
 func toolChoiceConfig(tc *llm.ToolChoice) *gemToolConfig {
 	switch tc.Mode {
-	case "auto", "":
+	case "auto", "any", "":
+		// llm.ToolChoice.Mode "any" は OpenAI で "auto" 相当 (model can pick) として扱うため、
+		// Gemini の対応モードも AUTO を返す。"required" のみが ANY (function 呼び出し強制)
 		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "AUTO"}}
-	case "required", "any":
+	case "required":
 		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "ANY"}}
 	case "none":
 		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "NONE"}}

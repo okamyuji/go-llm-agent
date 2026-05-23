@@ -16,9 +16,12 @@ type rpcReq struct {
 	Params  json.RawMessage `json:"params"`
 }
 
+// rpcResp ID は *int64 にする
+// JSON-RPC 2.0 Parse error (-32700) の応答では "id": null を出す必要があり、
+// 値型 int64 だと nil 表現ができないため pointer 化する
 type rpcResp struct {
 	JSONRPC string `json:"jsonrpc"`
-	ID      int64  `json:"id"`
+	ID      *int64 `json:"id"`
 	Result  any    `json:"result,omitempty"`
 	Error   *err   `json:"error,omitempty"`
 }
@@ -46,7 +49,8 @@ func main() {
 		}
 		var resp rpcResp
 		resp.JSONRPC = "2.0"
-		resp.ID = req.ID
+		reqID := req.ID
+		resp.ID = &reqID
 		switch req.Method {
 		case "tools/list":
 			resp.Result = map[string]any{

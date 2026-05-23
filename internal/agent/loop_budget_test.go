@@ -80,8 +80,17 @@ func (m *budgetMemoryStore) QuerySession(_ context.Context, id string) ([]billin
 	}
 	return out, nil
 }
-func (m *budgetMemoryStore) QueryDate(context.Context, string) ([]billing.Snapshot, error) {
-	return m.items, nil
+func (m *budgetMemoryStore) QueryDate(_ context.Context, date string) ([]billing.Snapshot, error) {
+	if date == "" {
+		return m.items, nil
+	}
+	var out []billing.Snapshot
+	for _, s := range m.items {
+		if s.At.UTC().Format("2006-01-02") == date {
+			out = append(out, s)
+		}
+	}
+	return out, nil
 }
 
 func TestRun_EmitsUsageAndCostWhenBillingEnabled(t *testing.T) {
