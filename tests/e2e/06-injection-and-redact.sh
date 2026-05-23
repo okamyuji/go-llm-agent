@@ -19,12 +19,14 @@ printf "${YELLOW}>>> building safety exerciser${NC}\n"
 go build -o "$WORK/safety" ./tests/e2e/fixtures/safety_exercise
 
 printf "${YELLOW}>>> running safety exerciser${NC}\n"
+set +e
 "$WORK/safety" > "$WORK/out.log" 2>&1
 RUN_EXIT=$?
+set -e
 cat "$WORK/out.log"
 if [[ "$RUN_EXIT" -ne 0 ]]; then
   printf "${RED}FAIL: safety exerciser exited with %d${NC}\n" "$RUN_EXIT"
-  exit 1
+  exit "$RUN_EXIT"
 fi
 if ! grep -q 'pattern=ignore_previous' "$WORK/out.log"; then
   printf "${RED}FAIL: expected scanner to flag ignore_previous${NC}\n"

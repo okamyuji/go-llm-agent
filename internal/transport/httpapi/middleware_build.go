@@ -23,7 +23,7 @@ func buildMiddleware(cfg *config.Config) (*BearerAuth, *TokenBucketLimiter, *All
 	if cfg.Server.RateLimit.Enabled {
 		limiter = NewTokenBucketLimiter(cfg.Server.RateLimit.RPS, cfg.Server.RateLimit.Burst, cfg.Server.RateLimit.PerToken)
 	}
-	allowlist, err := NewAllowlistCIDR(cfg.Server.Allowlist.CIDRs)
+	allowlist, err := NewAllowlistCIDR(cfg.Server.Allowlist.CIDRs, cfg.Server.Allowlist.TrustedProxies...)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("invalid allowlist cidr: %w", err)
 	}

@@ -88,6 +88,16 @@ func (a *HTTPApprover) Request(ctx context.Context, r ApprovalRequest) (Approval
 		cleanup()
 		return d, nil
 	case <-ctx.Done():
+		// ctx.Done と ch が同時に ready のとき select はランダムに片方を選ぶため、
+		// ctx 経路に入った後でも channel に Decision が積まれている可能性をもう一度確認する
+		// (非ブロッキング receive)。これにより Submit と timeout が同時に発火しても
+		// 有効な Decision が捨てられないようにする
+		select {
+		case d := <-ch:
+			cleanup()
+			return d, nil
+		default:
+		}
 		cleanup()
 		return ApprovalDecision{RunID: r.RunID, CallID: r.CallID, Allowed: false, Reason: "timeout default deny"}, ErrApprovalTimeout
 	}

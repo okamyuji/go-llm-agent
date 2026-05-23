@@ -238,8 +238,11 @@ type ServerRateLimit struct {
 }
 
 // ServerAllowlist IP allowlist の設定
+// trusted_proxies に CIDR を指定すると、その経由からのリクエストでのみ
+// X-Forwarded-For / X-Real-IP を信頼してクライアント IP を判定する
 type ServerAllowlist struct {
-	CIDRs []string `yaml:"cidrs"`
+	CIDRs          []string `yaml:"cidrs"`
+	TrustedProxies []string `yaml:"trusted_proxies"`
 }
 
 // ServerCORS CORS ヘッダ設定
