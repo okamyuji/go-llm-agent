@@ -24,6 +24,20 @@ type Config struct {
 type SafetyConfig struct {
 	InputScanner   SafetyInputScanner   `yaml:"input_scanner"`
 	OutputRedactor SafetyOutputRedactor `yaml:"output_redactor"`
+	PIIRedactor    SafetyPIIRedactor    `yaml:"pii_redactor"`
+}
+
+// SafetyPIIRedactor PII リダクタの設定
+type SafetyPIIRedactor struct {
+	Enabled bool                    `yaml:"enabled"`
+	Rules   []SafetyPIIRedactorRule `yaml:"rules"`
+}
+
+// SafetyPIIRedactorRule PII リダクタの 1 ルール
+type SafetyPIIRedactorRule struct {
+	ID          string `yaml:"id"`
+	Regex       string `yaml:"regex"`
+	Replacement string `yaml:"replacement"`
 }
 
 // SafetyInputScanner 入力スキャナの設定

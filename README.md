@@ -203,6 +203,12 @@ agent:
 
 E2E スクリプトは `tests/e2e/08-hitl-approval.sh` です。fixtures/approval_exercise が Request / Submit / timeout の挙動を確認します。設計の詳細は `docs/design/08-hitl-approval.md` を参照してください。
 
+## PII 出力リダクション
+
+`safety.pii_redactor` 設定でメール、日本語電話番号、マイナンバー、IPv4 アドレスなどの個人情報パターンを agent 出力のすべての経路でマスキングします。06 番の OutputRedactor と ChainRedactor で合成され、DeltaText / Final / ツール返却 / session 保存 / OTel span 属性のいずれにも同じマスク後文字列が乗ります。
+
+E2E スクリプトは `tests/e2e/14-pii-redact.sh` で TestPIIRedactor_* と TestChainRedactor_* を -race 付きで実行します。設計の詳細は `docs/design/14-pii-redaction.md` を参照してください。
+
 ## プロンプトインジェクション検知と出力リダクション
 
 `safety.input_scanner` で入力テキストに対する正規表現スキャン、`safety.output_redactor` で出力テキストに対する機微情報マスキングを行います。すべてのツール返却テキストは `[UNTRUSTED INPUT: tool=<name>]` で始まる untrusted マーカーで包まれ、LLM に untrusted ソースであることを明示します。

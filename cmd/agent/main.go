@@ -276,13 +276,26 @@ func buildScanner(cfg *config.Config) (safety.Scanner, error) {
 	return safety.NewScannerFromConfig(c)
 }
 
-// buildRedactor cfg.Safety.OutputRedactor から safety.Redactor を構築する
+// buildRedactor cfg.Safety.OutputRedactor + PIIRedactor から ChainRedactor を構築する
+// 06 番の OutputRedactor を先に適用し、14 番の PIIRedactor を後段で適用する
 func buildRedactor(cfg *config.Config) (safety.Redactor, error) {
-	c := safety.OutputRedactorConfig{Enabled: cfg.Safety.OutputRedactor.Enabled}
+	oc := safety.OutputRedactorConfig{Enabled: cfg.Safety.OutputRedactor.Enabled}
 	for _, r := range cfg.Safety.OutputRedactor.Rules {
-		c.Rules = append(c.Rules, safety.OutputRedactorRule{ID: r.ID, Regex: r.Regex, Replacement: r.Replacement})
+		oc.Rules = append(oc.Rules, safety.OutputRedactorRule{ID: r.ID, Regex: r.Regex, Replacement: r.Replacement})
 	}
-	return safety.NewRedactorFromConfig(c)
+	out, err := safety.NewRedactorFromConfig(oc)
+	if err != nil {
+		return nil, err
+	}
+	pc := safety.PIIRedactorConfig{Enabled: cfg.Safety.PIIRedactor.Enabled}
+	for _, r := range cfg.Safety.PIIRedactor.Rules {
+		pc.Rules = append(pc.Rules, safety.PIIRule{ID: r.ID, Regex: r.Regex, Replacement: r.Replacement})
+	}
+	pii, err := safety.NewPIIRedactor(pc)
+	if err != nil {
+		return nil, err
+	}
+	return safety.ChainRedactor(out, pii), nil
 }
 
 // wrapWithRetry RetryConfig を retry.Config に変換して Provider をラップする
