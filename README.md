@@ -138,6 +138,12 @@ E2E スクリプトは `tests/e2e/07-eval-suite.sh` です。fixtures/eval_exerc
 
 E2E スクリプトは `tests/e2e/11-rag-mvp.sh` で、fixtures/rag_exercise が 2 件のノートを保存して全文検索が機能することを確認します。設計の詳細は `docs/design/11-rag-mvp.md` を参照してください。
 
+## プロンプトテンプレート版管理
+
+`internal/prompt` パッケージで `<name>@<version>.tmpl` 形式のテンプレートをファイルからロードできます。`Renderer` は `text/template` の安全なサブセットを使い、許可リスト外の変数キーや欠落キーは render エラーとして弾きます。OTel span の `prompt.version` 属性に乗せて A/B 比較する想定です。
+
+E2E スクリプトは `tests/e2e/13-prompt-template.sh` で TestLoader_* と TestRenderer_* を -race 付きで実行します。設計の詳細は `docs/design/13-prompt-template-versioning.md` を参照してください。
+
 ## MCP クライアント
 
 `internal/mcp.Client` で Model Context Protocol の stdio JSON-RPC サーバに接続し、`tools/list` でメソッドを発見し `tools/call` で実行できます。SSE transport は今後の拡張点で、現状は stdio のみサポートします。
