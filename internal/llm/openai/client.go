@@ -28,13 +28,19 @@ type Client struct {
 	http    *http.Client
 }
 
+// maxRequestTimeoutSeconds RequestTimeoutSeconds の上限 (24 時間)
+// time.Duration は int64 で約 292 年分の表現があるためオーバーフロー自体は珍しいが、
+// 設定誤りで巨大値が入ったときに sanity-check として 24h でクランプする
+const maxRequestTimeoutSeconds = 24 * 60 * 60
+
 // New Options からクライアントを生成
 func New(o Options) *Client {
 	c := o.HTTPClient
 	if c == nil {
 		timeout := 120 * time.Second
 		if o.RequestTimeoutSeconds > 0 {
-			timeout = time.Duration(o.RequestTimeoutSeconds) * time.Second
+			sec := min(o.RequestTimeoutSeconds, maxRequestTimeoutSeconds)
+			timeout = time.Duration(sec) * time.Second
 		}
 		c = &http.Client{Timeout: timeout}
 	}

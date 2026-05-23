@@ -228,6 +228,8 @@ func toolChoiceConfig(tc *llm.ToolChoice) *gemToolConfig {
 		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "NONE"}}
 	case "tool":
 		if tc.Name == "" {
+			// tool mode は tc.Name 必須。空指定は設定ミスとして警告ログを残し AUTO にフォールバックする
+			slog.Warn("gemini: tool_choice mode=tool with empty Name, falling back to AUTO")
 			return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "AUTO"}}
 		}
 		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "ANY", AllowedFunctionNames: []string{tc.Name}}}

@@ -110,7 +110,10 @@ func (s *fileNoteStore) Search(_ context.Context, query string, topK int) ([]Not
 	var ranked []scored
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	// 行番号で問題箇所を特定できるよう lineIdx を回す
+	lineIdx := 0
 	for scanner.Scan() {
+		lineIdx++
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
@@ -119,8 +122,8 @@ func (s *fileNoteStore) Search(_ context.Context, query string, topK int) ([]Not
 		if err := json.Unmarshal(line, &n); err != nil {
 			// 単一の壊れた JSONL 行で全検索を中断しない。問題行を warn ログに記録するが、
 			// err には raw line の断片やノート本文の機密情報が含まれ得るため、
-			// 詳細を伏せて record の位置と byte 長だけを記録する
-			slog.Warn("notes: skipping malformed JSONL line", "bytes", len(line))
+			// 詳細を伏せて record の位置 (1-origin の行番号) と byte 長だけを記録する
+			slog.Warn("notes: skipping malformed JSONL line", "line", lineIdx, "bytes", len(line))
 			continue
 		}
 		score := scoreNote(n, terms)

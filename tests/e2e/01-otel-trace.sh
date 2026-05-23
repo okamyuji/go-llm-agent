@@ -30,12 +30,19 @@ go build -o "$WORK/collector" ./tests/e2e/fixtures/otel_collector
 "$WORK/collector" -addr 127.0.0.1:4318 -duration 6s > "$WORK/collector.log" 2>&1 &
 COLLECTOR_PID=$!
 # 固定 sleep でなく TCP バインドを実待ちすることで CI 負荷でも flaky を避ける
+PORT_READY=0
 for _ in $(seq 1 50); do
   if (echo > /dev/tcp/127.0.0.1/4318) 2>/dev/null; then
+    PORT_READY=1
     break
   fi
   sleep 0.1
 done
+if [[ "$PORT_READY" -ne 1 ]]; then
+  printf "${RED}FAIL: fake OTLP collector did not bind 127.0.0.1:4318 within 5s${NC}\n"
+  cat "$WORK/collector.log"
+  exit 1
+fi
 
 # 2. agent をビルドする
 printf "${YELLOW}>>> building agent binary${NC}\n"

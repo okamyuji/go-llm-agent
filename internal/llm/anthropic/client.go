@@ -215,6 +215,8 @@ func toolChoiceJSON(tc *llm.ToolChoice) any {
 		return map[string]any{"type": "none"}
 	case "tool":
 		if tc.Name == "" {
+			// tool mode は tc.Name 必須。空指定は設定ミスとして警告ログを残し auto にフォールバックする
+			slog.Warn("anthropic: tool_choice mode=tool with empty Name, falling back to auto")
 			return map[string]any{"type": "auto"}
 		}
 		return map[string]any{"type": "tool", "name": tc.Name}

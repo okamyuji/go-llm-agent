@@ -9,21 +9,24 @@ import (
 	"os"
 )
 
+// rpcReq JSON-RPC 2.0 仕様で id は string / number / null のいずれも許される
+// 受信時に json.RawMessage で受け取って、応答時にそのまま返す
 type rpcReq struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      int64           `json:"id"`
+	ID      json.RawMessage `json:"id"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params"`
 }
 
-// rpcResp ID は *int64 にする
-// JSON-RPC 2.0 Parse error (-32700) の応答では "id": null を出す必要があり、
-// 値型 int64 だと nil 表現ができないため pointer 化する
+// rpcResp ID は json.RawMessage にする
+// JSON-RPC 2.0 仕様では id は string / number / null のいずれも許され、
+// Parse error 応答では明示的に "id": null を返す必要がある
+// json.RawMessage を使うとリクエストの id 表現をそのままエコーできて型情報を維持できる
 type rpcResp struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      *int64 `json:"id"`
-	Result  any    `json:"result,omitempty"`
-	Error   *err   `json:"error,omitempty"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  any             `json:"result,omitempty"`
+	Error   *err            `json:"error,omitempty"`
 }
 
 type err struct {
@@ -40,7 +43,8 @@ func main() {
 		var req rpcReq
 		if e := json.Unmarshal(sc.Bytes(), &req); e != nil {
 			// JSON-RPC 2.0 Parse error (-32700) として明示的に応答する
-			parseErr := rpcResp{JSONRPC: "2.0", Error: &err{Code: -32700, Message: "parse error: " + e.Error()}}
+			// Parse error 応答は spec に従い id を明示的に null で返す
+			parseErr := rpcResp{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &err{Code: -32700, Message: "parse error: " + e.Error()}}
 			if b, merr := json.Marshal(parseErr); merr == nil {
 				_, _ = out.Write(append(b, '\n'))
 				_ = out.Flush()
@@ -49,8 +53,11 @@ func main() {
 		}
 		var resp rpcResp
 		resp.JSONRPC = "2.0"
-		reqID := req.ID
-		resp.ID = &reqID
+		if len(req.ID) > 0 {
+			resp.ID = req.ID
+		} else {
+			resp.ID = json.RawMessage("null")
+		}
 		switch req.Method {
 		case "tools/list":
 			resp.Result = map[string]any{
