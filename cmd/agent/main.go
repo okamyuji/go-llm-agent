@@ -14,6 +14,7 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/config"
+	"github.com/okamyuji/go-llm-agent/internal/eval"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/llm/anthropic"
 	"github.com/okamyuji/go-llm-agent/internal/llm/gemini"
@@ -69,6 +70,8 @@ func mainEntry() int {
 		err = cmdTools(args)
 	case "config":
 		err = cmdConfig(args)
+	case "eval":
+		err = cmdEval(ctx, args)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 		return 0
@@ -84,7 +87,62 @@ func mainEntry() int {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: agent {chat|run|serve|tools|config|version} [flags]")
+	fmt.Fprintln(os.Stderr, "usage: agent {chat|run|serve|tools|config|eval|version} [flags]")
+}
+
+// cmdEval suite ディレクトリの YAML を読み込み agent.Service で実行してレポートを書く
+func cmdEval(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("eval", flag.ExitOnError)
+	configPath := fs.String("config", "config.yaml", "config file path")
+	suite := fs.String("suite", "eval/cases", "directory containing *.yaml eval cases")
+	report := fs.String("report", "eval/report.json", "output JSON report path")
+	model := fs.String("model", "", "model id (provider/name) override")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, reg, tools, _, err := loadDeps(ctx, *configPath)
+	if err != nil {
+		return err
+	}
+	m := *model
+	if m == "" {
+		m = cfg.DefaultModel
+	}
+	acc, err := buildBillingAccumulator(cfg)
+	if err != nil {
+		return err
+	}
+	opts := agentOptions(cfg, tools, acc)
+	svc := agent.New(reg, tools, opts...)
+	cases, err := eval.LoadSuite(*suite)
+	if err != nil {
+		return err
+	}
+	if len(cases) == 0 {
+		return fmt.Errorf("no eval cases found under %s", *suite)
+	}
+	results, err := eval.RunSuite(ctx, svc, cases, m, cfg.Agent.MaxToolHops)
+	if err != nil {
+		return err
+	}
+	scores := make([]eval.Scores, len(cases))
+	for i := range cases {
+		scores[i] = eval.Score(cases[i], results[i])
+	}
+	if err := eval.WriteReport(*report, cases, results, scores); err != nil {
+		return err
+	}
+	var passed int
+	for _, s := range scores {
+		if s.Passed {
+			passed++
+		}
+	}
+	fmt.Printf("eval report: %d/%d passed (report: %s)\n", passed, len(cases), *report)
+	if passed != len(cases) {
+		return fmt.Errorf("%d eval case(s) failed", len(cases)-passed)
+	}
+	return nil
 }
 
 func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Registry, tool.Registry, storage.SessionStore, error) {

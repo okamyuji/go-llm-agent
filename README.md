@@ -105,6 +105,32 @@ bash scripts/verify-hardening.sh
 | `agent serve`  | OpenAI 互換 HTTP API を起動します |
 | `agent tools`  | 有効な内蔵ツールを一覧表示します |
 | `agent config` | 設定ファイルの内容をダンプします |
+| `agent eval`   | ゴールデンデータセットで agent を評価します |
+
+## 評価フレームワーク
+
+`agent eval --suite <dir> --report <path>` で YAML 形式のゴールデンケースを実行し、tool_recall / tool_precision / param_accuracy / phrase_recall を計算した JSON レポートを書き出します。1 件でも合格条件を満たさなければ exit code 1 で停止するため、CI のクオリティゲートに組み込めます。
+
+```yaml
+id: refund_simple
+input:
+  system_prompt: "あなたは返金支援エージェントです"
+  messages:
+    - role: user
+      content: "order_id A89268 のマグカップだけ返金してください"
+expected:
+  tool_calls:
+    - tool: refund_item
+      params:
+        order_id: A89268
+  phrases: ["返金処理を受け付けました"]
+metrics:
+  tool_recall_min: 1.0
+  param_accuracy_min: 1.0
+  phrase_recall_min: 0.5
+```
+
+E2E スクリプトは `tests/e2e/07-eval-suite.sh` です。fixtures/eval_exercise が LoadSuite / Score / WriteReport の動作を検証します。設計の詳細は `docs/design/07-eval-framework.md` を参照してください。
 
 ## プロンプトインジェクション検知と出力リダクション
 
