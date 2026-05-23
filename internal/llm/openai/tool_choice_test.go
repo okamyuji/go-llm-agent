@@ -20,9 +20,10 @@ func TestToolChoiceJSON_RequiredMode(t *testing.T) {
 	if got := toolChoiceJSON(&llm.ToolChoice{Mode: "required"}); got != "required" {
 		t.Errorf("got %v want required", got)
 	}
-	// OpenAI には "any" は無いため、Anthropic 互換の "any" 入力は Auto へ落とす
-	if got := toolChoiceJSON(&llm.ToolChoice{Mode: "any"}); got != "auto" {
-		t.Errorf("any must fall back to auto for OpenAI, got %v", got)
+	// llm.ToolChoice.Mode "any" は強制呼び出しを意味するため、OpenAI 側でも "required" に
+	// マップして Anthropic/Gemini 側の意味と一致させる
+	if got := toolChoiceJSON(&llm.ToolChoice{Mode: "any"}); got != "required" {
+		t.Errorf("any must map to required for OpenAI, got %v", got)
 	}
 }
 

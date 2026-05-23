@@ -57,28 +57,15 @@ func TestHTTPApprover_SubmitReleasesPendingRequest(t *testing.T) {
 	}
 }
 
-func TestHTTPApprover_TimeoutDefaultDeny(t *testing.T) {
-	t.Parallel()
-	a := NewHTTPApprover()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
-	d, err := a.Request(ctx, ApprovalRequest{RunID: "r2", CallID: "c2", ToolName: "shell"})
-	if !errors.Is(err, ErrApprovalTimeout) {
-		t.Fatalf("expected ErrApprovalTimeout, got %v", err)
-	}
-	if d.Allowed {
-		t.Error("defaultDeny=true must return Allowed=false on timeout")
-	}
-}
-
 // TestHTTPApprover_TimeoutFailsClosed timeout 時は常に deny を返す fail-closed を確認する
 // 旧仕様の defaultDeny=false (timeout で Allowed=true) は fail-open のため廃止した
+// 旧 TestHTTPApprover_TimeoutDefaultDeny は同等のシナリオだったため統合した
 func TestHTTPApprover_TimeoutFailsClosed(t *testing.T) {
 	t.Parallel()
 	a := NewHTTPApprover()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	d, err := a.Request(ctx, ApprovalRequest{RunID: "r3", CallID: "c3"})
+	d, err := a.Request(ctx, ApprovalRequest{RunID: "r3", CallID: "c3", ToolName: "shell"})
 	if !errors.Is(err, ErrApprovalTimeout) {
 		t.Fatalf("timeout は ErrApprovalTimeout, got %v", err)
 	}

@@ -118,14 +118,15 @@ func InitTelemetry(ctx context.Context, c TelemetryConfig, logger *slog.Logger) 
 	if err != nil {
 		// metric exporter 作成失敗時は既に走り出している TracerProvider と
 		// trace exporter を一緒に shutdown して span flush goroutine の leak を防ぐ
-		shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		// 親 ctx は既に canceled の可能性があるため Background から独立した shutdown ctx を起こす
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		var errs []error
 		errs = append(errs, fmt.Errorf("otel metric exporter: %w", err))
-		if e := tp.Shutdown(shutdownCtx); e != nil {
+		if e := tp.Shutdown(shutdownCtx); e != nil { //nolint:contextcheck // 独立した shutdown ctx を意図的に使う
 			errs = append(errs, fmt.Errorf("tracer provider shutdown: %w", e))
 		}
-		if e := traceExp.Shutdown(shutdownCtx); e != nil {
+		if e := traceExp.Shutdown(shutdownCtx); e != nil { //nolint:contextcheck
 			errs = append(errs, fmt.Errorf("trace exporter shutdown: %w", e))
 		}
 		return nil, errors.Join(errs...)
@@ -138,13 +139,13 @@ func InitTelemetry(ctx context.Context, c TelemetryConfig, logger *slog.Logger) 
 
 	if err := installInstruments(mp); err != nil {
 		// 既に作成済みの TracerProvider と MeterProvider を best-effort で閉じる
-		// 親 ctx から派生させて contextcheck を満たしつつ、独自の短いタイムアウトを掛ける
-		shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		// 親 ctx は既に canceled の可能性があるため Background から独立した shutdown ctx を起こす
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if shutErr := tp.Shutdown(shutdownCtx); shutErr != nil && logger != nil {
+		if shutErr := tp.Shutdown(shutdownCtx); shutErr != nil && logger != nil { //nolint:contextcheck
 			logger.Warn("otel: tracer provider shutdown failed after install error", "err", shutErr)
 		}
-		if shutErr := mp.Shutdown(shutdownCtx); shutErr != nil && logger != nil {
+		if shutErr := mp.Shutdown(shutdownCtx); shutErr != nil && logger != nil { //nolint:contextcheck
 			logger.Warn("otel: meter provider shutdown failed after install error", "err", shutErr)
 		}
 		return nil, err
@@ -160,12 +161,18 @@ func InitTelemetry(ctx context.Context, c TelemetryConfig, logger *slog.Logger) 
 		)
 	}
 
+	// shutdown 呼び出し側 (main の shutdown フック等) が canceled ctx を渡してきても
+	// span/metric の最終 flush が確実に走るよう、Background ベースの内部 ctx を起こす
+	// 入力 shutdownCtx は将来用に残すが、内部ロジックでは使わない設計とする
 	shutdown := func(shutdownCtx context.Context) error {
+		_ = shutdownCtx
+		ctxBG, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		var errs []error
-		if err := tp.Shutdown(shutdownCtx); err != nil {
+		if err := tp.Shutdown(ctxBG); err != nil { //nolint:contextcheck
 			errs = append(errs, fmt.Errorf("tracer provider shutdown: %w", err))
 		}
-		if err := mp.Shutdown(shutdownCtx); err != nil {
+		if err := mp.Shutdown(ctxBG); err != nil { //nolint:contextcheck
 			errs = append(errs, fmt.Errorf("meter provider shutdown: %w", err))
 		}
 		return errors.Join(errs...)

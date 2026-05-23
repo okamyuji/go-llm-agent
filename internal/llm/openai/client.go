@@ -185,14 +185,17 @@ func toolChoiceJSON(tc *llm.ToolChoice) any {
 	switch tc.Mode {
 	case "auto", "":
 		return "auto"
-	case "required":
+	case "required", "any":
+		// llm.ToolChoice.Mode "any" は「強制ツール呼び出し」を意図しているため
+		// OpenAI 互換でも "required" にマップして強制セマンティクスを維持する
+		// (旧実装は "any" を "auto" に倒していたが、Anthropic / Gemini 側の挙動と矛盾していた)
 		return "required"
-	case "any":
-		return "auto"
 	case "none":
 		return "none"
 	case "tool":
 		if tc.Name == "" {
+			// tool mode は tc.Name 必須。空指定は設定ミスとして警告ログを残し auto にフォールバックする
+			slog.Warn("openai: tool_choice mode=tool with empty Name, falling back to auto")
 			return "auto"
 		}
 		return map[string]any{
