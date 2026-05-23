@@ -44,6 +44,7 @@ func NewFileLoader(dir string) Loader {
 
 // Load name@version を <dir>/<name>@<version>.tmpl から読む
 // version 省略時は <name>.tmpl にフォールバック
+// name と version はパスセパレータや ".." を含む値を受け付けない（path traversal 対策）
 func (f *fileLoader) Load(ref string) (Template, error) {
 	if ref == "" {
 		return Template{}, errors.New("prompt: empty ref")
@@ -52,17 +53,43 @@ func (f *fileLoader) Load(ref string) (Template, error) {
 	if name == "" {
 		return Template{}, fmt.Errorf("prompt: ref must include name, got %q", ref)
 	}
+	if !isSafeComponent(name) || (version != "" && !isSafeComponent(version)) {
+		return Template{}, fmt.Errorf("prompt: ref contains forbidden characters got=%q", ref)
+	}
 	var path string
 	if version != "" {
 		path = filepath.Join(f.dir, fmt.Sprintf("%s@%s.tmpl", name, version))
 	} else {
 		path = filepath.Join(f.dir, name+".tmpl")
 	}
+	// 念のため解決後のパスが dir 配下に収まることも検査する
+	cleanedDir, errDir := filepath.Abs(f.dir)
+	cleanedPath, errPath := filepath.Abs(path)
+	if errDir != nil || errPath != nil {
+		return Template{}, fmt.Errorf("prompt: resolve path failed: %v / %v", errDir, errPath)
+	}
+	if !strings.HasPrefix(cleanedPath, cleanedDir+string(filepath.Separator)) && cleanedPath != cleanedDir {
+		return Template{}, fmt.Errorf("prompt: path escapes loader dir got=%q", path)
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return Template{}, fmt.Errorf("prompt read %s: %w", path, err)
 	}
 	return Template{Name: name, Version: version, Body: string(b)}, nil
+}
+
+// isSafeComponent name または version のコンポーネントが安全か検査する
+// path separator / 親ディレクトリ参照 / NUL 文字を排除する
+func isSafeComponent(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	for _, r := range s {
+		if r == '/' || r == '\\' || r == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // Renderer テンプレートを展開する

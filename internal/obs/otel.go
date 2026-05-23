@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -48,7 +49,11 @@ type telemetryInstruments struct {
 }
 
 // global 全体で 1 つだけ保持する計測器セット
-var global *telemetryInstruments
+// 並行する InitTelemetry 呼び出しでも RWMutex で安全に書き換える
+var (
+	global   *telemetryInstruments
+	globalMu sync.RWMutex
+)
 
 // noopShutdown 何もしないシャットダウン関数を返す
 func noopShutdown() Shutdown {
@@ -187,6 +192,7 @@ func installInstruments(mp metric.MeterProvider) error {
 	if err != nil {
 		return fmt.Errorf("create fallback counter: %w", err)
 	}
+	globalMu.Lock()
 	global = &telemetryInstruments{
 		tokenInput:    tokenInput,
 		tokenOutput:   tokenOutput,
@@ -196,7 +202,15 @@ func installInstruments(mp metric.MeterProvider) error {
 		retryCounter:  retryCounter,
 		fallbackTotal: fallbackTotal,
 	}
+	globalMu.Unlock()
 	return nil
+}
+
+// globalInstruments 計測器セットを安全に読み出す
+func globalInstruments() *telemetryInstruments {
+	globalMu.RLock()
+	defer globalMu.RUnlock()
+	return global
 }
 
 // Tracer 計装ライブラリ共通の Tracer を返す。未初期化時は no-op
@@ -229,7 +243,8 @@ func StartToolSpan(ctx context.Context, toolName, callID string) (context.Contex
 
 // RecordTokens 入出力トークン数のカウンタを進める
 func RecordTokens(ctx context.Context, providerName, model string, in, out int) {
-	if global == nil {
+	g := globalInstruments()
+	if g == nil {
 		return
 	}
 	attrs := metric.WithAttributes(
@@ -237,33 +252,35 @@ func RecordTokens(ctx context.Context, providerName, model string, in, out int) 
 		attribute.String("llm.model", model),
 	)
 	if in > 0 {
-		global.tokenInput.Add(ctx, int64(in), attrs)
+		g.tokenInput.Add(ctx, int64(in), attrs)
 	}
 	if out > 0 {
-		global.tokenOutput.Add(ctx, int64(out), attrs)
+		g.tokenOutput.Add(ctx, int64(out), attrs)
 	}
 }
 
 // RecordToolOutcome ツール実行の成否とレイテンシを記録する
 func RecordToolOutcome(ctx context.Context, toolName string, ok bool, latency time.Duration) {
-	if global == nil {
+	g := globalInstruments()
+	if g == nil {
 		return
 	}
 	attrs := metric.WithAttributes(attribute.String("tool.name", toolName))
-	global.toolDuration.Record(ctx, float64(latency.Milliseconds()), attrs)
+	g.toolDuration.Record(ctx, float64(latency.Milliseconds()), attrs)
 	if ok {
-		global.toolSuccess.Add(ctx, 1, attrs)
+		g.toolSuccess.Add(ctx, 1, attrs)
 	} else {
-		global.toolFailure.Add(ctx, 1, attrs)
+		g.toolFailure.Add(ctx, 1, attrs)
 	}
 }
 
 // RecordRetry LLM 呼び出しのリトライ試行数を計上する
 func RecordRetry(ctx context.Context, providerName string, attempt int) {
-	if global == nil {
+	g := globalInstruments()
+	if g == nil {
 		return
 	}
-	global.retryCounter.Add(ctx, 1, metric.WithAttributes(
+	g.retryCounter.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("llm.provider", providerName),
 		attribute.Int("llm.retry.attempt", attempt),
 	))
@@ -271,10 +288,11 @@ func RecordRetry(ctx context.Context, providerName string, attempt int) {
 
 // RecordFallback プロバイダーフォールバック発火を計上する
 func RecordFallback(ctx context.Context, fromProvider, toProvider string) {
-	if global == nil {
+	g := globalInstruments()
+	if g == nil {
 		return
 	}
-	global.fallbackTotal.Add(ctx, 1, metric.WithAttributes(
+	g.fallbackTotal.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("llm.fallback.from", fromProvider),
 		attribute.String("llm.fallback.to", toProvider),
 	))

@@ -67,8 +67,9 @@ func TestHTTPApprover_TimeoutDefaultAllow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	d, err := a.Request(ctx, ApprovalRequest{RunID: "r3", CallID: "c3"})
-	if !errors.Is(err, ErrApprovalTimeout) {
-		t.Fatalf("expected ErrApprovalTimeout, got %v", err)
+	// default allow は意味的に「許可」なのでエラーは付けない (CodeRabbit 指摘 #17 反映)
+	if err != nil {
+		t.Fatalf("default allow timeout must not return error, got %v", err)
 	}
 	if !d.Allowed {
 		t.Error("defaultDeny=false must return Allowed=true on timeout")

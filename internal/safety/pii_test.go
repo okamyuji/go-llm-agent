@@ -58,8 +58,14 @@ func TestPIIRedactor_InvalidRegexErrors(t *testing.T) {
 
 func TestChainRedactor_WithPIIAndOutput(t *testing.T) {
 	t.Parallel()
-	out, _ := NewRedactorFromConfig(OutputRedactorConfig{Enabled: true, Rules: []OutputRedactorRule{{ID: "key", Regex: `sk-[A-Z0-9]+`, Replacement: "[KEY]"}}})
-	pii, _ := NewPIIRedactor(PIIRedactorConfig{Enabled: true, Rules: []PIIRule{{ID: "email", Regex: `[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`, Replacement: "[EMAIL]"}}})
+	out, err := NewRedactorFromConfig(OutputRedactorConfig{Enabled: true, Rules: []OutputRedactorRule{{ID: "key", Regex: `sk-[A-Z0-9]+`, Replacement: "[KEY]"}}})
+	if err != nil {
+		t.Fatalf("NewRedactorFromConfig: %v", err)
+	}
+	pii, err := NewPIIRedactor(PIIRedactorConfig{Enabled: true, Rules: []PIIRule{{ID: "email", Regex: `[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`, Replacement: "[EMAIL]"}}})
+	if err != nil {
+		t.Fatalf("NewPIIRedactor: %v", err)
+	}
 	chained := ChainRedactor(out, pii)
 	got := chained.Redact("k=sk-AAA mail=a@b.com")
 	if !contains(got, "[KEY]") || !contains(got, "[EMAIL]") {

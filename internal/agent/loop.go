@@ -38,6 +38,7 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 	tools := s.specs()
 
 	validationRetries := 0
+	lastValidationCallID := ""
 	maxValidationRetries := max(in.ValidationMaxRetries, 0)
 	if maxValidationRetries == 0 {
 		maxValidationRetries = max(s.defaultMaxRetries, 0)
@@ -134,6 +135,11 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 			return err
 		}
 		if s.validator != nil {
+			// 異なる ToolCall に切り替わった場合は budget を per-call で初期化する
+			if pendingCall.ID != lastValidationCallID {
+				validationRetries = 0
+				lastValidationCallID = pendingCall.ID
+			}
 			if vok, vmsg := s.validator.Validate(pendingCall.Name, pendingCall.Arguments); !vok {
 				if validationRetries < maxValidationRetries {
 					validationRetries++

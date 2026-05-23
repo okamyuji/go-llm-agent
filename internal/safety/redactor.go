@@ -70,11 +70,14 @@ type chainRedactor struct {
 }
 
 // ChainRedactor 複数の Redactor を順に適用する Redactor を返す
-// nil や noop だけのチェインは noop と等価
+// nil や noopRedactor だけのチェインは noop と等価
 func ChainRedactor(rs ...Redactor) Redactor {
 	cleaned := make([]Redactor, 0, len(rs))
 	for _, r := range rs {
 		if r == nil {
+			continue
+		}
+		if _, isNoop := r.(noopRedactor); isNoop {
 			continue
 		}
 		cleaned = append(cleaned, r)

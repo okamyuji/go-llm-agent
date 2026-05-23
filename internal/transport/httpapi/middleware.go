@@ -100,13 +100,15 @@ func (l *TokenBucketLimiter) Handler(next http.Handler) http.Handler {
 }
 
 // allow リクエストが許可されるか判定する
+// per_token=true のとき Bearer Token が無いリクエストは r.RemoteAddr ではなく
+// 専用バケットに集約して NAT 経由のレート上限バイパスを防ぐ
 func (l *TokenBucketLimiter) allow(r *http.Request) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.PerToken {
 		key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if key == "" {
-			key = r.RemoteAddr
+			key = "__anonymous__"
 		}
 		lim, ok := l.perToken[key]
 		if !ok {
@@ -192,13 +194,16 @@ func (c *CORS) Handler(next http.Handler) http.Handler {
 	for _, o := range c.AllowOrigins {
 		originSet[o] = struct{}{}
 	}
+	_, hasWildcard := originSet["*"]
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin != "" {
-			if _, ok := originSet[origin]; ok || originSet["*"] != struct{}{} && len(originSet) == 0 {
+			if _, ok := originSet[origin]; ok {
+				// 明示許可された Origin は echo して credential 互換を保つ
 				w.Header().Set("Access-Control-Allow-Origin", origin)
-			} else if len(c.AllowOrigins) > 0 {
-				w.Header().Set("Access-Control-Allow-Origin", c.AllowOrigins[0])
+			} else if hasWildcard {
+				// "*" 指定時のみ wildcard を返す。未許可の Origin を勝手に echo しない
+				w.Header().Set("Access-Control-Allow-Origin", "*")
 			}
 		}
 		if len(c.AllowMethods) > 0 {

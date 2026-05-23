@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -51,5 +52,10 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		// Content-Type ヘッダ送信後は http.Error でステータス変更できないため、
+		// 運用者に伝える手段として slog.Warn のみ残す。レスポンス本文の途中切断は
+		// クライアント側の JSON パースエラーで検出されることを期待する
+		slog.WarnContext(r.Context(), "httpapi: failed to encode /v1/usage response", "err", err)
+	}
 }

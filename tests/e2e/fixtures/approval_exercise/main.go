@@ -25,9 +25,19 @@ func main() {
 		resultCh <- d
 	}()
 
-	time.Sleep(60 * time.Millisecond)
-	if !ap.Submit(agent.ApprovalDecision{RunID: "R", CallID: "C1", Allowed: true, Reviewer: "tester"}) {
-		fmt.Fprintln(os.Stderr, "Submit failed")
+	// Request の内部 channel 登録が終わるまで Submit が失敗するため、
+	// 短い間隔でリトライして race を避ける
+	deadline := time.Now().Add(2 * time.Second)
+	submitted := false
+	for time.Now().Before(deadline) {
+		if ap.Submit(agent.ApprovalDecision{RunID: "R", CallID: "C1", Allowed: true, Reviewer: "tester"}) {
+			submitted = true
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !submitted {
+		fmt.Fprintln(os.Stderr, "Submit failed after retries")
 		os.Exit(2)
 	}
 	d := <-resultCh

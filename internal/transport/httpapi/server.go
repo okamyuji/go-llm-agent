@@ -55,12 +55,21 @@ func (s *Server) WithMiddleware(auth *BearerAuth, limiter *TokenBucketLimiter, a
 }
 
 // Handler http.Handler を返す。WithMiddleware で設定済みの場合は順に Allowlist → Auth → RateLimit → CORS で巻く
+// 各ミドルウェアが nil の場合はその層をスキップする。WithMiddleware を呼ばない経路でも panic させない
 func (s *Server) Handler() http.Handler {
 	var h http.Handler = s.mux
-	h = s.cors.Handler(h)
-	h = s.limiter.Handler(h)
-	h = s.auth.Handler(h)
-	h = s.allowlist.Handler(h)
+	if s.cors != nil {
+		h = s.cors.Handler(h)
+	}
+	if s.limiter != nil {
+		h = s.limiter.Handler(h)
+	}
+	if s.auth != nil {
+		h = s.auth.Handler(h)
+	}
+	if s.allowlist != nil {
+		h = s.allowlist.Handler(h)
+	}
 	return h
 }
 

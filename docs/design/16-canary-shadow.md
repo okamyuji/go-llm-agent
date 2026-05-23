@@ -37,7 +37,7 @@ agent:
     enabled: false
     model: openai/gpt-4o
     ratio: 0.10
-    record_dir: ~/.local/state/go-llm-agent/shadow
+    record_dir: "${XDG_STATE_HOME:-.}/go-llm-agent/shadow"
 ```
 
 ### 5.3 公開インターフェース

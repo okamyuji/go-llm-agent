@@ -29,12 +29,13 @@ func TestResolveMinVersion(t *testing.T) {
 		in   string
 		want uint16
 	}{
-		{"1.0", tls.VersionTLS10},
-		{"1.1", tls.VersionTLS11},
+		// TLS 1.0 / 1.1 は deprecated として TLS 1.2 にフォールバックする
+		{"1.0", tls.VersionTLS12},
+		{"1.1", tls.VersionTLS12},
 		{"1.2", tls.VersionTLS12},
 		{"1.3", tls.VersionTLS13},
-		{"", tls.VersionTLS13},
-		{"bogus", tls.VersionTLS13},
+		{"", tls.VersionTLS12},
+		{"bogus", tls.VersionTLS12},
 	}
 	for _, c := range cases {
 		if got := resolveMinVersion(c.in); got != c.want {

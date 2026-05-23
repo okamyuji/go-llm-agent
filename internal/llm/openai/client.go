@@ -171,10 +171,15 @@ func toPayload(req llm.ChatRequest, stream bool) chatPayload {
 
 // toolChoiceJSON ChatRequest.ToolChoice を OpenAI 仕様の値に変換する
 // auto/required/none は文字列、tool 指定はオブジェクト形式で返す
+// OpenAI の "any" 概念は無く、Anthropic の "any" は実質「必ずツール呼び出し」だが、
+// vendor 間混乱を避けるため OpenAI 側では "any" を Auto (model-may-call-tools) に
+// マッピングする。強制呼び出しを意図するなら呼び出し側が "required" を指定する
 func toolChoiceJSON(tc *llm.ToolChoice) any {
 	switch tc.Mode {
-	case "required", "any":
+	case "required":
 		return "required"
+	case "any":
+		return "auto"
 	case "none":
 		return "none"
 	case "tool":

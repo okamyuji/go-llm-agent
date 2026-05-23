@@ -20,8 +20,9 @@ func TestToolChoiceJSON_RequiredMode(t *testing.T) {
 	if got := toolChoiceJSON(&llm.ToolChoice{Mode: "required"}); got != "required" {
 		t.Errorf("got %v want required", got)
 	}
-	if got := toolChoiceJSON(&llm.ToolChoice{Mode: "any"}); got != "required" {
-		t.Errorf("any must alias to required, got %v", got)
+	// OpenAI には "any" は無いため、Anthropic 互換の "any" 入力は Auto へ落とす
+	if got := toolChoiceJSON(&llm.ToolChoice{Mode: "any"}); got != "auto" {
+		t.Errorf("any must fall back to auto for OpenAI, got %v", got)
 	}
 }
 
@@ -35,7 +36,10 @@ func TestToolChoiceJSON_NoneMode(t *testing.T) {
 func TestToolChoiceJSON_ToolWithName(t *testing.T) {
 	t.Parallel()
 	got := toolChoiceJSON(&llm.ToolChoice{Mode: "tool", Name: "fs_read"})
-	b, _ := json.Marshal(got)
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
 	if string(b) != `{"function":{"name":"fs_read"},"type":"function"}` {
 		t.Errorf("unexpected JSON: %s", string(b))
 	}

@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -116,7 +115,8 @@ func (s *fileNoteStore) Search(_ context.Context, query string, topK int) ([]Not
 			ranked = append(ranked, scored{n: n, score: score})
 		}
 	}
-	if err := scanner.Err(); err != nil && !errors.Is(err, errors.New("EOF")) {
+	if err := scanner.Err(); err != nil {
+		// bufio.Scanner は EOF を err として返さないため、err != nil は実エラーのみ
 		return nil, fmt.Errorf("notes scan: %w", err)
 	}
 	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })

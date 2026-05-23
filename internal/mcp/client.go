@@ -61,15 +61,20 @@ func NewStdioClient(ctx context.Context, command []string) (*Client, error) {
 }
 
 // Close stdin を閉じて子プロセスを終了させる
+// stdin.Close と cmd.Wait のエラーを errors.Join で集約して返す
 func (c *Client) Close() error {
+	var errs []error
 	if c.in != nil {
-		_ = c.in.Close()
+		if err := c.in.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	if c.cmd == nil {
-		return nil
+	if c.cmd != nil {
+		if err := c.cmd.Wait(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	_ = c.cmd.Wait()
-	return nil
+	return errors.Join(errs...)
 }
 
 // rpcRequest JSON-RPC 2.0 リクエスト

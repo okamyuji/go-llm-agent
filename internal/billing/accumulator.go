@@ -133,9 +133,31 @@ func (a *accumulator) Add(ctx context.Context, sessionID, providerName, model st
 	dailySoFar.At = now
 	a.daily[date] = dailySoFar
 	a.dailyCost[date] = projectedDailyCost
+	// rollback 用に直前のスナップショットを取り戻すための値を保存
+	prevSess := a.sessions[sessionID]
+	prevDaily := a.daily[date]
+	prevDailyCost := a.dailyCost[date]
+	_ = prevSess // 直近の値で上書きされている
+	_ = prevDaily
+	_ = prevDailyCost
 	a.mu.Unlock()
 
 	if err := a.store.Append(ctx, snap); err != nil {
+		// 永続化失敗時は in-memory aggregate を巻き戻して divergence を防ぐ
+		a.mu.Lock()
+		// sessSoFar を加算前の状態に戻すには in/out/cost を差し引く
+		rb := a.sessions[sessionID]
+		rb.InputTokens -= in
+		rb.OutputTokens -= out
+		rb.CostJPY -= cost
+		a.sessions[sessionID] = rb
+		rd := a.daily[date]
+		rd.InputTokens -= in
+		rd.OutputTokens -= out
+		rd.CostJPY -= cost
+		a.daily[date] = rd
+		a.dailyCost[date] -= cost
+		a.mu.Unlock()
 		return Snapshot{}, fmt.Errorf("billing append: %w", err)
 	}
 	return snap, nil

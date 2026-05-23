@@ -51,17 +51,15 @@ func BuildTLSConfig(c TLSConfig) (*tls.Config, error) {
 }
 
 // resolveMinVersion 文字列から TLS バージョン定数に解決する
+// TLS 1.0 / 1.1 は IETF RFC 8996 で deprecated のため受け付けない。
+// 空または未知の値はセキュアな既定として TLS 1.2 に落とす
 func resolveMinVersion(v string) uint16 {
 	switch v {
-	case "1.0":
-		return tls.VersionTLS10
-	case "1.1":
-		return tls.VersionTLS11
 	case "1.2":
 		return tls.VersionTLS12
-	case "1.3", "":
+	case "1.3":
 		return tls.VersionTLS13
 	default:
-		return tls.VersionTLS13
+		return tls.VersionTLS12
 	}
 }

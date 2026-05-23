@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/xeipuuv/gojsonschema"
 
@@ -20,7 +21,9 @@ type schemaValidator struct {
 }
 
 // NewSchemaValidator tool.Registry に登録されたスキーマからバリデータを構築する
-// スキーマ未指定または不正なツールは「常に通過」として扱う
+// スキーマ未指定または不正なツールは「常に通過」として扱う。
+// gojsonschema コンパイル失敗時は slog.Warn で運用者に通知し、対象ツールは
+// バリデーション無効として扱う（fail-open）
 func NewSchemaValidator(reg tool.Registry) SchemaValidator {
 	out := &schemaValidator{schemas: map[string]*gojsonschema.Schema{}}
 	for _, sp := range reg.List() {
@@ -30,6 +33,8 @@ func NewSchemaValidator(reg tool.Registry) SchemaValidator {
 		loader := gojsonschema.NewBytesLoader(sp.Schema)
 		sch, err := gojsonschema.NewSchema(loader)
 		if err != nil {
+			slog.Warn("agent: schema compile failed; validation will be skipped for this tool",
+				"tool", sp.Name, "err", err)
 			continue
 		}
 		out.schemas[sp.Name] = sch

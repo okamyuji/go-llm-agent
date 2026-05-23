@@ -43,21 +43,28 @@ func NewRegistryWithFallback(providers map[string]Provider, allow map[string][]s
 	return &registry{providers: providers, allowModels: allow, fallback: fallback}
 }
 
-// Resolve "openai/gpt-4.1-mini" 形式の文字列を Provider と純モデル名に分解
-// プロバイダーごとの allow_models が設定されている場合は照合する
-func (r *registry) Resolve(model string) (Provider, string, error) {
+// parseAndLookup model 文字列 ("provider/name") を解析し許可リストを照合する内部ヘルパ
+func (r *registry) parseAndLookup(model string) (Provider, string, string, error) {
 	pname, name, ok := strings.Cut(model, "/")
 	if !ok || pname == "" || name == "" {
-		return nil, "", fmt.Errorf("model は provider/name 形式である必要があります got=%q", model)
+		return nil, "", "", fmt.Errorf("model は provider/name 形式である必要があります got=%q", model)
 	}
 	p, ok := r.providers[pname]
 	if !ok {
-		return nil, "", fmt.Errorf("provider %q は登録されていません", pname)
+		return nil, "", "", fmt.Errorf("provider %q は登録されていません", pname)
 	}
-	if allow := r.allowModels[pname]; len(allow) > 0 {
-		if !slices.Contains(allow, name) {
-			return nil, "", fmt.Errorf("model %q は provider %q の allow_models に含まれていません", name, pname)
-		}
+	if allow := r.allowModels[pname]; len(allow) > 0 && !slices.Contains(allow, name) {
+		return nil, "", "", fmt.Errorf("model %q は provider %q の allow_models に含まれていません", name, pname)
+	}
+	return p, pname, name, nil
+}
+
+// Resolve "openai/gpt-4.1-mini" 形式の文字列を Provider と純モデル名に分解
+// プロバイダーごとの allow_models が設定されている場合は照合する
+func (r *registry) Resolve(model string) (Provider, string, error) {
+	p, _, name, err := r.parseAndLookup(model)
+	if err != nil {
+		return nil, "", err
 	}
 	return p, name, nil
 }
@@ -66,16 +73,9 @@ func (r *registry) Resolve(model string) (Provider, string, error) {
 // fallback が未設定なら fallbackProvider は nil で返る
 // fallback プロバイダーは primary と同じモデル名を使い、要求モデル名で許可チェックを再度行う
 func (r *registry) ResolveWithFallback(model string) (Provider, string, Provider, string, error) {
-	pname, name, ok := strings.Cut(model, "/")
-	if !ok || pname == "" || name == "" {
-		return nil, "", nil, "", fmt.Errorf("model は provider/name 形式である必要があります got=%q", model)
-	}
-	primary, ok := r.providers[pname]
-	if !ok {
-		return nil, "", nil, "", fmt.Errorf("provider %q は登録されていません", pname)
-	}
-	if allow := r.allowModels[pname]; len(allow) > 0 && !slices.Contains(allow, name) {
-		return nil, "", nil, "", fmt.Errorf("model %q は provider %q の allow_models に含まれていません", name, pname)
+	primary, pname, name, err := r.parseAndLookup(model)
+	if err != nil {
+		return nil, "", nil, "", err
 	}
 	var fallback Provider
 	var fallbackModel string

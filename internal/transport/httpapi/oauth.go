@@ -3,7 +3,6 @@ package httpapi
 import (
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -54,6 +53,9 @@ func NewJWTVerifier(c JWTVerifierConfig, secretLookup func(env string) (string, 
 
 // Handler 次の Handler を JWT 検証で包む
 // /healthz はスキップする
+// 現状の MVP では実 JWT 検証ロジックが未実装のため、有効化時は fail-closed で
+// 503 Service Unavailable を返す。実装は go-jwt と JWKS fetch を統合する将来
+// フェーズで完成させる
 func (j *JWTVerifier) Handler(next http.Handler) http.Handler {
 	if j == nil {
 		return next
@@ -63,34 +65,9 @@ func (j *JWTVerifier) Handler(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		auth := r.Header.Get("Authorization")
-		const prefix = "Bearer "
-		if !strings.HasPrefix(auth, prefix) {
-			http.Error(w, "missing bearer JWT", http.StatusUnauthorized)
-			return
-		}
-		token := strings.TrimPrefix(auth, prefix)
-		if !strings.HasPrefix(token, "eyJ") {
-			http.Error(w, "value is not a JWT", http.StatusUnauthorized)
-			return
-		}
-		// MVP: 実 JWT 検証は go-jwt 統合まで保留し、issuer 文字列が含まれているか
-		// だけを確認するスタブとする。これは本来のセキュリティ用途ではなく、
-		// パイプライン全体の配線とエンドポイント疎通の確認だけに使う
-		if j.Issuer != "" && !strings.Contains(token, encodeIssuerStub(j.Issuer)) {
-			http.Error(w, "issuer mismatch", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
+		// 実 JWT 検証が未配線のため fail-closed で拒否する。Bearer Token (04 番) を
+		// 併用しているなら BearerAuth が先に通すため、ここに到達するのは
+		// eyJ で始まる JWT 形式の値を投入された場合のみとなる
+		http.Error(w, "JWT verification not implemented (server-side); enable OAuth2 only after JWKS integration is configured", http.StatusServiceUnavailable)
 	})
-}
-
-// encodeIssuerStub MVP の擬似マッチ用ハッシュ。本実装では JWT payload を decode して
-// iss クレームを比較する
-func encodeIssuerStub(s string) string {
-	// 単純な substring 検査で十分なので長さ確認のみ行う
-	if len(s) > 8 {
-		return s[:8]
-	}
-	return s
 }

@@ -30,17 +30,29 @@ func (r *fakeRegistry) List() []tool.Spec {
 
 // sleepyTool sleep してから OK を返すツール
 type sleepyTool struct {
-	name  string
-	delay time.Duration
-	hits  *int32
+	name    string
+	delay   time.Duration
+	hits    *int32
+	started chan struct{}   // nil の場合は未使用、設定されている場合は Execute 開始時に閉じる
+	gate    <-chan struct{} // nil の場合は無視、設定されている場合は受信できるまで待機
 }
 
 func (st *sleepyTool) Spec() tool.Spec { return tool.Spec{Name: st.name} }
 func (st *sleepyTool) Execute(ctx context.Context, _ json.RawMessage) (tool.Result, error) {
 	atomic.AddInt32(st.hits, 1)
-	select {
-	case <-time.After(st.delay):
-	case <-ctx.Done():
+	if st.started != nil {
+		close(st.started)
+	}
+	if st.gate != nil {
+		select {
+		case <-st.gate:
+		case <-ctx.Done():
+		}
+	} else {
+		select {
+		case <-time.After(st.delay):
+		case <-ctx.Done():
+		}
 	}
 	return tool.Result{Content: "ok-" + st.name}, nil
 }
@@ -48,23 +60,40 @@ func (st *sleepyTool) Execute(ctx context.Context, _ json.RawMessage) (tool.Resu
 func TestExecuteToolsParallel_RunsConcurrently(t *testing.T) {
 	t.Parallel()
 	var hits int32
+	gate := make(chan struct{})
+	startA := make(chan struct{})
+	startB := make(chan struct{})
+	startC := make(chan struct{})
 	reg := &fakeRegistry{tools: map[string]tool.Tool{
-		"a": &sleepyTool{name: "a", delay: 50 * time.Millisecond, hits: &hits},
-		"b": &sleepyTool{name: "b", delay: 50 * time.Millisecond, hits: &hits},
-		"c": &sleepyTool{name: "c", delay: 50 * time.Millisecond, hits: &hits},
+		"a": &sleepyTool{name: "a", hits: &hits, started: startA, gate: gate},
+		"b": &sleepyTool{name: "b", hits: &hits, started: startB, gate: gate},
+		"c": &sleepyTool{name: "c", hits: &hits, started: startC, gate: gate},
 	}}
 	s := &service{tools: reg}
 
 	calls := []llm.ToolCall{{ID: "1", Name: "a"}, {ID: "2", Name: "b"}, {ID: "3", Name: "c"}}
-	start := time.Now()
-	out := s.ExecuteToolsParallel(context.Background(), "sess", calls, ParallelToolsOptions{MaxConcurrency: 3})
-	elapsed := time.Since(start)
+
+	resultCh := make(chan []ParallelOutcome, 1)
+	go func() {
+		resultCh <- s.ExecuteToolsParallel(context.Background(), "sess", calls, ParallelToolsOptions{MaxConcurrency: 3})
+	}()
+
+	// 3 件すべてが Execute に入ったことを確認 (同時起動の決定論的検出)
+	waitStarted := func(ch chan struct{}, name string) {
+		select {
+		case <-ch:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("tool %s did not start within timeout", name)
+		}
+	}
+	waitStarted(startA, "a")
+	waitStarted(startB, "b")
+	waitStarted(startC, "c")
+	close(gate)
+
+	out := <-resultCh
 	if len(out) != 3 {
 		t.Fatalf("expected 3 outcomes, got %d", len(out))
-	}
-	// 直列なら 150ms 以上、並列なら 100ms 未満
-	if elapsed > 120*time.Millisecond {
-		t.Errorf("expected concurrent (<120ms), elapsed=%v", elapsed)
 	}
 }
 
