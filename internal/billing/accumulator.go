@@ -114,7 +114,7 @@ func (a *accumulator) Add(ctx context.Context, sessionID, providerName, model st
 	// 初回 Add 失敗時にゼロ値ではなく中途半端な状態が残ったままになる
 	prevSess, sessExisted := a.sessions[sessionID]
 	prevDaily, dailyExisted := a.daily[date]
-	prevDailyCost := a.dailyCost[date]
+	prevDailyCost, dailyCostExisted := a.dailyCost[date]
 
 	sessSoFar := prevSess
 	projectedTokens := sessSoFar.InputTokens + sessSoFar.OutputTokens + in + out
@@ -166,7 +166,11 @@ func (a *accumulator) Add(ctx context.Context, sessionID, providerName, model st
 		} else {
 			delete(a.daily, date)
 		}
-		a.dailyCost[date] = prevDailyCost
+		if dailyCostExisted {
+			a.dailyCost[date] = prevDailyCost
+		} else {
+			delete(a.dailyCost, date)
+		}
 		return Snapshot{}, fmt.Errorf("billing append: %w", err)
 	}
 	return snap, nil

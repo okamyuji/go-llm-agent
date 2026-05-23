@@ -76,7 +76,9 @@ agent:
     enabled: true
     max_retries: 2
   # HITL ツール承認。required_tools に含まれるツールは人間承認まで実行を保留する。
-  # default_decision は "deny" または "allow" で、timeout 到達時の挙動を決める。
+  # default_decision: "deny" のみサポート (timeout 時の fail-closed)。"allow" は
+  # 廃止され、起動時に config エラーで弾かれる。
+  # timeout_seconds は required_tools 指定時に正の整数で必須 (起動時 validate)。
   approval:
     required_tools: []
     timeout_seconds: 30
@@ -164,6 +166,9 @@ safety:
   input_scanner:
     enabled: true
     block_on_match: false
+    # ignore_previous / system_role_inject はヒューリスティックな汎用ルール
+      # 想定外の自然文に対する偽陽性のリスクがあるため、本番運用ではプロジェクト固有の
+      # patterns を追記し、必要なら以下のサンプルルールを差し替えてください
     patterns:
       - id: ignore_previous
         regex: "(?i)ignore (the )?previous instructions"
@@ -196,6 +201,10 @@ safety:
         replacement: "[REDACTED:JP_MYNUMBER]"
       # ipv4 は 0-255 のオクテット範囲を厳密に判定し、version 番号 (例: 1.2.3.4) 風の文字列に
       # 過剰反応しないようにする
+      # 注意 "1.2.3.4" のような短い valid IPv4 はそれ自体がセマンティックバージョンの命名と
+      # 衝突するため、リリースノート等のアプリ文脈で偽陽性が出る可能性がある
+      # その場合はこのルールを無効化するか、negative lookbehind 非対応の RE2 制約下で
+      # 単純な "version|v" 文字列を先頭で弾く別ルールを足すことを検討する
       - id: ipv4
         regex: "\\b(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(\\.(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}\\b"
         replacement: "[REDACTED:IPV4]"

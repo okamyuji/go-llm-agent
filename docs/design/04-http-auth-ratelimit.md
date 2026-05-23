@@ -77,7 +77,7 @@ func (a *AllowlistCIDR) Handler(next http.Handler) http.Handler
 2. ServeMux の前段に Allowlist → Auth → RateLimit → CORS の順でミドルウェアを巻きます。
 3. Auth は失敗時に 401 を返し、RateLimit は失敗時に 429 を返します。
 4. `/healthz` だけは Auth と RateLimit を通過させます。
-5. 15 番の OAuth2 機能が有効化されている場合、BearerAuth は受け取った値が `eyJ` で始まるとき自身では認証判定を行わず、後段の `JWTVerifier` ミドルウェアに委譲します。これにより Bearer Token（任意文字列の事前共有秘密）と OAuth2 JWT を同じ `Authorization: Bearer <value>` ヘッダで併用できます。`eyJ` 接頭辞の判定は事前共有 Bearer 値の先頭文字がそれと衝突しないよう、設定時にバリデーションします。
+5. 旧設計の `eyJ` 接頭辞による JWTVerifier 委譲は fail-open の経路を生むため廃止しました。BearerAuth は事前共有 Bearer Token のみを処理し、OAuth2 JWT を併用する場合は別の手段 (例: `X-Auth-Type` ヘッダや個別エンドポイント) を用意して明示的に経路を分けます。現状の MVP では BearerAuth と JWTVerifier は独立に動作し、JWTVerifier は実装完了まで `Handler` が fail-closed (503) を返します。
 
 ## 6. 実装タスク（TDD）
 

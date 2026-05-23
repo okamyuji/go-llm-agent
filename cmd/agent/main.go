@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -69,7 +68,7 @@ func mainEntry() int {
 	case "serve":
 		err = cmdServe(ctx, args)
 	case "tools":
-		err = cmdTools(args)
+		err = cmdTools(ctx, args)
 	case "config":
 		err = cmdConfig(args)
 	case "eval":
@@ -171,32 +170,40 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 	}
 	resolver := secret.NewResolver(".env")
 	provs := map[string]llm.Provider{}
-	// resolveAPIKey APIKeyEnv が未設定または resolver で解決失敗した場合に warn ログを残す
-	// providers 設定上はキー必須でも .env 経由でしか配布されないため、強制 error にはしない
-	resolveAPIKey := func(name, envKey string) string {
+	// resolveAPIKey APIKeyEnv が未設定または resolver で解決失敗した場合に error を返す
+	// 起動時に明示的に失敗を呼び出し側へ伝え、サイレント空キーでの実呼び出しを避ける
+	resolveAPIKey := func(name, envKey string) (string, error) {
 		if envKey == "" {
-			return ""
+			return "", fmt.Errorf("provider %q: api_key_env is empty", name)
 		}
 		key, err := resolver.Resolve(envKey)
 		if err != nil {
-			slog.Warn("provider api key resolve failed; provider may fail at first call", "provider", name, "env", envKey, "err", err)
-			return ""
+			return "", fmt.Errorf("provider %q: resolve api key from %q: %w", name, envKey, err)
 		}
 		if key == "" {
-			slog.Warn("provider api key resolved to empty value", "provider", name, "env", envKey)
+			return "", fmt.Errorf("provider %q: api key from env %q resolved to empty value", name, envKey)
 		}
-		return key
+		return key, nil
 	}
 	if pc, ok := cfg.Providers["openai"]; ok {
-		key := resolveAPIKey("openai", pc.APIKeyEnv)
+		key, err := resolveAPIKey("openai", pc.APIKeyEnv)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
 		provs["openai"] = wrapWithRetry("openai", openai.New(openai.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
 	}
 	if pc, ok := cfg.Providers["anthropic"]; ok {
-		key := resolveAPIKey("anthropic", pc.APIKeyEnv)
+		key, err := resolveAPIKey("anthropic", pc.APIKeyEnv)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
 		provs["anthropic"] = wrapWithRetry("anthropic", anthropic.New(anthropic.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
 	}
 	if pc, ok := cfg.Providers["gemini"]; ok {
-		key := resolveAPIKey("gemini", pc.APIKeyEnv)
+		key, err := resolveAPIKey("gemini", pc.APIKeyEnv)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
 		provs["gemini"] = wrapWithRetry("gemini", gemini.New(gemini.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
 	}
 	if pc, ok := cfg.Providers["ollama"]; ok {
@@ -232,8 +239,11 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 	if ns, err := memory.NewFileNoteStore(notesPath); err == nil {
 		tools = append(tools, &tool.NoteAddTool{Store: ns}, &tool.NoteSearchTool{Store: ns})
 	} else {
-		// 永続化レイヤの初期化失敗は degraded mode への移行を意味する
-		// note_add / note_search ツールが無効化された状態で agent は引き続き起動する旨を明示する
+		// strict_notes_init=true なら起動エラーで fast-fail
+		// false (既定) では degraded mode で agent を継続させ、ツール 2 つが無効化される
+		if cfg.Storage.StrictNotesInit {
+			return nil, nil, nil, nil, fmt.Errorf("notes store init failed (strict_notes_init=true): %w", err)
+		}
 		logger.Error("degraded mode: notes store init failed; note_add and note_search are disabled but agent continues to start", "path", notesPath, "err", err)
 	}
 	toolReg := tool.NewRegistry(tools, cfg.Agent.EnabledTools)
@@ -289,19 +299,10 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 		}
 	}
 	if len(cfg.Agent.Approval.RequiredTools) > 0 {
-		// 旧来の default_decision: allow は fail-open のため廃止した
-		// 設定が allow になっていても deny として扱い警告ログを出す
-		if cfg.Agent.Approval.DefaultDecision == "allow" {
-			slog.Warn("agent.approval.default_decision=allow は廃止されました timeout 時は常に deny として扱います")
-		}
+		// default_decision と timeout_seconds は config.Load 側の validateApproval で
+		// 既に検証済みのため、ここでは値をそのまま使う。fail-open 経路は存在しない
 		approver = agent.NewHTTPApprover()
-		// timeout_seconds 未設定 (<=0) は無期限待機による goroutine リークを招くため、
-		// 暗黙の既定値 30 秒を適用する。30 秒は MVP 既定で、本番運用は明示設定を推奨する
 		timeout := time.Duration(cfg.Agent.Approval.TimeoutSeconds) * time.Second
-		if timeout <= 0 {
-			timeout = 30 * time.Second
-			slog.Warn("agent.approval.timeout_seconds 未指定のため既定値 30 秒を適用しました。本番運用では明示設定を推奨します")
-		}
 		opts = append(opts, agent.WithApprover(approver, cfg.Agent.Approval.RequiredTools, timeout))
 	}
 	return opts, approver, nil
@@ -464,13 +465,14 @@ func cmdServe(ctx context.Context, args []string) error {
 	return httpapi.ListenAndServe(ctx, a, svc, cfg, acc, approver)
 }
 
-func cmdTools(args []string) error {
+func cmdTools(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("tools", flag.ExitOnError)
 	configPath := fs.String("config", "config.yaml", "config file path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	_, _, tools, _, err := loadDeps(context.Background(), *configPath)
+	// telemetry / 親 ctx の cancellation を伝搬させるため、サブコマンド受領 ctx をそのまま渡す
+	_, _, tools, _, err := loadDeps(ctx, *configPath)
 	if err != nil {
 		return err
 	}

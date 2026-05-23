@@ -174,3 +174,32 @@ func TestRegistry_ResolveWithFallback_FallbackNameUnknownReturnsNil(t *testing.T
 		t.Error("fallback to unknown provider must yield nil")
 	}
 }
+
+// TestRegistry_ResolveWithFallback_FallbackAllowlistRejection
+// primary 側 (openai) で許可されたモデルを呼び出したとき、fallback 側 (anthropic) の
+// allow_models に同名モデルが含まれていなければ fallback は nil で返るべき
+// allow_models は fallback の経路にも適用される設計を担保するためのケース
+func TestRegistry_ResolveWithFallback_FallbackAllowlistRejection(t *testing.T) {
+	t.Parallel()
+	r := llm.NewRegistryWithFallback(
+		map[string]llm.Provider{
+			"openai":    &fakeProvider{name: "openai"},
+			"anthropic": &fakeProvider{name: "anthropic"},
+		},
+		map[string][]string{
+			"openai":    {"gpt-4"},
+			"anthropic": {"claude-3"},
+		},
+		map[string]string{"openai": "anthropic"},
+	)
+	primary, pmodel, fb, fbmodel, err := r.ResolveWithFallback("openai/gpt-4")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if primary.Name() != "openai" || pmodel != "gpt-4" {
+		t.Errorf("primary unexpected: name=%q model=%q", primary.Name(), pmodel)
+	}
+	if fb != nil || fbmodel != "" {
+		t.Errorf("fallback must be nil when model %q is not in anthropic allow_models, got fb=%v model=%q", "gpt-4", fb, fbmodel)
+	}
+}

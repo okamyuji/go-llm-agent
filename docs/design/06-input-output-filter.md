@@ -52,6 +52,11 @@ safety:
       - id: private_key_header
         regex: "-----BEGIN [A-Z ]+PRIVATE KEY-----"
         replacement: "[REDACTED:PRIVATE_KEY]"
+      # credit_card は数字列の長さで候補抽出するヒューリスティック
+      # 厳密にカード番号を判定するには Luhn checksum を後段で適用するべきで、
+      # ID 番号や注文番号など同程度の数字列に対する偽陽性が無視できないケースでは
+      # 別実装の OutputRedactor を chain して Luhn 検証を通った場合のみ
+      # 置換するロジックを導入することを検討する
       - id: credit_card
         regex: "\\b(?:\\d[ -]*?){13,19}\\b"
         replacement: "[REDACTED:CARD]"

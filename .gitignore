@@ -18,8 +18,9 @@
 /docs/specs/
 /docs/usage.md
 
-# 15 番設計書 mTLS 用の証明書ファイルが誤コミットされないよう除外する
-*.pem
-*.crt
-*.key
+# 15 番設計書 mTLS 用の証明書ファイル
+# ルートにある実証明書のみを除外し、tests/ や docs/ 配下の任意の test fixture は許容する
+/*.pem
+/*.crt
+/*.key
 /certs/

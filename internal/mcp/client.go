@@ -73,8 +73,8 @@ var ErrClientClosed = errors.New("mcp: client is closed")
 
 // NewStdioClient stdio transport の Client を起動する
 // command の最初の要素を exec し、stdin/stdout を JSON-RPC line として使う
-// command[0] は絶対パスもしくは ./ または ../ で始まる相対パスのみ許容する
-// PATH 解決経由の任意コマンド実行や path traversal による意図しないバイナリ起動を防ぐ
+// command[0] は絶対パスのみ許容する (PATH 解決による任意コマンド実行を防ぐ)
+// 加えて filepath.Clean 後の path に .. セグメントが含まれていないことも保証する
 func NewStdioClient(ctx context.Context, command []string) (*Client, error) {
 	if len(command) == 0 {
 		return nil, errors.New("mcp: command is empty")

@@ -251,9 +251,12 @@ type ServerCORS struct {
 }
 
 // StorageConfig ストレージ設定
+// StrictNotesInit true のとき memory.NewFileNoteStore 失敗を起動エラーに昇格させる
+// 既定 (false) では degraded mode (note_add / note_search 無効) で agent を継続させる
 type StorageConfig struct {
-	SessionsDir string `yaml:"sessions_dir"`
-	NotesPath   string `yaml:"notes_path"`
+	SessionsDir     string `yaml:"sessions_dir"`
+	NotesPath       string `yaml:"notes_path"`
+	StrictNotesInit bool   `yaml:"strict_notes_init"`
 }
 
 // LoggingConfig ログ設定
@@ -275,7 +278,25 @@ func Load(path string) (*Config, error) {
 	if err := validateFallbackChains(cfg.Providers); err != nil {
 		return nil, err
 	}
+	if err := validateApproval(cfg.Agent.Approval); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+// validateApproval 起動時に approval 設定の妥当性を検査する
+// default_decision: allow は fail-open のため廃止。timeout_seconds は required_tools 指定時に必須
+func validateApproval(a ApprovalConfig) error {
+	if a.DefaultDecision == "allow" {
+		return fmt.Errorf("config: agent.approval.default_decision=allow は廃止されました。\"deny\" に修正してください")
+	}
+	if a.DefaultDecision != "" && a.DefaultDecision != "deny" {
+		return fmt.Errorf("config: agent.approval.default_decision は \"deny\" のみサポート (got %q)", a.DefaultDecision)
+	}
+	if len(a.RequiredTools) > 0 && a.TimeoutSeconds <= 0 {
+		return fmt.Errorf("config: agent.approval.timeout_seconds は required_tools 指定時に正の整数で必須 (got %d)", a.TimeoutSeconds)
+	}
+	return nil
 }
 
 // validateFallbackChains providers の fallback_to から有向グラフを作り、サイクルが存在しないことを確認する
