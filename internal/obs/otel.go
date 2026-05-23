@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -141,8 +143,10 @@ func InitTelemetry(ctx context.Context, c TelemetryConfig, logger *slog.Logger) 
 	}
 
 	if logger != nil {
+		// Endpoint にクレデンシャル付き URL (user:pass@host) が含まれる可能性に備えて
+		// net/url.URL.Redacted で機密部分を伏せたうえでログに記録する
 		logger.Info("telemetry enabled",
-			"endpoint", c.Endpoint,
+			"endpoint", redactEndpoint(c.Endpoint),
 			"service", serviceName,
 			"sample_ratio", sampleRatio,
 		)
@@ -164,11 +168,21 @@ func InitTelemetry(ctx context.Context, c TelemetryConfig, logger *slog.Logger) 
 // stripScheme OTLP HTTP exporter の WithEndpoint が host:port のみを期待するため scheme を除去する
 func stripScheme(endpoint string) string {
 	for _, prefix := range []string{"http://", "https://"} {
-		if len(endpoint) >= len(prefix) && endpoint[:len(prefix)] == prefix {
-			return endpoint[len(prefix):]
+		if rest, ok := strings.CutPrefix(endpoint, prefix); ok {
+			return rest
 		}
 	}
 	return endpoint
+}
+
+// redactEndpoint Endpoint URL に user:password が含まれていればマスクして返す
+// URL でない場合 (host:port のみなど) はそのまま返す
+func redactEndpoint(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil || u == nil || u.Scheme == "" {
+		return endpoint
+	}
+	return u.Redacted()
 }
 
 // installInstruments MeterProvider から共通の計測器セットを構築し global に格納する

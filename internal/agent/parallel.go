@@ -68,6 +68,8 @@ func (s *service) executeConcurrent(ctx context.Context, sessionID string, calls
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			// セマフォ取得後に cancel 状態を確認することで、待機中に他ゴルーチンが
+			// FailFast cancel した場合でも executeOne を起動せず即時離脱する
 			if cancelCtx.Err() != nil {
 				out[idx] = ParallelOutcome{CallID: call.ID, Name: call.Name, Content: "cancelled", IsError: true}
 				return
@@ -86,15 +88,13 @@ func (s *service) executeConcurrent(ctx context.Context, sessionID string, calls
 // executeOne 単一 ToolCall を承認・実行・観測の全プロセスで処理する
 func (s *service) executeOne(ctx context.Context, sessionID string, call llm.ToolCall) ParallelOutcome {
 	if s.approver != nil && s.approvalRequired[call.Name] {
-		apCtx := ctx
-		var apCancel context.CancelFunc
-		if s.approvalTimeout > 0 {
-			apCtx, apCancel = context.WithTimeout(ctx, s.approvalTimeout)
+		timeout := s.approvalTimeout
+		if timeout <= 0 {
+			timeout = defaultApprovalTimeout
 		}
+		apCtx, apCancel := context.WithTimeout(ctx, timeout)
 		d, aerr := s.approver.Request(apCtx, ApprovalRequest{RunID: sessionID, CallID: call.ID, ToolName: call.Name, Arguments: call.Arguments})
-		if apCancel != nil {
-			apCancel()
-		}
+		apCancel()
 		// loop.go の runReAct と同じ判定 (errors.Is(aerr, ErrApprovalTimeout)) を使う
 		// timeout 以外のエラーは Approver 自体の致命的失敗として拒否扱い
 		if aerr != nil && !errors.Is(aerr, ErrApprovalTimeout) {

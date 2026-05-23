@@ -77,6 +77,8 @@ func (s *FileStore) QueryDate(_ context.Context, date string) ([]Snapshot, error
 }
 
 // queryAll ファイル全体を走査し predicate にマッチした Snapshot を返す
+// 実装は線形スキャン O(n) のため、本番環境で大量のレコードが蓄積するケースには不向き
+// 大規模運用では SQLite など index 付きストレージに置き換える前提の MVP 実装
 func (s *FileStore) queryAll(pred func(Snapshot) bool) ([]Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

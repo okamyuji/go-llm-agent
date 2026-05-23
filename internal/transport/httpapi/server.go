@@ -54,13 +54,13 @@ func (s *Server) WithMiddleware(auth *BearerAuth, limiter *TokenBucketLimiter, a
 	return s
 }
 
-// Handler http.Handler を返す。WithMiddleware で設定済みの場合は順に Allowlist → Auth → RateLimit → CORS で巻く
+// Handler http.Handler を返す
+// 適用順は外側から CORS → Allowlist → Auth → RateLimit → mux
+// CORS を最外層に置くことで OPTIONS プリフライトが Allowlist や Auth に阻まれず、
+// 合法な Origin からのブラウザアクセスが正しく成立する
 // 各ミドルウェアが nil の場合はその層をスキップする。WithMiddleware を呼ばない経路でも panic させない
 func (s *Server) Handler() http.Handler {
 	var h http.Handler = s.mux
-	if s.cors != nil {
-		h = s.cors.Handler(h)
-	}
 	if s.limiter != nil {
 		h = s.limiter.Handler(h)
 	}
@@ -69,6 +69,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	if s.allowlist != nil {
 		h = s.allowlist.Handler(h)
+	}
+	if s.cors != nil {
+		h = s.cors.Handler(h)
 	}
 	return h
 }
@@ -82,10 +85,15 @@ func ListenAndServe(ctx context.Context, addr string, svc agent.Service, cfg *co
 		return err
 	}
 	server.WithMiddleware(auth, limiter, allowlist, cors)
+	// ReadHeaderTimeout で Slowloris 対策、ReadTimeout で本体読込みの長時間占有を防ぐ
+	// WriteTimeout は /v1/chat/completions の SSE が長時間続くため 0 のまま、
+	// 代わりに IdleTimeout で idle 接続を 120 秒で回収する
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	go func() {
 		<-ctx.Done()

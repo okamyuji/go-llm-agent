@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -191,6 +192,9 @@ func toolChoiceJSON(tc *llm.ToolChoice) any {
 			"function": map[string]any{"name": tc.Name},
 		}
 	default:
+		// 未知の Mode は "auto" にフォールバックさせるが、設定ミスを発見しやすくするため
+		// 警告ログを出す。サイレントフォールバックを避ける
+		slog.Warn("openai: unknown tool_choice mode, falling back to auto", "mode", tc.Mode)
 		return "auto"
 	}
 }

@@ -47,14 +47,14 @@ func NewRegistryWithFallback(providers map[string]Provider, allow map[string][]s
 func (r *registry) parseAndLookup(model string) (Provider, string, string, error) {
 	pname, name, ok := strings.Cut(model, "/")
 	if !ok || pname == "" || name == "" {
-		return nil, "", "", fmt.Errorf("model は provider/name 形式である必要があります got=%q", model)
+		return nil, "", "", fmt.Errorf("model must be in provider/name form, got %q", model)
 	}
 	p, ok := r.providers[pname]
 	if !ok {
-		return nil, "", "", fmt.Errorf("provider %q は登録されていません", pname)
+		return nil, "", "", fmt.Errorf("provider %q is not registered", pname)
 	}
 	if allow := r.allowModels[pname]; len(allow) > 0 && !slices.Contains(allow, name) {
-		return nil, "", "", fmt.Errorf("model %q は provider %q の allow_models に含まれていません", name, pname)
+		return nil, "", "", fmt.Errorf("model %q is not in allow_models of provider %q", name, pname)
 	}
 	return p, pname, name, nil
 }
@@ -70,7 +70,7 @@ func (r *registry) Resolve(model string) (Provider, string, error) {
 }
 
 // ResolveWithFallback primary に加えて fallback プロバイダーも返す
-// fallback が未設定なら fallbackProvider は nil で返る
+// fallback 未設定の場合 fallbackProvider に nil を返す
 // fallback プロバイダーは primary と同じモデル名を使い、要求モデル名で許可チェックを再度行う
 func (r *registry) ResolveWithFallback(model string) (Provider, string, Provider, string, error) {
 	primary, pname, name, err := r.parseAndLookup(model)

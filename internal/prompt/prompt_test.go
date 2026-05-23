@@ -98,3 +98,29 @@ func TestRenderer_MissingKeyErrors(t *testing.T) {
 		t.Fatal("expected error for missing key")
 	}
 }
+
+// TestLoader_RejectsPathTraversalRefs name/version 部分への path traversal や
+// 制御文字混入を Loader が事前に弾くことを確認する
+func TestLoader_RejectsPathTraversalRefs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	l := NewFileLoader(dir)
+	cases := []string{
+		"../secret",
+		"..",
+		".",
+		"foo/bar",
+		"foo\\bar",
+		"foo\x00bar",
+		"system@../v1",
+		"system@v1/../etc/passwd",
+	}
+	for _, ref := range cases {
+		t.Run(ref, func(t *testing.T) {
+			t.Parallel()
+			if _, err := l.Load(ref); err == nil {
+				t.Fatalf("ref=%q must be rejected", ref)
+			}
+		})
+	}
+}

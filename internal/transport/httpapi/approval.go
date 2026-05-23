@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -55,8 +56,27 @@ func (s *Server) handleRunsApprove(w http.ResponseWriter, r *http.Request) {
 		Reason:   body.Reason,
 		Reviewer: body.Reviewer,
 	}); !ok {
+		// 監査ログ 該当する pending エントリがない場合の不正な Submit を記録する
+		slog.WarnContext(r.Context(), "hitl approval submit failed",
+			"run_id", runID,
+			"call_id", body.CallID,
+			"allowed", body.Allowed,
+			"reviewer", body.Reviewer,
+			"remote_addr", r.RemoteAddr,
+		)
 		http.Error(w, "no pending approval for runID/call_id", http.StatusConflict)
 		return
 	}
+	// 監査ログ 承認操作の事実を構造化ログとして残す
+	// reviewer はクライアント自己申告値である点に注意し、別途認証層 (BearerAuth など) で
+	// 呼び出し主体を制限する運用が前提となる
+	slog.InfoContext(r.Context(), "hitl approval submitted",
+		"run_id", runID,
+		"call_id", body.CallID,
+		"allowed", body.Allowed,
+		"reason", body.Reason,
+		"reviewer", body.Reviewer,
+		"remote_addr", r.RemoteAddr,
+	)
 	w.WriteHeader(http.StatusNoContent)
 }

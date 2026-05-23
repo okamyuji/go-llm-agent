@@ -11,9 +11,27 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
+
+// validateMCPCommand mcp.servers.<name>.command[0] が許容パス形式かを検査する
+// 絶対パス、または ./ ・ ../ で始まる相対パスのみを受け付ける
+// 単純な実行ファイル名 (例: "node") は PATH 解決による任意コマンド実行リスクがあるため拒否する
+func validateMCPCommand(path string) error {
+	if path == "" {
+		return errors.New("mcp: command[0] is empty")
+	}
+	if filepath.IsAbs(path) {
+		return nil
+	}
+	if strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../") {
+		return nil
+	}
+	return fmt.Errorf("mcp: command[0] must be an absolute path or start with ./ or ../ got=%q", path)
+}
 
 // ToolInfo discovery 結果に現れるツール 1 件
 type ToolInfo struct {
@@ -39,9 +57,14 @@ type Client struct {
 
 // NewStdioClient stdio transport の Client を起動する
 // command の最初の要素を exec し、stdin/stdout を JSON-RPC line として使う
+// command[0] は絶対パスもしくは ./ または ../ で始まる相対パスのみ許容する
+// PATH 解決経由の任意コマンド実行や path traversal による意図しないバイナリ起動を防ぐ
 func NewStdioClient(ctx context.Context, command []string) (*Client, error) {
 	if len(command) == 0 {
 		return nil, errors.New("mcp: command is empty")
+	}
+	if err := validateMCPCommand(command[0]); err != nil {
+		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 	in, err := cmd.StdinPipe()

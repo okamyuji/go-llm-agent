@@ -119,6 +119,8 @@ func (l *TokenBucketLimiter) Handler(next http.Handler) http.Handler {
 			return
 		}
 		if !l.allow(r) {
+			// RFC 6585 §4 と OWASP API Security Best Practices に従い Retry-After を返す
+			w.Header().Set("Retry-After", "1")
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
@@ -253,6 +255,8 @@ func (c *CORS) Handler(next http.Handler) http.Handler {
 			if _, ok := originSet[origin]; ok {
 				// 明示許可された Origin は echo して credential 互換を保つ
 				w.Header().Set("Access-Control-Allow-Origin", origin)
+				// 動的に Origin を echo する場合は CDN キャッシュ汚染を避けるため必ず Vary を付ける
+				w.Header().Add("Vary", "Origin")
 			} else if hasWildcard {
 				// "*" 指定時のみ wildcard を返す。未許可の Origin を勝手に echo しない
 				w.Header().Set("Access-Control-Allow-Origin", "*")

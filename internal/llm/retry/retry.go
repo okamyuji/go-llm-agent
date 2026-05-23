@@ -97,13 +97,19 @@ func (w *wrapped) Stream(ctx context.Context, req llm.ChatRequest) (llm.ChatStre
 	return nil, fmt.Errorf("%w: %v", ErrAllAttemptsFailed, lastErr)
 }
 
-// isRetryable ProviderError.Retryable=true もしくは context.DeadlineExceeded で判定する
+// isRetryable リトライ可否を判定する
+// context.Canceled は明示的にリトライ不可、context.DeadlineExceeded は HTTP クライアントの
+// タイムアウト経由でも届きうるためリトライ対象とする
+// それ以外は ProviderError.Retryable に従う
 func isRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
 	if errors.Is(err, context.Canceled) {
 		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 	var pe *llm.ProviderError
 	if errors.As(err, &pe) {
@@ -119,7 +125,11 @@ func backoffForAttempt(c Config, attempt int) time.Duration {
 	if c.InitialBackoff <= 0 {
 		return 0
 	}
-	d := c.InitialBackoff << attempt
+	// time.Duration は int64 で 1 << 63 でオーバーフローし負値になる
+	// 大きな attempt でも安全に MaxBackoff へクランプするためシフト量を 62 で上限する
+	const maxShift = 62
+	shift := min(max(attempt, 0), maxShift)
+	d := c.InitialBackoff << shift
 	if d <= 0 || d > c.MaxBackoff {
 		d = c.MaxBackoff
 	}

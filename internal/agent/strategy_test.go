@@ -93,7 +93,7 @@ func TestPlannerExecutor_PromptInjectsPlannerHint(t *testing.T) {
 	out := make(chan Event, 8)
 	go func() {
 		defer close(out)
-		_ = st.Run(context.Background(), s, Input{
+		_ = st.run(context.Background(), s, Input{
 			Model:        "fake/model-x",
 			SystemPrompt: "あなたはアシスタント",
 			Messages:     []llm.Message{{Role: llm.RoleUser, Content: "do something"}},

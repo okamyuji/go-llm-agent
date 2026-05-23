@@ -113,9 +113,13 @@ func LoadSuite(dir string) ([]Case, error) {
 }
 
 // RunSuite agent.Service で suite を実行し RunResult を返す
+// ctx がキャンセル済みのときはループに入る前と各ケース開始前に検知して早期終了する
 func RunSuite(ctx context.Context, svc agent.Service, cases []Case, model string, maxHops int) ([]RunResult, error) {
 	out := make([]RunResult, 0, len(cases))
 	for _, c := range cases {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
 		msgs := make([]llm.Message, 0, len(c.Input.Messages))
 		for _, m := range c.Input.Messages {
 			msgs = append(msgs, llm.Message{Role: llm.Role(m.Role), Content: m.Content})

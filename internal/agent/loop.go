@@ -4,19 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
-	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/obs"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
 )
 
+// defaultApprovalTimeout WithApprover で timeout 未指定 (0) のときの既定値
+// 無期限待機 (apCtx = ctx の継承) は goroutine リークの原因になるため明示的なフォールバックを置く
+const defaultApprovalTimeout = 5 * time.Minute
+
 // Run Strategy に処理を委譲する。Strategy 未設定なら ReAct で動く
 func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 	if s.strategy != nil {
-		return s.strategy.Run(ctx, s, in, out)
+		return s.strategy.run(ctx, s, in, out)
 	}
 	return s.runReAct(ctx, in, out)
 }
@@ -79,7 +83,10 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 				break
 			}
 			if ev.Err != nil {
-				_ = stream.Close()
+				if cerr := stream.Close(); cerr != nil {
+					slog.WarnContext(ctx, "llm stream close failed after recv error",
+						"provider", prov.Name(), "model", model, "err", cerr)
+				}
 				llmSpan.End()
 				out <- Event{Kind: EventError, Err: ev.Err}
 				return ev.Err
@@ -116,11 +123,9 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 				}
 				snap, berr := s.billing.Add(ctx, sessionID, prov.Name(), model, lastUsage.InputTokens, lastUsage.OutputTokens)
 				if berr != nil {
+					// ErrBudgetExceeded を含むすべての billing エラーは EventError として伝播する
+					// 旧コードは ErrBudgetExceeded 分岐で同一処理を二重に書いていたため統合した
 					llmSpan.End()
-					if errors.Is(berr, billing.ErrBudgetExceeded) {
-						out <- Event{Kind: EventError, Err: berr}
-						return berr
-					}
 					out <- Event{Kind: EventError, Err: berr}
 					return berr
 				}
@@ -173,17 +178,17 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 			if runID == "" {
 				runID = "default"
 			}
-			apCtx := ctx
-			var apCancel context.CancelFunc
-			if s.approvalTimeout > 0 {
-				apCtx, apCancel = context.WithTimeout(ctx, s.approvalTimeout)
+			// approvalTimeout 未指定 (0) は無期限待機による goroutine leak を招くため
+			// defaultApprovalTimeout (5 分) にフォールバックする
+			timeout := s.approvalTimeout
+			if timeout <= 0 {
+				timeout = defaultApprovalTimeout
 			}
+			apCtx, apCancel := context.WithTimeout(ctx, timeout)
 			d, aerr := s.approver.Request(apCtx, ApprovalRequest{
 				RunID: runID, CallID: pendingCall.ID, ToolName: pendingCall.Name, Arguments: pendingCall.Arguments,
 			})
-			if apCancel != nil {
-				apCancel()
-			}
+			apCancel()
 			if aerr != nil && !errors.Is(aerr, ErrApprovalTimeout) {
 				out <- Event{Kind: EventError, Err: aerr}
 				return aerr

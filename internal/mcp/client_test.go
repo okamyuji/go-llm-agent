@@ -6,7 +6,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"go.uber.org/goleak"
 )
+
+// TestMain パッケージ全テスト終了時に goroutine リークを検証する
+// ctx キャンセル時の scanner goroutine が正しく回収されることを担保する
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func buildEchoServer(t *testing.T) string {
 	t.Helper()
@@ -65,5 +73,17 @@ func TestNewStdioClient_EmptyCommandErrors(t *testing.T) {
 	t.Parallel()
 	if _, err := NewStdioClient(context.Background(), nil); err == nil {
 		t.Fatal("expected error for empty command")
+	}
+}
+
+// TestNewStdioClient_RejectsBareName PATH 解決による任意コマンド実行を防ぐため
+// 単純な実行ファイル名 (例: "node") を拒否することを確認する
+func TestNewStdioClient_RejectsBareName(t *testing.T) {
+	t.Parallel()
+	if _, err := NewStdioClient(context.Background(), []string{"node"}); err == nil {
+		t.Fatal("bare command name must be rejected")
+	}
+	if _, err := NewStdioClient(context.Background(), []string{"some-tool"}); err == nil {
+		t.Fatal("bare command name must be rejected")
 	}
 }

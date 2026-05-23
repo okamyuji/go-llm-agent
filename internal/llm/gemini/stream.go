@@ -106,6 +106,11 @@ func (r *streamReader) Recv() (llm.StreamEvent, bool) {
 		}
 		return ev, true
 	}
+	// Scanner ループ脱出後に Err を必ず確認する
+	// ネットワーク切断やバッファ超過などの非 EOF 失敗をサイレント無視しないため
+	if err := r.scan.Err(); err != nil {
+		return llm.StreamEvent{Err: fmt.Errorf("gemini stream scan: %w", err)}, true
+	}
 	return llm.StreamEvent{}, false
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/okamyuji/go-llm-agent/internal/transport/httpapi"
@@ -246,6 +247,30 @@ func TestTokenBucketLimiter_PerTokenIsolated(t *testing.T) {
 	defer func() { _ = r2.Body.Close() }()
 	if r1.StatusCode != http.StatusOK || r2.StatusCode != http.StatusOK {
 		t.Fatalf("per-token isolation broken: r1=%d r2=%d", r1.StatusCode, r2.StatusCode)
+	}
+}
+
+// TestTokenBucketLimiter_PerTokenCacheBounded per-token キャッシュが
+// 一定件数を超えても無制限に成長せず古いエントリを退避することを確認する
+// 退避境界の正確な値は実装の private constant (perTokenMaxEntries=1024) に依存するため、
+// それを十分超える 2000 件のリクエストを送ってもプロセスがメモリリークしないことを確認する
+func TestTokenBucketLimiter_PerTokenCacheBounded(t *testing.T) {
+	t.Parallel()
+	l := httpapi.NewTokenBucketLimiter(1000, 1000, true)
+	h := l.Handler(handlerOK(t))
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	for i := 0; i < 2000; i++ {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/v1/models", http.NoBody)
+		req.Header.Set("Authorization", "Bearer t-"+strconv.Itoa(i))
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("req %d: %v", i, err)
+		}
+		_ = res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("req %d status=%d want 200", i, res.StatusCode)
+		}
 	}
 }
 

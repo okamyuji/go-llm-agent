@@ -73,11 +73,19 @@ func (s *fileNoteStore) Add(_ context.Context, n Note) (Note, error) {
 	return n, nil
 }
 
+// maxTopK Search の topK パラメータの上限
+// 攻撃者が極端に大きな topK (例: 10_000_000) を渡してメモリ枯渇を起こすことを防ぐ
+const maxTopK = 100
+
 // Search 単純な単語マッチで上位 topK を返す
 // スコアは title/body/tags の重複した検索語数（重み: title=3, tags=2, body=1）
+// topK は maxTopK でクランプする
 func (s *fileNoteStore) Search(_ context.Context, query string, topK int) ([]Note, error) {
 	if topK <= 0 {
 		topK = 5
+	}
+	if topK > maxTopK {
+		topK = maxTopK
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

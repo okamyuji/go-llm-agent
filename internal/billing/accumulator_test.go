@@ -155,6 +155,30 @@ func TestAccumulator_StoreFailurePropagates(t *testing.T) {
 	}
 }
 
+// TestAccumulator_StoreFailureRollsBackInMemory store.Append が失敗したとき
+// in-memory aggregate が完全に直前状態へ巻き戻ることを確認する
+// 旧実装は At/SessionID/Provider/Model を巻き戻していなかったため、初回 Add 失敗後に
+// SessionTotal がゼロ値ではなく中途半端なスナップショットを返す問題があった
+func TestAccumulator_StoreFailureRollsBackInMemory(t *testing.T) {
+	t.Parallel()
+
+	pricing := map[string]Pricing{"openai": {InputPerMillionJPY: 1, OutputPerMillionJPY: 1}}
+	store := &failingStore{}
+	acc := NewAccumulator(Config{Pricing: pricing, Now: fixedNow("2026-05-23")}, store)
+
+	if _, err := acc.Add(context.Background(), "sess-1", "openai", "gpt", 1000, 1000); err == nil {
+		t.Fatal("expected error from failing store")
+	}
+	got := acc.SessionTotal("sess-1")
+	if got != (Snapshot{}) {
+		t.Fatalf("初回 Add 失敗後の SessionTotal はゼロ値のはず, got %+v", got)
+	}
+	daily := acc.DailyTotal("2026-05-23")
+	if daily != (Snapshot{}) {
+		t.Fatalf("初回 Add 失敗後の DailyTotal はゼロ値のはず, got %+v", daily)
+	}
+}
+
 // fixedNow テスト用に固定日付を返す
 // 不正な date 文字列が渡されたら panic で早期失敗させる
 func fixedNow(date string) func() time.Time {

@@ -12,7 +12,8 @@ import (
 )
 
 // Pricing 1 プロバイダーあたりの単価設定
-// InputPerMillionJPY と OutputPerMillionJPY は 1,000,000 トークンあたりの円換算単価
+// InputPerMillionJPY が入力トークン、OutputPerMillionJPY が出力トークンの
+// 1,000,000 トークンあたり円換算単価
 type Pricing struct {
 	InputPerMillionJPY  float64
 	OutputPerMillionJPY float64
@@ -62,18 +63,20 @@ var ErrBudgetExceeded = errors.New("billing: budget exceeded")
 
 // accumulator Accumulator の実装
 // 集計はメモリ上に保持し、永続化は Store に委譲する
+// 読み取り経路 (SessionTotal / DailyTotal) は RWMutex の RLock を使い、
+// 書き込み経路 (Add) のみ Lock を取得することで読み取りの並行性能を確保する
 type accumulator struct {
 	cfg   Config
 	store Store
 
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	sessions  map[string]Snapshot
 	dailyCost map[string]float64
 	daily     map[string]Snapshot
 }
 
 // NewAccumulator Accumulator を構築する
-// Config.Now が nil の場合は time.Now を使う
+// Config.Now が nil のとき time.Now で代替する
 func NewAccumulator(cfg Config, store Store) Accumulator {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -99,9 +102,16 @@ func (a *accumulator) Add(ctx context.Context, sessionID, providerName, model st
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	sessSoFar := a.sessions[sessionID]
+	// 失敗時に完全に巻き戻すための直前状態のスナップショットを保持する
+	// At / SessionID / Provider / Model などフィールド単位の partial 戻しでは
+	// 初回 Add 失敗時にゼロ値ではなく中途半端な状態が残ったままになる
+	prevSess, sessExisted := a.sessions[sessionID]
+	prevDaily, dailyExisted := a.daily[date]
+	prevDailyCost := a.dailyCost[date]
+
+	sessSoFar := prevSess
 	projectedTokens := sessSoFar.InputTokens + sessSoFar.OutputTokens + in + out
-	projectedDailyCost := a.dailyCost[date] + cost
+	projectedDailyCost := prevDailyCost + cost
 	if a.cfg.Budget.SessionMaxTokens > 0 && projectedTokens > a.cfg.Budget.SessionMaxTokens {
 		return Snapshot{}, fmt.Errorf("%w: session tokens %d > %d", ErrBudgetExceeded, projectedTokens, a.cfg.Budget.SessionMaxTokens)
 	}
@@ -128,7 +138,7 @@ func (a *accumulator) Add(ctx context.Context, sessionID, providerName, model st
 	sessSoFar.At = now
 	a.sessions[sessionID] = sessSoFar
 
-	dailySoFar := a.daily[date]
+	dailySoFar := prevDaily
 	dailySoFar.InputTokens += in
 	dailySoFar.OutputTokens += out
 	dailySoFar.CostJPY += cost
@@ -137,34 +147,37 @@ func (a *accumulator) Add(ctx context.Context, sessionID, providerName, model st
 	a.dailyCost[date] = projectedDailyCost
 
 	if err := a.store.Append(ctx, snap); err != nil {
-		// 永続化失敗時は in-memory aggregate を巻き戻す。同じロック保持中なので race free
-		rb := a.sessions[sessionID]
-		rb.InputTokens -= in
-		rb.OutputTokens -= out
-		rb.CostJPY -= cost
-		a.sessions[sessionID] = rb
-		rd := a.daily[date]
-		rd.InputTokens -= in
-		rd.OutputTokens -= out
-		rd.CostJPY -= cost
-		a.daily[date] = rd
-		a.dailyCost[date] -= cost
+		// 永続化失敗時は in-memory aggregate を直前状態に完全に巻き戻す
+		// At / SessionID / Provider / Model も同時に戻すため、prev スナップショットを使う
+		if sessExisted {
+			a.sessions[sessionID] = prevSess
+		} else {
+			delete(a.sessions, sessionID)
+		}
+		if dailyExisted {
+			a.daily[date] = prevDaily
+		} else {
+			delete(a.daily, date)
+		}
+		a.dailyCost[date] = prevDailyCost
 		return Snapshot{}, fmt.Errorf("billing append: %w", err)
 	}
 	return snap, nil
 }
 
 // SessionTotal セッション単位の累計を返す。未存在のセッションはゼロ値
+// 読み取り経路なので RLock を使い、複数の集計クエリを並行して捌けるようにする
 func (a *accumulator) SessionTotal(sessionID string) Snapshot {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return a.sessions[sessionID]
 }
 
 // DailyTotal 日付単位の累計を返す。未存在の日付はゼロ値
+// 読み取り経路なので RLock を使う
 func (a *accumulator) DailyTotal(date string) Snapshot {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return a.daily[date]
 }
 

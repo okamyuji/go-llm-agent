@@ -57,7 +57,12 @@ func NewScannerFromConfig(c InputScannerConfig) (Scanner, error) {
 	return &regexScanner{rules: rules}, nil
 }
 
+// maxSnippetLen Snippet に格納する文字列の最大長
+// ログや HTTP 応答経由で機微な文字列が外部に漏れるリスクを下げるため切り詰める
+const maxSnippetLen = 64
+
 // Scan text にマッチしたルール ID と最初のスニペットを返す
+// Snippet は maxSnippetLen を超える場合に "..." を付けて切り詰める
 func (s *regexScanner) Scan(text string) []ScanFinding {
 	if len(s.rules) == 0 || text == "" {
 		return nil
@@ -65,6 +70,9 @@ func (s *regexScanner) Scan(text string) []ScanFinding {
 	var out []ScanFinding
 	for _, r := range s.rules {
 		if m := r.re.FindString(text); m != "" {
+			if len(m) > maxSnippetLen {
+				m = m[:maxSnippetLen] + "..."
+			}
 			out = append(out, ScanFinding{PatternID: r.id, Snippet: m})
 		}
 	}
