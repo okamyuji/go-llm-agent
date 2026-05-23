@@ -132,6 +132,12 @@ metrics:
 
 E2E スクリプトは `tests/e2e/07-eval-suite.sh` です。fixtures/eval_exercise が LoadSuite / Score / WriteReport の動作を検証します。設計の詳細は `docs/design/07-eval-framework.md` を参照してください。
 
+## ローカルノート (RAG MVP)
+
+`note_add` と `note_search` の 2 つの内蔵ツールで JSONL ベースのローカルノートを操作できます。スコアは title=3 / tags=2 / body=1 の重みで計算し、上位 `top_k` 件を返します。ノートは `storage.notes_path` (空なら `sessions_dir/notes.jsonl`) に追記します。`memory.NoteStore` インターフェースを介すため、将来 SQLite FTS5 やベクター DB に差し替え可能です。
+
+E2E スクリプトは `tests/e2e/11-rag-mvp.sh` で、fixtures/rag_exercise が 2 件のノートを保存して全文検索が機能することを確認します。設計の詳細は `docs/design/11-rag-mvp.md` を参照してください。
+
 ## 並列ツール実行
 
 `service.ExecuteToolsParallel` で複数 ToolCall を semaphore 付きで並列実行できます。`require_approval` 対象のツールが 1 件でも含まれる場合は自動的に直列化 (バリア方式) し、人間オペレータの状況把握を優先します。`fail_fast=true` のときは最初の失敗で他の実行をキャンセルします。

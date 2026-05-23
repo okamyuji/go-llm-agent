@@ -151,6 +151,8 @@ server:
 
 storage:
   sessions_dir: ~/.local/state/go-llm-agent/sessions
+  # ノート保存先 JSONL。空のときは sessions_dir/notes.jsonl を使う。
+  notes_path: ""
 
 logging:
   format: text

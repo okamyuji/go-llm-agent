@@ -238,6 +238,7 @@ type ServerCORS struct {
 // StorageConfig ストレージ設定
 type StorageConfig struct {
 	SessionsDir string `yaml:"sessions_dir"`
+	NotesPath   string `yaml:"notes_path"`
 }
 
 // LoggingConfig ログ設定

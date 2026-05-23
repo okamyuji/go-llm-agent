@@ -21,6 +21,7 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/llm/ollama"
 	"github.com/okamyuji/go-llm-agent/internal/llm/openai"
 	"github.com/okamyuji/go-llm-agent/internal/llm/retry"
+	"github.com/okamyuji/go-llm-agent/internal/memory"
 	"github.com/okamyuji/go-llm-agent/internal/obs"
 	"github.com/okamyuji/go-llm-agent/internal/safety"
 	"github.com/okamyuji/go-llm-agent/internal/secret"
@@ -201,6 +202,15 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 		tool.NewShell(cfg.Tools.Shell, logger),
 		tool.NewHTTPFetchWithLogger(cfg.Tools.HTTPFetch, logger),
 		tool.NewSearchFiles(sb, cfg.Tools.SearchFiles),
+	}
+	notesPath := cfg.Storage.NotesPath
+	if notesPath == "" {
+		notesPath = filepath.Join(expand(cfg.Storage.SessionsDir), "notes.jsonl")
+	} else {
+		notesPath = expand(notesPath)
+	}
+	if ns, err := memory.NewFileNoteStore(notesPath); err == nil {
+		tools = append(tools, &tool.NoteAddTool{Store: ns}, &tool.NoteSearchTool{Store: ns})
 	}
 	toolReg := tool.NewRegistry(tools, cfg.Agent.EnabledTools)
 	store := storage.NewSessionStore(expand(cfg.Storage.SessionsDir))
