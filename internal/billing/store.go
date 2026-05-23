@@ -90,8 +90,10 @@ func (s *FileStore) QueryDate(_ context.Context, date string) ([]Snapshot, error
 // 実装は線形スキャン O(n) のため、本番環境で大量のレコードが蓄積するケースには不向き
 // 大規模運用では SQLite など index 付きストレージに置き換える前提の MVP 実装
 func (s *FileStore) queryAll(pred func(Snapshot) bool) ([]Snapshot, error) {
-	// ロックはバッファのフラッシュとファイルオープンだけに留め、スキャン中は解放する
-	// これで Append の書き込みを長時間ブロックしないようにする
+	// Flush と os.Open は同じロック内で連続実行することで Append との不整合を防ぐ
+	// (Flush 直後にロックを離して os.Open を呼ぶと間に Append が走り、書き込みが
+	// バッファ内に残ったまま open されて欠落するため必ず同区間で扱う)
+	// スキャンは並行 Append を許容するため Open 後にロックを解放する
 	s.mu.Lock()
 	if s.w != nil {
 		if err := s.w.Flush(); err != nil {

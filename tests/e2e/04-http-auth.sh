@@ -39,6 +39,8 @@ tools:
   search_files:
     max_results: 10
 server:
+  # 14004 は他の E2E スクリプトとぶつからない範囲で固定割り当て
+  # 並行実行で衝突する場合は環境変数 AGENT_HTTP_PORT を読む形に切り替える
   addr: 127.0.0.1:14004
   auth:
     enabled: true

@@ -187,6 +187,11 @@ func toolChoiceJSON(tc *llm.ToolChoice) any {
 				"function": map[string]any{"name": tc.Name},
 			}
 		}
+		// Ollama は OpenAI 互換ながら "required" 文字列を受け付けないため、
+		// tc.Name 未指定の "required" は強制呼び出しを実現できず auto にフォールバックする
+		// 設定ミス発見のため警告ログを残す
+		slog.Warn("ollama: tool_choice with empty Name cannot enforce required, falling back to auto",
+			"mode", tc.Mode, "name", tc.Name)
 		return "auto"
 	default:
 		slog.Warn("ollama: unknown tool_choice mode, falling back to auto", "mode", tc.Mode)
