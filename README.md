@@ -106,6 +106,36 @@ bash scripts/verify-hardening.sh
 | `agent tools`  | 有効な内蔵ツールを一覧表示します |
 | `agent config` | 設定ファイルの内容をダンプします |
 
+## HTTP API の認証とレート制限
+
+`agent serve` の HTTP API は既定で無認証です。本番運用や 127.0.0.1 以外で待ち受ける場合は、Bearer Token 認証、レート制限、IP allowlist、CORS をまとめて有効化できます。
+
+```yaml
+server:
+  addr: 0.0.0.0:14000
+  auth:
+    enabled: true
+    bearer_tokens:
+      - id: local
+        secret_env: AGENT_LOCAL_TOKEN
+  rate_limit:
+    enabled: true
+    rps: 5
+    burst: 10
+    per_token: true
+  allowlist:
+    cidrs: [127.0.0.1/32]
+  cors:
+    enabled: true
+    allow_origins: [https://example.com]
+    allow_methods: [GET, POST, OPTIONS]
+    allow_headers: [Authorization, Content-Type]
+```
+
+トークン値は `secret_env` 経由でのみ与えられ、値の直書きは設定読込時に拒否されます。`Authorization: Bearer <value>` の `<value>` が `eyJ` で始まるときは将来の OAuth2 JWT 検証ミドルウェアに委譲する想定で素通しします。`/healthz` だけは認証とレート制限を回避します。
+
+E2E スクリプトは `tests/e2e/04-http-auth.sh` です。401 / 200 / 429 のすべてのシナリオをローカル環境変数のみで検証します。設計の詳細は `docs/design/04-http-auth-ratelimit.md` を参照してください。
+
 ## リトライとフォールバック
 
 `providers.<name>.retry` でリトライ設定を、`fallback_to` で別プロバイダーへの切替を指定できます。`request_timeout_seconds` は HTTP クライアント全体のタイムアウトを上書きします。

@@ -14,10 +14,14 @@ import (
 
 // Server HTTP サーバ
 type Server struct {
-	svc     agent.Service
-	cfg     *config.Config
-	billing billing.Accumulator
-	mux     *http.ServeMux
+	svc       agent.Service
+	cfg       *config.Config
+	billing   billing.Accumulator
+	mux       *http.ServeMux
+	auth      *BearerAuth
+	limiter   *TokenBucketLimiter
+	allowlist *AllowlistCIDR
+	cors      *CORS
 }
 
 // New Service と config から Server を生成する
@@ -33,14 +37,37 @@ func New(svc agent.Service, cfg *config.Config, acc billing.Accumulator) *Server
 	return s
 }
 
-// Handler http.Handler を返す
-func (s *Server) Handler() http.Handler { return s.mux }
+// WithMiddleware 認証・レート制限・CIDR allowlist・CORS を設定する
+func (s *Server) WithMiddleware(auth *BearerAuth, limiter *TokenBucketLimiter, allowlist *AllowlistCIDR, cors *CORS) *Server {
+	s.auth = auth
+	s.limiter = limiter
+	s.allowlist = allowlist
+	s.cors = cors
+	return s
+}
+
+// Handler http.Handler を返す。WithMiddleware で設定済みの場合は順に Allowlist → Auth → RateLimit → CORS で巻く
+func (s *Server) Handler() http.Handler {
+	var h http.Handler = s.mux
+	h = s.cors.Handler(h)
+	h = s.limiter.Handler(h)
+	h = s.auth.Handler(h)
+	h = s.allowlist.Handler(h)
+	return h
+}
 
 // ListenAndServe アドレスで Server を起動する。acc は nil 可
+// config の auth / rate_limit / allowlist / cors 設定を解釈してミドルウェアを構築する
 func ListenAndServe(ctx context.Context, addr string, svc agent.Service, cfg *config.Config, acc billing.Accumulator) error {
+	server := New(svc, cfg, acc)
+	auth, limiter, allowlist, cors, err := buildMiddleware(cfg)
+	if err != nil {
+		return err
+	}
+	server.WithMiddleware(auth, limiter, allowlist, cors)
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           New(svc, cfg, acc).Handler(),
+		Handler:           server.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

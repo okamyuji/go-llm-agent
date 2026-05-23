@@ -112,7 +112,44 @@ type SearchFilesConfig struct {
 
 // ServerConfig HTTP サーバ設定
 type ServerConfig struct {
-	Addr string `yaml:"addr"`
+	Addr      string           `yaml:"addr"`
+	Auth      ServerAuthConfig `yaml:"auth"`
+	RateLimit ServerRateLimit  `yaml:"rate_limit"`
+	Allowlist ServerAllowlist  `yaml:"allowlist"`
+	CORS      ServerCORS       `yaml:"cors"`
+}
+
+// ServerAuthConfig Bearer Token 認証設定
+type ServerAuthConfig struct {
+	Enabled      bool                `yaml:"enabled"`
+	BearerTokens []ServerBearerToken `yaml:"bearer_tokens"`
+}
+
+// ServerBearerToken 個別の Bearer Token エントリ。secret_env からのみ値を解決する
+type ServerBearerToken struct {
+	ID        string `yaml:"id"`
+	SecretEnv string `yaml:"secret_env"`
+}
+
+// ServerRateLimit token bucket レート制限の設定
+type ServerRateLimit struct {
+	Enabled  bool    `yaml:"enabled"`
+	RPS      float64 `yaml:"rps"`
+	Burst    int     `yaml:"burst"`
+	PerToken bool    `yaml:"per_token"`
+}
+
+// ServerAllowlist IP allowlist の設定
+type ServerAllowlist struct {
+	CIDRs []string `yaml:"cidrs"`
+}
+
+// ServerCORS CORS ヘッダ設定
+type ServerCORS struct {
+	Enabled      bool     `yaml:"enabled"`
+	AllowOrigins []string `yaml:"allow_origins"`
+	AllowMethods []string `yaml:"allow_methods"`
+	AllowHeaders []string `yaml:"allow_headers"`
 }
 
 // StorageConfig ストレージ設定

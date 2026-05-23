@@ -96,6 +96,28 @@ tools:
 
 server:
   addr: 127.0.0.1:14000
+  # Bearer Token 認証。secret_env のみサポートで、値の直書きは config loader が reject する。
+  auth:
+    enabled: false
+    bearer_tokens:
+      - id: local
+        secret_env: AGENT_LOCAL_TOKEN
+  # token bucket レート制限。rps と burst が 0 のときは適用されない。
+  rate_limit:
+    enabled: false
+    rps: 5
+    burst: 10
+    per_token: true
+  # IP allowlist。CIDR を 1 つも書かないと適用されない。
+  allowlist:
+    cidrs:
+      - 127.0.0.1/32
+  # CORS プリフライト対応。enabled=true のときだけ反映される。
+  cors:
+    enabled: false
+    allow_origins: []
+    allow_methods: [GET, POST, OPTIONS]
+    allow_headers: [Authorization, Content-Type]
 
 storage:
   sessions_dir: ~/.local/state/go-llm-agent/sessions
