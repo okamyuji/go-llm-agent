@@ -13,8 +13,16 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/tool"
 )
 
-// Run LLM とツールを最大 MaxToolHops 回交互に呼ぶ
+// Run Strategy に処理を委譲する。Strategy 未設定なら ReAct で動く
 func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
+	if s.strategy != nil {
+		return s.strategy.Run(ctx, s, in, out)
+	}
+	return s.runReAct(ctx, in, out)
+}
+
+// runReAct LLM とツールを最大 MaxToolHops 回交互に呼ぶ ReAct スタイルのループ本体
+func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) error {
 	ctx, agentSpan := obs.StartAgentSpan(ctx, in.Model)
 	defer agentSpan.End()
 

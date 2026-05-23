@@ -226,6 +226,18 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 	if rd, err := buildRedactor(cfg); err == nil && rd != nil {
 		opts = append(opts, agent.WithRedactor(rd))
 	}
+	if cfg.Agent.Strategy != "" {
+		if st, ok := agent.NewStrategy(
+			cfg.Agent.Strategy,
+			cfg.Agent.PlannerExecutor.PlannerModel,
+			cfg.Agent.PlannerExecutor.ExecutorModel,
+			cfg.Agent.Reflection.MaxIterations,
+			cfg.Agent.Reflection.ConsecutiveFailures,
+			cfg.Agent.Reflection.HopBudget,
+		); ok {
+			opts = append(opts, agent.WithStrategy(st))
+		}
+	}
 	if len(cfg.Agent.Approval.RequiredTools) > 0 {
 		defaultDeny := cfg.Agent.Approval.DefaultDecision != "allow"
 		ap := agent.NewHTTPApprover(defaultDeny)

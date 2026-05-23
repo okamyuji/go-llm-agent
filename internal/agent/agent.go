@@ -72,6 +72,7 @@ type service struct {
 	approver          Approver
 	approvalRequired  map[string]bool
 	approvalTimeout   time.Duration
+	strategy          Strategy
 }
 
 // New Service を構築する。billing.Accumulator は nil 可で、その場合は集計を無効にする
@@ -114,6 +115,11 @@ func WithScanner(sc safety.Scanner) Option {
 // WithRedactor 出力リダクタを注入する
 func WithRedactor(r safety.Redactor) Option {
 	return func(s *service) { s.redactor = r }
+}
+
+// WithStrategy 戦略を注入する。未指定の場合は ReAct が既定
+func WithStrategy(st Strategy) Option {
+	return func(s *service) { s.strategy = st }
 }
 
 // WithApprover 承認ハンドラを注入する。required ツールセットも合わせて指定する

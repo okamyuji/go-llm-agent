@@ -132,6 +132,25 @@ metrics:
 
 E2E スクリプトは `tests/e2e/07-eval-suite.sh` です。fixtures/eval_exercise が LoadSuite / Score / WriteReport の動作を検証します。設計の詳細は `docs/design/07-eval-framework.md` を参照してください。
 
+## 実行戦略の切替
+
+`agent.strategy` で実行戦略を選べます。`react` (既定) は従来通り、`planner_executor` はシステムプロンプトに計画指示を注入して executor_model でツール呼び出しを行い、`reflection` は self-check ヒントを差し込みます。
+
+```yaml
+agent:
+  strategy: planner_executor
+  planner_executor:
+    planner_model: openai/gpt-4o
+    executor_model: openai/gpt-4o-mini
+    max_steps: 8
+  reflection:
+    max_iterations: 3
+    trigger_consecutive_failures: 2
+    trigger_hop_budget: 6
+```
+
+E2E スクリプトは `tests/e2e/09-planner-executor.sh` です。fixtures/strategy_exercise が 3 戦略と unknown 値のフォールバック動作を検証します。設計の詳細は `docs/design/09-planner-executor.md` を参照してください。
+
 ## HITL ツール承認
 
 `agent.approval.required_tools` に含まれるツールは、実行前に承認が必要になります。HTTP モードでは `/v1/runs/<runID>/approve` に JSON で `{call_id, allowed, reason, reviewer}` を POST すると該当の承認待ちが解放されます。timeout を過ぎると `default_decision` (`deny` または `allow`) に従います。

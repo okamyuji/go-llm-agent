@@ -95,13 +95,30 @@ type PricingConfig struct {
 
 // AgentConfig エージェントループ設定
 type AgentConfig struct {
-	MaxToolHops    int                  `yaml:"max_tool_hops"`
-	EnabledTools   []string             `yaml:"enabled_tools"`
-	SystemPrompt   string               `yaml:"system_prompt"`
-	Budget         BudgetConfig         `yaml:"budget"`
-	ToolChoice     ToolChoiceConfig     `yaml:"tool_choice"`
-	ToolValidation ToolValidationConfig `yaml:"tool_validation"`
-	Approval       ApprovalConfig       `yaml:"approval"`
+	MaxToolHops     int                   `yaml:"max_tool_hops"`
+	EnabledTools    []string              `yaml:"enabled_tools"`
+	SystemPrompt    string                `yaml:"system_prompt"`
+	Budget          BudgetConfig          `yaml:"budget"`
+	ToolChoice      ToolChoiceConfig      `yaml:"tool_choice"`
+	ToolValidation  ToolValidationConfig  `yaml:"tool_validation"`
+	Approval        ApprovalConfig        `yaml:"approval"`
+	Strategy        string                `yaml:"strategy"`
+	PlannerExecutor PlannerExecutorConfig `yaml:"planner_executor"`
+	Reflection      ReflectionConfig      `yaml:"reflection"`
+}
+
+// PlannerExecutorConfig Planner-Executor 戦略の設定
+type PlannerExecutorConfig struct {
+	PlannerModel  string `yaml:"planner_model"`
+	ExecutorModel string `yaml:"executor_model"`
+	MaxSteps      int    `yaml:"max_steps"`
+}
+
+// ReflectionConfig Reflection 戦略のトリガー設定
+type ReflectionConfig struct {
+	MaxIterations       int `yaml:"max_iterations"`
+	ConsecutiveFailures int `yaml:"trigger_consecutive_failures"`
+	HopBudget           int `yaml:"trigger_hop_budget"`
 }
 
 // ApprovalConfig HITL ツール承認の設定

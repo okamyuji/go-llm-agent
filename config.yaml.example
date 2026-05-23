@@ -81,6 +81,16 @@ agent:
     required_tools: []
     timeout_seconds: 30
     default_decision: deny
+  # 実行戦略の切替。react / planner_executor / reflection から選ぶ。
+  strategy: react
+  planner_executor:
+    planner_model: openai/gpt-4o
+    executor_model: openai/gpt-4o-mini
+    max_steps: 8
+  reflection:
+    max_iterations: 3
+    trigger_consecutive_failures: 2
+    trigger_hop_budget: 6
 
 tools:
   fs:
