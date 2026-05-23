@@ -2,9 +2,11 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
-	"github.com/xeipuuv/gojsonschema"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v5"
 
 	"github.com/okamyuji/go-llm-agent/internal/tool"
 )
@@ -14,23 +16,30 @@ type SchemaValidator interface {
 	Validate(toolName string, args json.RawMessage) (ok bool, msg string)
 }
 
-// schemaValidator gojsonschema を使う実装
+// schemaValidator santhosh-tekuri/jsonschema/v5 を使う実装
+// 旧版 xeipuuv/gojsonschema は maintenance mode のため移行した
 type schemaValidator struct {
-	schemas map[string]*gojsonschema.Schema
+	schemas map[string]*jsonschema.Schema
 }
 
 // NewSchemaValidator tool.Registry に登録されたスキーマからバリデータを構築する
 // スキーマ未指定のツールは「常に通過」として扱う
 // 不正な schema が含まれていた場合、起動時に error を返して fail-fast する
-// 旧実装は silent skip だったが、設定ミスを早期検出するため明示的にエラーを返す方針に変えた
 func NewSchemaValidator(reg tool.Registry) (SchemaValidator, error) {
-	out := &schemaValidator{schemas: map[string]*gojsonschema.Schema{}}
+	out := &schemaValidator{schemas: map[string]*jsonschema.Schema{}}
 	for _, sp := range reg.List() {
 		if len(sp.Schema) == 0 {
 			continue
 		}
-		loader := gojsonschema.NewBytesLoader(sp.Schema)
-		sch, err := gojsonschema.NewSchema(loader)
+		// schema を Compiler 経由でロードする。Compiler は schema 1 件ごとに新規作成して
+		// ツール間で名前空間が混ざらないようにする
+		compiler := jsonschema.NewCompiler()
+		// schema 本体に id がない場合に備えて固定の URL を使う
+		const schemaURL = "inline://tool-schema.json"
+		if err := compiler.AddResource(schemaURL, strings.NewReader(string(sp.Schema))); err != nil {
+			return nil, fmt.Errorf("agent: schema add resource failed for tool %q: %w", sp.Name, err)
+		}
+		sch, err := compiler.Compile(schemaURL)
 		if err != nil {
 			return nil, fmt.Errorf("agent: schema compile failed for tool %q: %w", sp.Name, err)
 		}
@@ -49,19 +58,33 @@ func (v *schemaValidator) Validate(toolName string, args json.RawMessage) (bool,
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
-	res, err := sch.Validate(gojsonschema.NewBytesLoader(args))
-	if err != nil {
+	// jsonschema/v5 は any 型インスタンスを検証する。json.RawMessage を一度デコードする
+	var instance any
+	if err := json.Unmarshal(args, &instance); err != nil {
+		return false, fmt.Sprintf("invalid json: %v", err)
+	}
+	if err := sch.Validate(instance); err != nil {
+		var verr *jsonschema.ValidationError
+		if errors.As(err, &verr) {
+			return false, summarizeValidationError(verr)
+		}
 		return false, fmt.Sprintf("validate failed: %v", err)
 	}
-	if res.Valid() {
-		return true, ""
-	}
-	msg := ""
-	for _, e := range res.Errors() {
-		if msg != "" {
-			msg += "; "
+	return true, ""
+}
+
+// summarizeValidationError ValidationError.BasicOutput からエラー要約文字列を作る
+// 1 個目の root エラーと、最大 3 件の cause を ; 区切りで結合する
+func summarizeValidationError(verr *jsonschema.ValidationError) string {
+	var parts []string
+	parts = append(parts, fmt.Sprintf("%s: %s", verr.InstanceLocation, verr.Message))
+	const maxCauses = 3
+	for i, c := range verr.Causes {
+		if i >= maxCauses {
+			parts = append(parts, fmt.Sprintf("(%d more)", len(verr.Causes)-maxCauses))
+			break
 		}
-		msg += e.String()
+		parts = append(parts, fmt.Sprintf("%s: %s", c.InstanceLocation, c.Message))
 	}
-	return false, msg
+	return strings.Join(parts, "; ")
 }

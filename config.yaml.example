@@ -186,6 +186,12 @@ safety:
       - id: private_key_header
         regex: "-----BEGIN [A-Z ]+PRIVATE KEY-----"
         replacement: "[REDACTED:PRIVATE_KEY]"
+      # credit_card はオプション。ID 番号や注文番号など同程度の数字列に対する偽陽性が
+      # 出やすいため、本番運用では Luhn 検証を行う別段の OutputRedactor と chain することを推奨する
+      # 不要なら以下の 3 行を削除してください
+      - id: credit_card
+        regex: "\\b(?:\\d[ -]*?){13,19}\\b"
+        replacement: "[REDACTED:CARD]"
   # 14 番設計書: PII リダクタ。output_redactor の後段で動作する。
   pii_redactor:
     enabled: true
