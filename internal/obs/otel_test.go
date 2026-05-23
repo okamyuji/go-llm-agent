@@ -143,8 +143,10 @@ func TestStartSpans_ReturnsValidSpan(t *testing.T) {
 	}
 }
 
+// TestRecord_NoOpBeforeInit resetGlobal() でパッケージグローバルを操作するため、
+// 明示的に t.Parallel() を付けない。他のテストとシリアル実行を保証することで
+// global 状態を競合させずに「Init していない状態でも panic しない」ことを検証する
 func TestRecord_NoOpBeforeInit(t *testing.T) {
-	// Init していない状態でも panic しないことを確認する
 	resetGlobal()
 	ctx := context.Background()
 	RecordTokens(ctx, "openai", "gpt", 1, 1)

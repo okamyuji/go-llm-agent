@@ -67,9 +67,18 @@ func main() {
 		default:
 			resp.Error = &err{Code: -32601, Message: "method not found"}
 		}
-		b, _ := json.Marshal(resp)
-		_, _ = out.Write(append(b, '\n'))
-		_ = out.Flush()
+		b, merr := json.Marshal(resp)
+		if merr != nil {
+			fmt.Fprintln(os.Stderr, "marshal resp:", merr)
+			continue
+		}
+		if _, werr := out.Write(append(b, '\n')); werr != nil {
+			fmt.Fprintln(os.Stderr, "write resp:", werr)
+			continue
+		}
+		if ferr := out.Flush(); ferr != nil {
+			fmt.Fprintln(os.Stderr, "flush:", ferr)
+		}
 	}
 	if e := sc.Err(); e != nil {
 		fmt.Fprintln(os.Stderr, "scanner err:", e)

@@ -41,6 +41,8 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 	}
 	// 06 番設計書 入力スキャナを最初の LLM 呼び出し前にすべての user/system メッセージへ適用する
 	// 検出された場合は EventError で早期リターンする (fail-closed)
+	// クライアントには PatternID 等の detector 内部情報を返さない (検出ロジック露出を防ぐ)
+	// 詳細なルール ID は slog でサーバ側にだけ残し、攻撃者へのフィードバックを最小化する
 	if s.scanner != nil {
 		for _, m := range msgs {
 			if m.Role != llm.RoleUser && m.Role != llm.RoleSystem {
@@ -48,7 +50,8 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 			}
 			findings := s.scanner.Scan(m.Content)
 			if len(findings) > 0 {
-				err := fmt.Errorf("input scanner blocked role=%s pattern=%s", m.Role, findings[0].PatternID)
+				slog.WarnContext(ctx, "input scanner blocked", "role", string(m.Role), "pattern_id", findings[0].PatternID)
+				err := fmt.Errorf("input blocked by safety scanner")
 				out <- Event{Kind: EventError, Err: err}
 				return err
 			}

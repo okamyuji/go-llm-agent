@@ -252,7 +252,11 @@ func clientIP(r *http.Request, trustedProxies []*net.IPNet) net.IP {
 		return peer
 	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// 左端の IP がオリジナルクライアントの IP
+		// 左端 IP を採用する
+		// この経路は直接接続元 (peer) が trustedProxies に含まれている場合のみ実行され、
+		// 信頼境界の外から流入する未検証 XFF をそのまま使うことはない
+		// よって悪意ある XFF spoof の前提として「信頼プロキシそのものが嘘の XFF を送る」が必要となり、
+		// それは TrustedProxies 設定の運用上のミスに帰着する
 		left := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
 		if ip := net.ParseIP(left); ip != nil {
 			return ip

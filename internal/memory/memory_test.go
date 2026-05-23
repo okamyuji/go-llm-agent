@@ -58,7 +58,10 @@ func TestFileNoteStore_TopKLimit(t *testing.T) {
 func TestFileNoteStore_EmptyQueryReturnsNil(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	s, _ := NewFileNoteStore(filepath.Join(dir, "notes.jsonl"))
+	s, err := NewFileNoteStore(filepath.Join(dir, "notes.jsonl"))
+	if err != nil {
+		t.Fatalf("NewFileNoteStore: %v", err)
+	}
 	got, err := s.Search(context.Background(), "", 5)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +74,10 @@ func TestFileNoteStore_EmptyQueryReturnsNil(t *testing.T) {
 func TestFileNoteStore_MissingFileReturnsNil(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	s, _ := NewFileNoteStore(filepath.Join(dir, "notes.jsonl"))
+	s, err := NewFileNoteStore(filepath.Join(dir, "notes.jsonl"))
+	if err != nil {
+		t.Fatalf("NewFileNoteStore: %v", err)
+	}
 	got, err := s.Search(context.Background(), "hello", 5)
 	if err != nil {
 		t.Fatal(err)

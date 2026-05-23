@@ -13,14 +13,17 @@ import (
 func main() {
 	ap := agent.NewHTTPApprover()
 	resultCh := make(chan agent.ApprovalDecision, 1)
+	errCh := make(chan error, 1)
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		d, err := ap.Request(ctx, agent.ApprovalRequest{RunID: "R", CallID: "C1", ToolName: "shell"})
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "request err:", err)
-			os.Exit(1)
+			// goroutine 内で os.Exit すると defer が走らず main の cleanup 経路も飛ばすため、
+			// エラーは channel で main に伝えてから return する
+			errCh <- err
+			return
 		}
 		resultCh <- d
 	}()
@@ -40,7 +43,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Submit failed after retries")
 		os.Exit(2)
 	}
-	d := <-resultCh
+	var d agent.ApprovalDecision
+	select {
+	case d = <-resultCh:
+	case err := <-errCh:
+		fmt.Fprintln(os.Stderr, "request err:", err)
+		os.Exit(1)
+	}
 	if !d.Allowed {
 		fmt.Fprintln(os.Stderr, "expected allowed")
 		os.Exit(3)
