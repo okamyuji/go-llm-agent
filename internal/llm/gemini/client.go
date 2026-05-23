@@ -15,9 +15,10 @@ import (
 
 // Options クライアント生成オプション
 type Options struct {
-	BaseURL    string
-	APIKey     string
-	HTTPClient *http.Client
+	BaseURL               string
+	APIKey                string
+	HTTPClient            *http.Client
+	RequestTimeoutSeconds int
 }
 
 // Client Google Gemini API クライアント
@@ -31,7 +32,11 @@ type Client struct {
 func New(o Options) *Client {
 	c := o.HTTPClient
 	if c == nil {
-		c = &http.Client{Timeout: 120 * time.Second}
+		timeout := 120 * time.Second
+		if o.RequestTimeoutSeconds > 0 {
+			timeout = time.Duration(o.RequestTimeoutSeconds) * time.Second
+		}
+		c = &http.Client{Timeout: timeout}
 	}
 	if o.BaseURL == "" {
 		o.BaseURL = "https://generativelanguage.googleapis.com/v1beta"

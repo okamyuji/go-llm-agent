@@ -50,7 +50,10 @@ func (f *fakeProvider) Stream(_ context.Context, _ llm.ChatRequest) (llm.ChatStr
 type fakeReg struct{ p llm.Provider }
 
 func (f fakeReg) Resolve(model string) (llm.Provider, string, error) { return f.p, model, nil }
-func (f fakeReg) List() []string                                     { return []string{"fake"} }
+func (f fakeReg) ResolveWithFallback(model string) (llm.Provider, string, llm.Provider, string, error) {
+	return f.p, model, nil, "", nil
+}
+func (f fakeReg) List() []string { return []string{"fake"} }
 
 type echoTool struct{}
 

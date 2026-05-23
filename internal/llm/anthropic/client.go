@@ -16,9 +16,10 @@ const apiVersion = "2023-06-01"
 
 // Options クライアント生成オプション
 type Options struct {
-	BaseURL    string
-	APIKey     string
-	HTTPClient *http.Client
+	BaseURL               string
+	APIKey                string
+	HTTPClient            *http.Client
+	RequestTimeoutSeconds int
 }
 
 // Client Anthropic Messages API クライアント
@@ -32,7 +33,11 @@ type Client struct {
 func New(o Options) *Client {
 	c := o.HTTPClient
 	if c == nil {
-		c = &http.Client{Timeout: 120 * time.Second}
+		timeout := 120 * time.Second
+		if o.RequestTimeoutSeconds > 0 {
+			timeout = time.Duration(o.RequestTimeoutSeconds) * time.Second
+		}
+		c = &http.Client{Timeout: timeout}
 	}
 	if o.BaseURL == "" {
 		o.BaseURL = "https://api.anthropic.com"

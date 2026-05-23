@@ -19,6 +19,15 @@ providers:
     pricing:
       input_per_million_jpy: 450
       output_per_million_jpy: 1800
+    # 429 や 5xx の retryable エラーに対するリトライ設定。max_attempts<=1 でリトライ無効。
+    request_timeout_seconds: 60
+    retry:
+      max_attempts: 4
+      initial_backoff_ms: 200
+      max_backoff_ms: 5000
+      jitter_ratio: 0.2
+    # 連続失敗した場合のフォールバック先プロバイダー名。未指定で無効。
+    fallback_to: anthropic
   anthropic:
     base_url: https://api.anthropic.com
     api_key_env: ANTHROPIC_API_KEY

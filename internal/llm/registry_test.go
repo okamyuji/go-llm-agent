@@ -86,3 +86,79 @@ func TestRegistry_AllowModels_EmptyMeansAll(t *testing.T) {
 		t.Fatalf("空 allow_models は全許可: %v", err)
 	}
 }
+
+func TestRegistry_ResolveWithFallback_ReturnsBoth(t *testing.T) {
+	r := llm.NewRegistryWithFallback(
+		map[string]llm.Provider{
+			"openai":    &fakeProvider{name: "openai"},
+			"anthropic": &fakeProvider{name: "anthropic"},
+		},
+		nil,
+		map[string]string{"openai": "anthropic"},
+	)
+	primary, pmodel, fb, fbmodel, err := r.ResolveWithFallback("openai/gpt-4")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if primary.Name() != "openai" || pmodel != "gpt-4" {
+		t.Errorf("primary unexpected: name=%q model=%q", primary.Name(), pmodel)
+	}
+	if fb == nil || fb.Name() != "anthropic" || fbmodel != "gpt-4" {
+		t.Errorf("fallback unexpected: fb=%v model=%q", fb, fbmodel)
+	}
+}
+
+func TestRegistry_ResolveWithFallback_NoFallbackReturnsNil(t *testing.T) {
+	r := llm.NewRegistryWithFallback(
+		map[string]llm.Provider{"openai": &fakeProvider{name: "openai"}},
+		nil,
+		nil,
+	)
+	_, _, fb, _, err := r.ResolveWithFallback("openai/gpt-4")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if fb != nil {
+		t.Errorf("fallback must be nil when not configured, got %v", fb)
+	}
+}
+
+func TestRegistry_ResolveWithFallback_InvalidModelString(t *testing.T) {
+	r := llm.NewRegistryWithFallback(map[string]llm.Provider{}, nil, nil)
+	if _, _, _, _, err := r.ResolveWithFallback("noslash"); err == nil {
+		t.Fatal("invalid model must error")
+	}
+}
+
+func TestRegistry_ResolveWithFallback_UnknownPrimary(t *testing.T) {
+	r := llm.NewRegistryWithFallback(map[string]llm.Provider{}, nil, nil)
+	if _, _, _, _, err := r.ResolveWithFallback("missing/gpt"); err == nil {
+		t.Fatal("unknown primary must error")
+	}
+}
+
+func TestRegistry_ResolveWithFallback_AllowModelsRejection(t *testing.T) {
+	r := llm.NewRegistryWithFallback(
+		map[string]llm.Provider{"openai": &fakeProvider{name: "openai"}},
+		map[string][]string{"openai": {"only-this"}},
+		nil,
+	)
+	if _, _, _, _, err := r.ResolveWithFallback("openai/forbidden"); err == nil {
+		t.Fatal("disallowed model must error")
+	}
+}
+
+func TestRegistry_ResolveWithFallback_FallbackNameUnknownReturnsNil(t *testing.T) {
+	r := llm.NewRegistryWithFallback(
+		map[string]llm.Provider{"openai": &fakeProvider{name: "openai"}},
+		nil,
+		map[string]string{"openai": "missing"},
+	)
+	_, _, fb, _, err := r.ResolveWithFallback("openai/gpt")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if fb != nil {
+		t.Error("fallback to unknown provider must yield nil")
+	}
+}

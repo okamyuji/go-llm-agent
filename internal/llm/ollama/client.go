@@ -14,8 +14,9 @@ import (
 
 // Options クライアント生成オプション
 type Options struct {
-	BaseURL    string
-	HTTPClient *http.Client
+	BaseURL               string
+	HTTPClient            *http.Client
+	RequestTimeoutSeconds int
 }
 
 // Client Ollama API クライアント
@@ -28,7 +29,11 @@ type Client struct {
 func New(o Options) *Client {
 	c := o.HTTPClient
 	if c == nil {
-		c = &http.Client{Timeout: 300 * time.Second}
+		timeout := 300 * time.Second
+		if o.RequestTimeoutSeconds > 0 {
+			timeout = time.Duration(o.RequestTimeoutSeconds) * time.Second
+		}
+		c = &http.Client{Timeout: timeout}
 	}
 	if o.BaseURL == "" {
 		o.BaseURL = "http://localhost:11434"

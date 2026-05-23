@@ -19,6 +19,7 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/llm/gemini"
 	"github.com/okamyuji/go-llm-agent/internal/llm/ollama"
 	"github.com/okamyuji/go-llm-agent/internal/llm/openai"
+	"github.com/okamyuji/go-llm-agent/internal/llm/retry"
 	"github.com/okamyuji/go-llm-agent/internal/obs"
 	"github.com/okamyuji/go-llm-agent/internal/secret"
 	"github.com/okamyuji/go-llm-agent/internal/storage"
@@ -108,26 +109,30 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 	provs := map[string]llm.Provider{}
 	if pc, ok := cfg.Providers["openai"]; ok {
 		key, _ := resolver.Resolve(pc.APIKeyEnv)
-		provs["openai"] = openai.New(openai.Options{BaseURL: pc.BaseURL, APIKey: key})
+		provs["openai"] = wrapWithRetry("openai", openai.New(openai.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
 	}
 	if pc, ok := cfg.Providers["anthropic"]; ok {
 		key, _ := resolver.Resolve(pc.APIKeyEnv)
-		provs["anthropic"] = anthropic.New(anthropic.Options{BaseURL: pc.BaseURL, APIKey: key})
+		provs["anthropic"] = wrapWithRetry("anthropic", anthropic.New(anthropic.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
 	}
 	if pc, ok := cfg.Providers["gemini"]; ok {
 		key, _ := resolver.Resolve(pc.APIKeyEnv)
-		provs["gemini"] = gemini.New(gemini.Options{BaseURL: pc.BaseURL, APIKey: key})
+		provs["gemini"] = wrapWithRetry("gemini", gemini.New(gemini.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
 	}
 	if pc, ok := cfg.Providers["ollama"]; ok {
-		provs["ollama"] = ollama.New(ollama.Options{BaseURL: pc.BaseURL})
+		provs["ollama"] = wrapWithRetry("ollama", ollama.New(ollama.Options{BaseURL: pc.BaseURL, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
 	}
 	allowModels := map[string][]string{}
+	fallbackMap := map[string]string{}
 	for name, pc := range cfg.Providers {
 		if len(pc.AllowModels) > 0 {
 			allowModels[name] = pc.AllowModels
 		}
+		if pc.FallbackTo != "" {
+			fallbackMap[name] = pc.FallbackTo
+		}
 	}
-	llmReg := llm.NewRegistryWithAllowlist(provs, allowModels)
+	llmReg := llm.NewRegistryWithFallback(provs, allowModels, fallbackMap)
 
 	logger := obs.NewLogger(obs.LoggerOptions{Format: cfg.Logging.Format, Level: cfg.Logging.Level})
 	sb := tool.NewSandboxWithDeny(cfg.Tools.FS.AllowPaths, cfg.Tools.FS.DenyPaths)
@@ -141,6 +146,17 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 	toolReg := tool.NewRegistry(tools, cfg.Agent.EnabledTools)
 	store := storage.NewSessionStore(expand(cfg.Storage.SessionsDir))
 	return cfg, llmReg, toolReg, store, nil
+}
+
+// wrapWithRetry RetryConfig を retry.Config に変換して Provider をラップする
+// MaxAttempts <= 1 のとき WrapProvider は inner をそのまま返すため互換性が保たれる
+func wrapWithRetry(name string, p llm.Provider, rc config.RetryConfig) llm.Provider {
+	return retry.WrapProvider(name, p, retry.Config{
+		MaxAttempts:    rc.MaxAttempts,
+		InitialBackoff: time.Duration(rc.InitialBackoffMS) * time.Millisecond,
+		MaxBackoff:     time.Duration(rc.MaxBackoffMS) * time.Millisecond,
+		JitterRatio:    rc.JitterRatio,
+	})
 }
 
 // buildBillingAccumulator config から billing.Accumulator を構築する

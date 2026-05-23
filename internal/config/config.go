@@ -37,10 +37,21 @@ type OTelConfig struct {
 
 // ProviderConfig プロバイダー固有設定
 type ProviderConfig struct {
-	BaseURL     string        `yaml:"base_url"`
-	APIKeyEnv   string        `yaml:"api_key_env"`
-	AllowModels []string      `yaml:"allow_models"`
-	Pricing     PricingConfig `yaml:"pricing"`
+	BaseURL               string        `yaml:"base_url"`
+	APIKeyEnv             string        `yaml:"api_key_env"`
+	AllowModels           []string      `yaml:"allow_models"`
+	Pricing               PricingConfig `yaml:"pricing"`
+	RequestTimeoutSeconds int           `yaml:"request_timeout_seconds"`
+	Retry                 RetryConfig   `yaml:"retry"`
+	FallbackTo            string        `yaml:"fallback_to"`
+}
+
+// RetryConfig リトライ設定。MaxAttempts<=1 でリトライ無効
+type RetryConfig struct {
+	MaxAttempts      int     `yaml:"max_attempts"`
+	InitialBackoffMS int     `yaml:"initial_backoff_ms"`
+	MaxBackoffMS     int     `yaml:"max_backoff_ms"`
+	JitterRatio      float64 `yaml:"jitter_ratio"`
 }
 
 // PricingConfig 1 プロバイダーあたりの単価設定 (JPY per million tokens)

@@ -106,6 +106,26 @@ bash scripts/verify-hardening.sh
 | `agent tools`  | 有効な内蔵ツールを一覧表示します |
 | `agent config` | 設定ファイルの内容をダンプします |
 
+## リトライとフォールバック
+
+`providers.<name>.retry` でリトライ設定を、`fallback_to` で別プロバイダーへの切替を指定できます。`request_timeout_seconds` は HTTP クライアント全体のタイムアウトを上書きします。
+
+```yaml
+providers:
+  openai:
+    request_timeout_seconds: 60
+    retry:
+      max_attempts: 4
+      initial_backoff_ms: 200
+      max_backoff_ms: 5000
+      jitter_ratio: 0.2
+    fallback_to: anthropic
+```
+
+リトライ対象は `llm.ProviderError.Retryable=true` の 429 と 5xx 系のみで、4xx の入力エラーや context のキャンセルは即座に失敗します。バックオフは指数増加でジッタを掛け、`MaxBackoff` を上限とします。リトライ試行数とフォールバック発火回数は OTel メトリクス `llm.retry.attempts` と `llm.fallback.total` に記録されます。
+
+E2E スクリプトは `tests/e2e/03-llm-retry.sh` です。`tests/e2e/fixtures/retry_exercise` のフェイクプロバイダーを介して 429 を 2 回返した後成功するシナリオを検証します。設計の詳細は `docs/design/03-llm-retry-backoff.md` を参照してください。
+
 ## トークンとコストの集計
 
 `providers.<name>.pricing` を設定すると、LLM 呼び出しごとの入出力トークン数から JPY コストを算出し、セッション単位と日次単位で集計します。集計結果は `storage.sessions_dir/billing.jsonl` に追記され、`agent.Event` の `Usage` と `Cost` フィールド経由でリアルタイムに観測できます。

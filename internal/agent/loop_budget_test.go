@@ -53,6 +53,9 @@ type budgetRegistry struct{ p llm.Provider }
 func (b *budgetRegistry) Resolve(_ string) (llm.Provider, string, error) {
 	return b.p, "fakebill-model", nil
 }
+func (b *budgetRegistry) ResolveWithFallback(_ string) (llm.Provider, string, llm.Provider, string, error) {
+	return b.p, "fakebill-model", nil, "", nil
+}
 func (b *budgetRegistry) List() []string { return []string{"fakebill/fakebill-model"} }
 
 // budgetTools 空のツール集合
