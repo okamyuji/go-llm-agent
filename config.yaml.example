@@ -135,6 +135,30 @@ logging:
   format: text
   level: info
 
+# 入出力フィルタとプロンプトインジェクション検知。output_redactor は既定 on で
+# DeltaText / Final / ツール出力に対して機微情報をマスキングする。
+safety:
+  input_scanner:
+    enabled: true
+    block_on_match: false
+    patterns:
+      - id: ignore_previous
+        regex: "(?i)ignore (the )?previous instructions"
+      - id: system_role_inject
+        regex: "(?i)\\[system\\]"
+  output_redactor:
+    enabled: true
+    rules:
+      - id: openai_key
+        regex: "sk-[A-Za-z0-9]{20,}"
+        replacement: "[REDACTED:OPENAI]"
+      - id: jwt
+        regex: "eyJ[0-9A-Za-z_-]{8,}\\.[0-9A-Za-z_-]{8,}\\.[0-9A-Za-z_-]{8,}"
+        replacement: "[REDACTED:JWT]"
+      - id: private_key_header
+        regex: "-----BEGIN [A-Z ]+PRIVATE KEY-----"
+        replacement: "[REDACTED:PRIVATE_KEY]"
+
 # OpenTelemetry 計装。enabled: true で OTLP HTTP exporter にトレースとメトリクスを送る。
 # 既定は無効で、有効化しても他機能の挙動は変えない。詳細は docs/design/01-otel-instrumentation.md を参照する。
 observability:

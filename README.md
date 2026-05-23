@@ -106,6 +106,30 @@ bash scripts/verify-hardening.sh
 | `agent tools`  | 有効な内蔵ツールを一覧表示します |
 | `agent config` | 設定ファイルの内容をダンプします |
 
+## プロンプトインジェクション検知と出力リダクション
+
+`safety.input_scanner` で入力テキストに対する正規表現スキャン、`safety.output_redactor` で出力テキストに対する機微情報マスキングを行います。すべてのツール返却テキストは `[UNTRUSTED INPUT: tool=<name>]` で始まる untrusted マーカーで包まれ、LLM に untrusted ソースであることを明示します。
+
+```yaml
+safety:
+  input_scanner:
+    enabled: true
+    block_on_match: false
+    patterns:
+      - id: ignore_previous
+        regex: "(?i)ignore (the )?previous instructions"
+  output_redactor:
+    enabled: true
+    rules:
+      - id: openai_key
+        regex: "sk-[A-Za-z0-9]{20,}"
+        replacement: "[REDACTED:OPENAI]"
+```
+
+DeltaText / Final / ツール出力のすべての経路で同じ Redactor が適用されます。14 番設計書で追加予定の PII Redactor は `ChainRedactor` で本 Redactor の後段に組み合わせる想定です。
+
+E2E スクリプトは `tests/e2e/06-injection-and-redact.sh` です。fixtures/safety_exercise が Scanner と Redactor の動作を検証します。設計の詳細は `docs/design/06-input-output-filter.md` を参照してください。
+
 ## ツール呼び出しの強制度とスキーマ検証
 
 `agent.tool_choice` で LLM のツール呼び出し挙動を制御できます。`mode` は `auto` / `required` / `none` / `tool` の 4 種類で、`tool` を指定したときは `name` に具体的なツール名を入れます。各プロバイダー (OpenAI / Anthropic / Gemini / Ollama) のネイティブな tool_choice 仕様にマッピングされます。

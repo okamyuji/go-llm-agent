@@ -17,6 +17,39 @@ type Config struct {
 	Storage       StorageConfig             `yaml:"storage"`
 	Logging       LoggingConfig             `yaml:"logging"`
 	Observability ObservabilityConfig       `yaml:"observability"`
+	Safety        SafetyConfig              `yaml:"safety"`
+}
+
+// SafetyConfig 入出力フィルタとリダクタの設定
+type SafetyConfig struct {
+	InputScanner   SafetyInputScanner   `yaml:"input_scanner"`
+	OutputRedactor SafetyOutputRedactor `yaml:"output_redactor"`
+}
+
+// SafetyInputScanner 入力スキャナの設定
+type SafetyInputScanner struct {
+	Enabled      bool                     `yaml:"enabled"`
+	BlockOnMatch bool                     `yaml:"block_on_match"`
+	Patterns     []SafetyInputScannerRule `yaml:"patterns"`
+}
+
+// SafetyInputScannerRule 入力スキャナの 1 ルール
+type SafetyInputScannerRule struct {
+	ID    string `yaml:"id"`
+	Regex string `yaml:"regex"`
+}
+
+// SafetyOutputRedactor 出力リダクタの設定
+type SafetyOutputRedactor struct {
+	Enabled bool                       `yaml:"enabled"`
+	Rules   []SafetyOutputRedactorRule `yaml:"rules"`
+}
+
+// SafetyOutputRedactorRule 出力リダクタの 1 ルール
+type SafetyOutputRedactorRule struct {
+	ID          string `yaml:"id"`
+	Regex       string `yaml:"regex"`
+	Replacement string `yaml:"replacement"`
 }
 
 // ObservabilityConfig OTel 計装の設定をまとめる

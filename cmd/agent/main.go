@@ -21,6 +21,7 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/llm/openai"
 	"github.com/okamyuji/go-llm-agent/internal/llm/retry"
 	"github.com/okamyuji/go-llm-agent/internal/obs"
+	"github.com/okamyuji/go-llm-agent/internal/safety"
 	"github.com/okamyuji/go-llm-agent/internal/secret"
 	"github.com/okamyuji/go-llm-agent/internal/storage"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
@@ -161,7 +162,34 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 	if cfg.Agent.ToolChoice.Mode != "" {
 		opts = append(opts, agent.WithDefaultToolChoice(&llm.ToolChoice{Mode: cfg.Agent.ToolChoice.Mode, Name: cfg.Agent.ToolChoice.Name}))
 	}
+	if sc, err := buildScanner(cfg); err == nil && sc != nil {
+		opts = append(opts, agent.WithScanner(sc))
+	}
+	if rd, err := buildRedactor(cfg); err == nil && rd != nil {
+		opts = append(opts, agent.WithRedactor(rd))
+	}
 	return opts
+}
+
+// buildScanner cfg.Safety.InputScanner から safety.Scanner を構築する
+func buildScanner(cfg *config.Config) (safety.Scanner, error) {
+	c := safety.InputScannerConfig{
+		Enabled:      cfg.Safety.InputScanner.Enabled,
+		BlockOnMatch: cfg.Safety.InputScanner.BlockOnMatch,
+	}
+	for _, p := range cfg.Safety.InputScanner.Patterns {
+		c.Patterns = append(c.Patterns, safety.InputScannerRule{ID: p.ID, Regex: p.Regex})
+	}
+	return safety.NewScannerFromConfig(c)
+}
+
+// buildRedactor cfg.Safety.OutputRedactor から safety.Redactor を構築する
+func buildRedactor(cfg *config.Config) (safety.Redactor, error) {
+	c := safety.OutputRedactorConfig{Enabled: cfg.Safety.OutputRedactor.Enabled}
+	for _, r := range cfg.Safety.OutputRedactor.Rules {
+		c.Rules = append(c.Rules, safety.OutputRedactorRule{ID: r.ID, Regex: r.Regex, Replacement: r.Replacement})
+	}
+	return safety.NewRedactorFromConfig(c)
 }
 
 // wrapWithRetry RetryConfig を retry.Config に変換して Provider をラップする

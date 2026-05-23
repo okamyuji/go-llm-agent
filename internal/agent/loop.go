@@ -61,8 +61,12 @@ func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 				return ev.Err
 			}
 			if ev.DeltaText != "" {
-				contentBuilder.WriteString(ev.DeltaText)
-				out <- Event{Kind: EventDelta, Delta: ev.DeltaText}
+				delta := ev.DeltaText
+				if s.redactor != nil {
+					delta = s.redactor.Redact(delta)
+				}
+				contentBuilder.WriteString(delta)
+				out <- Event{Kind: EventDelta, Delta: delta}
 			}
 			if ev.ToolCall != nil {
 				pendingCall = ev.ToolCall
@@ -142,10 +146,18 @@ func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 		ok2 := terr == nil && !res.IsError
 		obs.RecordToolOutcome(execCtx, pendingCall.Name, ok2, time.Since(start))
 		toolSpan.End()
-		tr := &ToolResult{CallID: pendingCall.ID, Name: pendingCall.Name, Content: res.Content, IsError: terr != nil || res.IsError}
+		content := res.Content
 		if terr != nil {
-			tr.Content = terr.Error()
+			content = terr.Error()
 		}
+		// 06 番設計書: 全ツール出力に untrusted マーカーを付与してプロンプトインジェクション耐性を高める
+		if !strings.HasPrefix(content, "[UNTRUSTED INPUT") {
+			content = "[UNTRUSTED INPUT: tool=" + pendingCall.Name + "]\n" + content + "\n[END UNTRUSTED]"
+		}
+		if s.redactor != nil {
+			content = s.redactor.Redact(content)
+		}
+		tr := &ToolResult{CallID: pendingCall.ID, Name: pendingCall.Name, Content: content, IsError: terr != nil || res.IsError}
 		out <- Event{Kind: EventToolResult, ToolResult: tr}
 		msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: tr.Content, ToolCallID: pendingCall.ID, Name: pendingCall.Name})
 	}

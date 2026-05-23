@@ -5,6 +5,7 @@ import (
 
 	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
+	"github.com/okamyuji/go-llm-agent/internal/safety"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
 )
 
@@ -65,6 +66,8 @@ type service struct {
 	validator         SchemaValidator
 	defaultToolChoice *llm.ToolChoice
 	defaultMaxRetries int
+	scanner           safety.Scanner
+	redactor          safety.Redactor
 }
 
 // New Service を構築する。billing.Accumulator は nil 可で、その場合は集計を無効にする
@@ -97,4 +100,14 @@ func WithDefaultToolChoice(tc *llm.ToolChoice) Option {
 // WithDefaultValidationRetries Input.ValidationMaxRetries が 0 のときの既定値を設定する
 func WithDefaultValidationRetries(n int) Option {
 	return func(s *service) { s.defaultMaxRetries = n }
+}
+
+// WithScanner 入力スキャナを注入する
+func WithScanner(sc safety.Scanner) Option {
+	return func(s *service) { s.scanner = sc }
+}
+
+// WithRedactor 出力リダクタを注入する
+func WithRedactor(r safety.Redactor) Option {
+	return func(s *service) { s.redactor = r }
 }
