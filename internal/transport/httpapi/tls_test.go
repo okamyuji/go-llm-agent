@@ -26,19 +26,32 @@ func TestBuildTLSConfig_RequiresCertAndKey(t *testing.T) {
 func TestResolveMinVersion(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		in   string
-		want uint16
+		in      string
+		want    uint16
+		wantErr bool
 	}{
-		// TLS 1.0 / 1.1 は deprecated として TLS 1.2 にフォールバックする
-		{"1.0", tls.VersionTLS12},
-		{"1.1", tls.VersionTLS12},
-		{"1.2", tls.VersionTLS12},
-		{"1.3", tls.VersionTLS13},
-		{"", tls.VersionTLS12},
-		{"bogus", tls.VersionTLS12},
+		// 空文字は TLS 1.2 既定、1.2/1.3 は明示的に許可
+		// TLS 1.0 / 1.1 や未知の値は設定ミスとして error を返す
+		{"1.2", tls.VersionTLS12, false},
+		{"1.3", tls.VersionTLS13, false},
+		{"", tls.VersionTLS12, false},
+		{"1.0", 0, true},
+		{"1.1", 0, true},
+		{"bogus", 0, true},
 	}
 	for _, c := range cases {
-		if got := resolveMinVersion(c.in); got != c.want {
+		got, err := resolveMinVersion(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("resolveMinVersion(%q) want error got nil", c.in)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("resolveMinVersion(%q) unexpected err: %v", c.in, err)
+			continue
+		}
+		if got != c.want {
 			t.Errorf("resolveMinVersion(%q) = %d want %d", c.in, got, c.want)
 		}
 	}

@@ -31,9 +31,13 @@ func BuildTLSConfig(c TLSConfig) (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("httpapi tls keypair: %w", err)
 	}
+	minVer, err := resolveMinVersion(c.MinVersion)
+	if err != nil {
+		return nil, fmt.Errorf("httpapi tls min_version: %w", err)
+	}
 	cfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		MinVersion:   resolveMinVersion(c.MinVersion),
+		MinVersion:   minVer,
 	}
 	if c.ClientCAFile != "" {
 		caBytes, err := os.ReadFile(c.ClientCAFile)
@@ -52,14 +56,14 @@ func BuildTLSConfig(c TLSConfig) (*tls.Config, error) {
 
 // resolveMinVersion 文字列から TLS バージョン定数に解決する
 // TLS 1.0 / 1.1 は IETF RFC 8996 で deprecated のため受け付けない。
-// 空または未知の値はセキュアな既定として TLS 1.2 に落とす
-func resolveMinVersion(v string) uint16 {
+// 空文字列は既定として TLS 1.2 を返し、未知の値は明示的に error を返して設定ミスを表面化する
+func resolveMinVersion(v string) (uint16, error) {
 	switch v {
-	case "1.2":
-		return tls.VersionTLS12
+	case "", "1.2":
+		return tls.VersionTLS12, nil
 	case "1.3":
-		return tls.VersionTLS13
+		return tls.VersionTLS13, nil
 	default:
-		return tls.VersionTLS12
+		return 0, fmt.Errorf("unsupported tls.min_version %q (allowed: 1.2, 1.3)", v)
 	}
 }

@@ -190,6 +190,8 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 		// stdin を閉じて子プロセスを EOF 終了させ、Scan の戻りを促してから
 		// rch を回収することで goroutine leak を防ぐ
 		// 以降の call() は closed フラグ確認で ErrClientClosed を返すよう設計してある
+		// 関数冒頭の c.mu.Lock() を defer で保持しているため、ここで c.in / c.closed を
+		// 書き換える操作は Close() および他の call() と race しない
 		if c.in != nil {
 			_ = c.in.Close()
 			c.in = nil

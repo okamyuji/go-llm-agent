@@ -21,10 +21,11 @@ type JWTVerifierConfig struct {
 // JWTVerifier JWT 検証ミドルウェア。15 番 MVP として共有鍵 HS256 検証の
 // スタブを提供する。本番では go-jwt と JWKS fetch を組み合わせて RS256 / ES256 と
 // 鍵ローテーションに対応する想定
+// secret は鍵素材であり、外部パッケージにそのまま露出させないため非公開フィールドにする
 type JWTVerifier struct {
 	Issuer   string
 	Audience string
-	Secret   []byte
+	secret   []byte
 	cacheTTL time.Duration
 }
 
@@ -48,7 +49,7 @@ func NewJWTVerifier(c JWTVerifierConfig, secretLookup func(env string) (string, 
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
-	return &JWTVerifier{Issuer: c.Issuer, Audience: c.Audience, Secret: []byte(v), cacheTTL: ttl}, nil
+	return &JWTVerifier{Issuer: c.Issuer, Audience: c.Audience, secret: []byte(v), cacheTTL: ttl}, nil
 }
 
 // Handler 次の Handler を JWT 検証で包む

@@ -29,16 +29,30 @@ func main() {
 	add := &tool.NoteAddTool{Store: ns}
 	search := &tool.NoteSearchTool{Store: ns}
 
-	if r, _ := add.Execute(context.Background(), json.RawMessage(`{"title":"OTel","body":"distributed tracing setup","tags":["obs"]}`)); r.IsError {
+	r, err := add.Execute(context.Background(), json.RawMessage(`{"title":"OTel","body":"distributed tracing setup","tags":["obs"]}`))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "add err:", err)
+		os.Exit(3)
+	}
+	if r.IsError {
 		fmt.Fprintln(os.Stderr, "add fail:", r.Content)
 		os.Exit(3)
 	}
-	if r, _ := add.Execute(context.Background(), json.RawMessage(`{"title":"Auth","body":"bearer token guide","tags":["security"]}`)); r.IsError {
+	r, err = add.Execute(context.Background(), json.RawMessage(`{"title":"Auth","body":"bearer token guide","tags":["security"]}`))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "add err 2:", err)
+		os.Exit(4)
+	}
+	if r.IsError {
 		fmt.Fprintln(os.Stderr, "add fail 2:", r.Content)
 		os.Exit(4)
 	}
 
-	r, _ := search.Execute(context.Background(), json.RawMessage(`{"query":"OTel tracing","top_k":3}`))
+	r, err = search.Execute(context.Background(), json.RawMessage(`{"query":"OTel tracing","top_k":3}`))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "search err:", err)
+		os.Exit(5)
+	}
 	if r.IsError {
 		fmt.Fprintln(os.Stderr, "search fail:", r.Content)
 		os.Exit(5)

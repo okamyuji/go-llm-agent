@@ -90,14 +90,17 @@ func (s *FileStore) QueryDate(_ context.Context, date string) ([]Snapshot, error
 // 実装は線形スキャン O(n) のため、本番環境で大量のレコードが蓄積するケースには不向き
 // 大規模運用では SQLite など index 付きストレージに置き換える前提の MVP 実装
 func (s *FileStore) queryAll(pred func(Snapshot) bool) ([]Snapshot, error) {
+	// ロックはバッファのフラッシュとファイルオープンだけに留め、スキャン中は解放する
+	// これで Append の書き込みを長時間ブロックしないようにする
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.w != nil {
 		if err := s.w.Flush(); err != nil {
+			s.mu.Unlock()
 			return nil, fmt.Errorf("billing flush: %w", err)
 		}
 	}
 	f, err := os.Open(s.path)
+	s.mu.Unlock()
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

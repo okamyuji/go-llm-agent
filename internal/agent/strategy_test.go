@@ -11,7 +11,7 @@ import (
 
 func TestNewStrategy_DefaultsToReAct(t *testing.T) {
 	t.Parallel()
-	s, ok := NewStrategy("", "", "", 0, 0, 0)
+	s, ok := NewStrategy("", "", "", 0, 0, 0, 0)
 	if !ok || s.Name() != "react" {
 		t.Fatalf("expected react, got name=%s ok=%v", s.Name(), ok)
 	}
@@ -19,7 +19,7 @@ func TestNewStrategy_DefaultsToReAct(t *testing.T) {
 
 func TestNewStrategy_PlannerExecutor(t *testing.T) {
 	t.Parallel()
-	s, ok := NewStrategy("planner_executor", "p", "e", 0, 0, 0)
+	s, ok := NewStrategy("planner_executor", "p", "e", 0, 0, 0, 0)
 	if !ok || s.Name() != "planner_executor" {
 		t.Fatalf("expected planner_executor, got name=%s ok=%v", s.Name(), ok)
 	}
@@ -27,7 +27,7 @@ func TestNewStrategy_PlannerExecutor(t *testing.T) {
 
 func TestNewStrategy_Reflection(t *testing.T) {
 	t.Parallel()
-	s, ok := NewStrategy("reflection", "", "", 2, 1, 4)
+	s, ok := NewStrategy("reflection", "", "", 0, 2, 1, 4)
 	if !ok || s.Name() != "reflection" {
 		t.Fatalf("expected reflection, got name=%s ok=%v", s.Name(), ok)
 	}
@@ -35,7 +35,7 @@ func TestNewStrategy_Reflection(t *testing.T) {
 
 func TestNewStrategy_UnknownFallsBackToReAct(t *testing.T) {
 	t.Parallel()
-	s, ok := NewStrategy("does-not-exist", "", "", 0, 0, 0)
+	s, ok := NewStrategy("does-not-exist", "", "", 0, 0, 0, 0)
 	if ok {
 		t.Error("ok must be false for unknown strategy")
 	}

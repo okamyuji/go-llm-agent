@@ -262,6 +262,7 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 			cfg.Agent.Strategy,
 			cfg.Agent.PlannerExecutor.PlannerModel,
 			cfg.Agent.PlannerExecutor.ExecutorModel,
+			cfg.Agent.PlannerExecutor.MaxSteps,
 			cfg.Agent.Reflection.MaxIterations,
 			cfg.Agent.Reflection.ConsecutiveFailures,
 			cfg.Agent.Reflection.HopBudget,

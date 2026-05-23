@@ -99,9 +99,10 @@ func TestRun_EmitsUsageAndCostWhenBillingEnabled(t *testing.T) {
 		{Role: llm.RoleUser, Content: "ping"},
 	}}
 
+	errCh := make(chan error, 1)
 	go func() {
 		defer close(out)
-		_ = svc.Run(context.Background(), in, out)
+		errCh <- svc.Run(context.Background(), in, out)
 	}()
 
 	var sawUsage, sawCost, sawFinal bool
@@ -126,6 +127,9 @@ func TestRun_EmitsUsageAndCostWhenBillingEnabled(t *testing.T) {
 	}
 	if !sawFinal {
 		t.Fatal("EventFinal was not received")
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("svc.Run returned unexpected err: %v", err)
 	}
 	if got := acc.SessionTotal("sess-1"); got.InputTokens != 1000 || got.OutputTokens != 500 {
 		t.Fatalf("SessionTotal unexpected: %+v", got)

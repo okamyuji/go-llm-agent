@@ -79,12 +79,18 @@ func (r reflectionStrategy) run(ctx context.Context, s *service, in Input, out c
 
 // NewStrategy 設定文字列から Strategy を構築する
 // 未対応の値は ReAct を返し warn 用に取り扱えるよう ok を false にする
-func NewStrategy(name, plannerModel, executorModel string, reflectionMaxIter, consecutiveFailures, hopBudget int) (Strategy, bool) {
+// plannerExecutor の MaxSteps と reflection の MaxIterations / ConsecutiveFailures / HopBudget は
+// 将来の本実装フェーズで参照される構成値で、本 MVP では struct に保持するのみ
+func NewStrategy(name, plannerModel, executorModel string, plannerMaxSteps, reflectionMaxIter, consecutiveFailures, hopBudget int) (Strategy, bool) {
 	switch strings.ToLower(name) {
 	case "", "react":
 		return reactStrategy{}, true
 	case "planner_executor":
-		return plannerExecutorStrategy{PlannerModel: plannerModel, ExecutorModel: executorModel}, true
+		return plannerExecutorStrategy{
+			PlannerModel:  plannerModel,
+			ExecutorModel: executorModel,
+			MaxSteps:      plannerMaxSteps,
+		}, true
 	case "reflection":
 		if reflectionMaxIter <= 0 {
 			reflectionMaxIter = 3

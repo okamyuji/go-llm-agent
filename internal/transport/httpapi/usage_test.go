@@ -146,6 +146,15 @@ func (s *fakeStore) QuerySession(_ context.Context, id string) ([]billing.Snapsh
 	}
 	return out, nil
 }
-func (s *fakeStore) QueryDate(context.Context, string) ([]billing.Snapshot, error) {
-	return s.items, nil
+func (s *fakeStore) QueryDate(_ context.Context, date string) ([]billing.Snapshot, error) {
+	if date == "" {
+		return s.items, nil
+	}
+	var out []billing.Snapshot
+	for _, it := range s.items {
+		if it.At.UTC().Format("2006-01-02") == date {
+			out = append(out, it)
+		}
+	}
+	return out, nil
 }

@@ -9,22 +9,22 @@ import (
 )
 
 func main() {
-	s1, ok1 := agent.NewStrategy("react", "", "", 0, 0, 0)
+	s1, ok1 := agent.NewStrategy("react", "", "", 0, 0, 0, 0)
 	if !ok1 || s1.Name() != "react" {
 		fmt.Fprintln(os.Stderr, "react not loaded")
 		os.Exit(1)
 	}
-	s2, ok2 := agent.NewStrategy("planner_executor", "openai/gpt-4o", "openai/gpt-4o-mini", 0, 0, 0)
+	s2, ok2 := agent.NewStrategy("planner_executor", "openai/gpt-4o", "openai/gpt-4o-mini", 0, 0, 0, 0)
 	if !ok2 || s2.Name() != "planner_executor" {
 		fmt.Fprintln(os.Stderr, "planner_executor not loaded")
 		os.Exit(2)
 	}
-	s3, ok3 := agent.NewStrategy("reflection", "", "", 3, 2, 6)
+	s3, ok3 := agent.NewStrategy("reflection", "", "", 0, 3, 2, 6)
 	if !ok3 || s3.Name() != "reflection" {
 		fmt.Fprintln(os.Stderr, "reflection not loaded")
 		os.Exit(3)
 	}
-	s4, ok4 := agent.NewStrategy("unknown", "", "", 0, 0, 0)
+	s4, ok4 := agent.NewStrategy("unknown", "", "", 0, 0, 0, 0)
 	if ok4 {
 		fmt.Fprintln(os.Stderr, "unknown must not be ok")
 		os.Exit(4)
