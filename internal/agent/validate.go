@@ -3,7 +3,6 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 
 	"github.com/xeipuuv/gojsonschema"
 
@@ -21,10 +20,10 @@ type schemaValidator struct {
 }
 
 // NewSchemaValidator tool.Registry に登録されたスキーマからバリデータを構築する
-// スキーマ未指定または不正なツールは「常に通過」として扱う。
-// gojsonschema コンパイル失敗時は slog.Warn で運用者に通知し、対象ツールは
-// バリデーション無効として扱う（fail-open）
-func NewSchemaValidator(reg tool.Registry) SchemaValidator {
+// スキーマ未指定のツールは「常に通過」として扱う
+// 不正な schema が含まれていた場合、起動時に error を返して fail-fast する
+// 旧実装は silent skip だったが、設定ミスを早期検出するため明示的にエラーを返す方針に変えた
+func NewSchemaValidator(reg tool.Registry) (SchemaValidator, error) {
 	out := &schemaValidator{schemas: map[string]*gojsonschema.Schema{}}
 	for _, sp := range reg.List() {
 		if len(sp.Schema) == 0 {
@@ -33,13 +32,11 @@ func NewSchemaValidator(reg tool.Registry) SchemaValidator {
 		loader := gojsonschema.NewBytesLoader(sp.Schema)
 		sch, err := gojsonschema.NewSchema(loader)
 		if err != nil {
-			slog.Warn("agent: schema compile failed; validation will be skipped for this tool",
-				"tool", sp.Name, "err", err)
-			continue
+			return nil, fmt.Errorf("agent: schema compile failed for tool %q: %w", sp.Name, err)
 		}
 		out.schemas[sp.Name] = sch
 	}
-	return out
+	return out, nil
 }
 
 // Validate args が toolName のスキーマに合致するか判定する

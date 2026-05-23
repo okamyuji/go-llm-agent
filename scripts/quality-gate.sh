@@ -47,10 +47,13 @@ gitleaks detect --no-git --source . --redact --no-banner --config .gitleaks.toml
 # pre-commit では skip し、CI と明示要求時のみ全件走らせる
 if [ "${RUN_E2E:-0}" = "1" ]; then
   echo "==> e2e (16 scripts)"
+  # nullglob を有効化してマッチが 0 件のときにリテラルパターンを実行しないようにする
+  shopt -s nullglob
   for s in tests/e2e/*.sh; do
     echo "    > $s"
     bash "$s"
   done
+  shopt -u nullglob
 fi
 
 echo "all quality checks passed"

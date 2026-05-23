@@ -68,8 +68,12 @@ func (t *NoteSearchTool) Execute(ctx context.Context, raw json.RawMessage) (Resu
 	if a.Query == "" {
 		return Result{IsError: true, Content: "query is required"}, nil
 	}
+	// 負値は入力エラーとして扱い、0 のときのみ既定値 5 にフォールバックする
+	if a.TopK < 0 {
+		return Result{IsError: true, Content: "top_k must be non-negative"}, nil
+	}
 	topK := a.TopK
-	if topK <= 0 {
+	if topK == 0 {
 		topK = 5
 	}
 	notes, err := t.Store.Search(ctx, a.Query, topK)

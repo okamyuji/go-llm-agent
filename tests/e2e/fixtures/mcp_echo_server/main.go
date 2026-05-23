@@ -53,8 +53,11 @@ func main() {
 				Name      string          `json:"name"`
 				Arguments json.RawMessage `json:"arguments"`
 			}
-			_ = json.Unmarshal(req.Params, &p)
-			resp.Result = map[string]any{"content": fmt.Sprintf("echo: %s", string(p.Arguments)), "isError": false}
+			if uerr := json.Unmarshal(req.Params, &p); uerr != nil {
+				resp.Result = map[string]any{"content": "invalid params: " + uerr.Error(), "isError": true}
+			} else {
+				resp.Result = map[string]any{"content": fmt.Sprintf("echo: %s", string(p.Arguments)), "isError": false}
+			}
 		default:
 			resp.Error = &err{Code: -32601, Message: "method not found"}
 		}

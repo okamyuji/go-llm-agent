@@ -233,7 +233,11 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 		opts = append(opts, agent.WithBilling(acc))
 	}
 	if cfg.Agent.ToolValidation.Enabled {
-		opts = append(opts, agent.WithValidator(agent.NewSchemaValidator(tools)))
+		v, err := agent.NewSchemaValidator(tools)
+		if err != nil {
+			return nil, nil, fmt.Errorf("build schema validator: %w", err)
+		}
+		opts = append(opts, agent.WithValidator(v))
 		opts = append(opts, agent.WithDefaultValidationRetries(cfg.Agent.ToolValidation.MaxRetries))
 	}
 	if cfg.Agent.ToolChoice.Mode != "" {

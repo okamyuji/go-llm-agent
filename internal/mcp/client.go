@@ -47,13 +47,18 @@ type CallResult struct {
 }
 
 // Client MCP の最小 JSON-RPC クライアント
+// closed フラグは ctx キャンセルまたは Close() 後に true となり、call() で書き込み前に確認する
 type Client struct {
 	cmd    *exec.Cmd
 	in     io.WriteCloser
 	out    *bufio.Scanner
 	mu     sync.Mutex
+	closed bool
 	nextID atomic.Int64
 }
+
+// ErrClientClosed 既に閉じられたクライアントに対する call で返るエラー
+var ErrClientClosed = errors.New("mcp: client is closed")
 
 // NewStdioClient stdio transport の Client を起動する
 // command の最初の要素を exec し、stdin/stdout を JSON-RPC line として使う
@@ -87,10 +92,16 @@ func NewStdioClient(ctx context.Context, command []string) (*Client, error) {
 
 // Close stdin を閉じて子プロセスを終了させる
 // stdin.Close と cmd.Wait のエラーを errors.Join で集約して返す
+// closed フラグを true にしてから ctx キャンセルや併走 call() が pipe に書き込まないようにする
 func (c *Client) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	in := c.in
+	c.in = nil
+	c.mu.Unlock()
 	var errs []error
-	if c.in != nil {
-		if err := c.in.Close(); err != nil {
+	if in != nil {
+		if err := in.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -134,6 +145,11 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// 既に Close() または ctx キャンセル経由で stdin が閉じられている場合は早期返却し、
+	// nil パイプへの書き込みによる panic を防ぐ
+	if c.closed || c.in == nil {
+		return nil, ErrClientClosed
+	}
 	id := c.nextID.Add(1)
 	var p json.RawMessage
 	if params != nil {
@@ -173,10 +189,12 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 		// ctx キャンセル時は scanner goroutine がブロックしたままになる
 		// stdin を閉じて子プロセスを EOF 終了させ、Scan の戻りを促してから
 		// rch を回収することで goroutine leak を防ぐ
+		// 以降の call() は closed フラグ確認で ErrClientClosed を返すよう設計してある
 		if c.in != nil {
 			_ = c.in.Close()
 			c.in = nil
 		}
+		c.closed = true
 		<-rch
 		return nil, ctx.Err()
 	case sr = <-rch:

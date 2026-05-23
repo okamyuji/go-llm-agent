@@ -14,8 +14,10 @@ RED='\033[31m'
 NC='\033[0m'
 
 printf "${YELLOW}>>> running TestClient_ListAndCall and TestClient_UnknownMethodReturnsError${NC}\n"
+set +e
 go test -race -run 'TestClient_(ListAndCall|UnknownMethodReturnsError|.*Empty.*)' ./internal/mcp/... 2>&1 | tail -10
 RUN_EXIT=${PIPESTATUS[0]}
+set -e
 if [[ "$RUN_EXIT" -ne 0 ]]; then
   printf "${RED}FAIL: MCP discovery tests failed${NC}\n"
   exit 1

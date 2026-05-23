@@ -178,8 +178,12 @@ func (l *TokenBucketLimiter) evictOldest() {
 }
 
 // AllowlistCIDR IP allowlist ミドルウェア
+// Nets はクライアント IP の許可リスト
+// TrustedProxies は X-Forwarded-For / X-Real-IP を信頼する直接接続元の CIDR
+// 設定が空のときヘッダを無視して r.RemoteAddr のみで判定する fail-safe 設計とする
 type AllowlistCIDR struct {
-	Nets []*net.IPNet
+	Nets           []*net.IPNet
+	TrustedProxies []*net.IPNet
 }
 
 // NewAllowlistCIDR CIDR 文字列のリストから AllowlistCIDR を構築する
@@ -200,16 +204,15 @@ func NewAllowlistCIDR(cidrs []string) (*AllowlistCIDR, error) {
 }
 
 // Handler 次の Handler を IP allowlist で包む
+// TrustedProxies が設定されている場合、その経由のリクエストのみ X-Forwarded-For / X-Real-IP の
+// 左端 IP を信頼してクライアント IP として扱う
+// 信頼しない経路ではヘッダを無視し、直接接続元の r.RemoteAddr のみで判定する
 func (a *AllowlistCIDR) Handler(next http.Handler) http.Handler {
 	if a == nil || len(a.Nets) == 0 {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			host = r.RemoteAddr
-		}
-		ip := net.ParseIP(host)
+		ip := clientIP(r, a.TrustedProxies)
 		if ip == nil {
 			http.Error(w, "invalid remote address", http.StatusForbidden)
 			return
@@ -222,6 +225,45 @@ func (a *AllowlistCIDR) Handler(next http.Handler) http.Handler {
 		}
 		http.Error(w, "client ip not allowed", http.StatusForbidden)
 	})
+}
+
+// clientIP r.RemoteAddr を基準にクライアント IP を判定する
+// 直接接続元が trustedProxies に含まれる場合だけ X-Forwarded-For / X-Real-IP の左端を採用する
+func clientIP(r *http.Request, trustedProxies []*net.IPNet) net.IP {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	peer := net.ParseIP(host)
+	if peer == nil {
+		return nil
+	}
+	if len(trustedProxies) == 0 {
+		return peer
+	}
+	trusted := false
+	for _, n := range trustedProxies {
+		if n.Contains(peer) {
+			trusted = true
+			break
+		}
+	}
+	if !trusted {
+		return peer
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// 左端の IP がオリジナルクライアントの IP
+		left := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
+		if ip := net.ParseIP(left); ip != nil {
+			return ip
+		}
+	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		if ip := net.ParseIP(strings.TrimSpace(xri)); ip != nil {
+			return ip
+		}
+	}
+	return peer
 }
 
 // CORS 設定可能な CORS ヘッダミドルウェア

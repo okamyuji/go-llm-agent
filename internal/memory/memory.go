@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -116,7 +117,9 @@ func (s *fileNoteStore) Search(_ context.Context, query string, topK int) ([]Not
 		}
 		var n Note
 		if err := json.Unmarshal(line, &n); err != nil {
-			return nil, fmt.Errorf("notes unmarshal: %w", err)
+			// 単一の壊れた JSONL 行で全検索を中断しない。問題行を warn ログに記録し、続行する
+			slog.Warn("notes: skipping malformed JSONL line", "err", err)
+			continue
 		}
 		score := scoreNote(n, terms)
 		if score > 0 {

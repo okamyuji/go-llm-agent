@@ -105,6 +105,10 @@ if [[ "$HTTP" != "200" ]]; then
 fi
 
 printf "${YELLOW}>>> burst exhaustion should yield 429${NC}\n"
+# rate_limit.burst=1 (上の cfg.yaml で固定) を直前のリクエストで使い切っているため、
+# AGENT_LOCAL_TOKEN を載せた即時の追加リクエストは 429 が返る想定
+# CI 環境で 1 秒以上経過したケースでは bucket が充填されて 200 になり、まれに偽陽性が発生し得る
+# その場合は cfg.rate_limit.rps を下げるか、ここで再現性のある時刻同期を導入する
 SECOND=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $AGENT_LOCAL_TOKEN" http://127.0.0.1:14004/v1/models)
 if [[ "$SECOND" != "429" ]]; then
   printf "${RED}FAIL: expected 429 after burst exhausted got %s${NC}\n" "$SECOND"

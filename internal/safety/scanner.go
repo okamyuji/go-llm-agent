@@ -4,6 +4,7 @@ package safety
 import (
 	"fmt"
 	"regexp"
+	"unicode/utf8"
 )
 
 // ScanFinding Scanner が検出した 1 件の所見
@@ -70,8 +71,10 @@ func (s *regexScanner) Scan(text string) []ScanFinding {
 	var out []ScanFinding
 	for _, r := range s.rules {
 		if m := r.re.FindString(text); m != "" {
-			if len(m) > maxSnippetLen {
-				m = m[:maxSnippetLen] + "..."
+			// バイトでなく rune 単位で切り詰めて UTF-8 の途中で分割しないようにする
+			if utf8.RuneCountInString(m) > maxSnippetLen {
+				runes := []rune(m)
+				m = string(runes[:maxSnippetLen]) + "..."
 			}
 			out = append(out, ScanFinding{PatternID: r.id, Snippet: m})
 		}

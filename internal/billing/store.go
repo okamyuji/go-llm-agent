@@ -35,13 +35,23 @@ func NewFileStore(path string) (*FileStore, error) {
 func (s *FileStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var flushErr error
 	if s.w != nil {
-		if err := s.w.Flush(); err != nil {
-			return fmt.Errorf("billing flush: %w", err)
-		}
+		flushErr = s.w.Flush()
 	}
+	// Flush の成否に関わらずファイルディスクリプタは確実に閉じる
+	// flush エラーがあれば close 後にまとめて報告する
+	var closeErr error
 	if s.f != nil {
-		return s.f.Close()
+		closeErr = s.f.Close()
+	}
+	switch {
+	case flushErr != nil && closeErr != nil:
+		return fmt.Errorf("billing flush: %w; close: %v", flushErr, closeErr)
+	case flushErr != nil:
+		return fmt.Errorf("billing flush: %w", flushErr)
+	case closeErr != nil:
+		return fmt.Errorf("billing close: %w", closeErr)
 	}
 	return nil
 }

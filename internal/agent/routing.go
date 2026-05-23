@@ -19,8 +19,9 @@ type Router struct {
 
 // NewRouter primary model と canary/shadow 設定から Router を構築する
 // shadowRatio は安全のため 0.5 を上限としてハードキャップする
-// canaryRatio > 0 のときは canaryModel が空でないことを呼び出し側で保証する
-// canaryModel が空のまま canary 発火条件を満たすと Decision.Primary が空文字列になる
+// canaryModel が空のとき canaryRatio を 0 に強制し、空モデル名での LLM 呼び出しを防ぐ
+// shadowModel が空のとき shadowRatio を 0 に強制する
+// これらの安全フォールバックは Router 内で完結するため、呼び出し側はモデル名検証を二重に行う必要がない
 func NewRouter(primary, canaryModel string, canaryRatio float64, shadowModel string, shadowRatio float64) *Router {
 	// canary 発火する設定では canaryModel が必須
 	// canaryModel 空のまま canaryRatio > 0 を渡されたら canaryRatio を 0 に倒し、
