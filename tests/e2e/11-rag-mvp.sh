@@ -18,8 +18,15 @@ printf "${YELLOW}>>> building rag exerciser${NC}\n"
 go build -o "$WORK/rag" ./tests/e2e/fixtures/rag_exercise
 
 printf "${YELLOW}>>> running rag exerciser${NC}\n"
+set +e
 "$WORK/rag" > "$WORK/out.log" 2>&1
+RC=$?
+set -e
 cat "$WORK/out.log"
+if [[ "$RC" -ne 0 ]]; then
+  printf "${RED}FAIL: rag exerciser exited with %d${NC}\n" "$RC"
+  exit "$RC"
+fi
 if ! grep -q 'search_top=true' "$WORK/out.log"; then
   printf "${RED}FAIL: expected note_search to return the OTel note${NC}\n"
   exit 1

@@ -19,8 +19,15 @@ printf "${YELLOW}>>> building strategy exerciser${NC}\n"
 go build -o "$WORK/st" ./tests/e2e/fixtures/strategy_exercise
 
 printf "${YELLOW}>>> running strategy exerciser${NC}\n"
+set +e
 "$WORK/st" > "$WORK/out.log" 2>&1
+RC=$?
+set -e
 cat "$WORK/out.log"
+if [[ "$RC" -ne 0 ]]; then
+  printf "${RED}FAIL: strategy exerciser exited with %d${NC}\n" "$RC"
+  exit "$RC"
+fi
 if ! grep -q 'strategies_loaded=react,planner_executor,reflection fallback=react' "$WORK/out.log"; then
   printf "${RED}FAIL: expected all three strategies loaded${NC}\n"
   exit 1

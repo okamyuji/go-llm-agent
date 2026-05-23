@@ -39,7 +39,9 @@ func (plannerExecutorStrategy) Name() string { return "planner_executor" }
 // 計画が空または planner 呼び出しが失敗した場合は素直に ReAct にフォールバックする
 func (p plannerExecutorStrategy) Run(ctx context.Context, s *service, in Input, out chan<- Event) error {
 	prompt := in.SystemPrompt
-	if !strings.Contains(strings.ToLower(prompt), "plan") {
+	// "[Planner]" タグの有無で既存のプランナー指示を判定する。"plan" 単語マッチは
+	// "explain"/"complaint" などに誤マッチするため避ける (CodeRabbit #16)
+	if !strings.Contains(prompt, "[Planner]") {
 		prompt = strings.TrimSpace(prompt + "\n\n[Planner] 必要なら最初に箇条書きで計画を出し、その後ツールを順に呼び出してください。複雑な質問は副問いに分解して計画に含めてください。")
 	}
 	in.SystemPrompt = prompt

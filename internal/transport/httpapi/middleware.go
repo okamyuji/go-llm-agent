@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -57,6 +58,18 @@ func (a *BearerAuth) Handler(next http.Handler) http.Handler {
 }
 
 // TokenBucketLimiter 全体またはトークン別の RPS 制限を提供する
+// perTokenMaxEntries per-token rate limiter キャッシュの最大エントリ数
+// これを超えると最終利用時刻が最も古いエントリから順に追い出して DoS リスクを抑える
+const perTokenMaxEntries = 1024
+
+// tokenLimiterEntry per-token バケットと最終利用時刻のペア
+type tokenLimiterEntry struct {
+	limiter  *rate.Limiter
+	lastUsed time.Time
+}
+
+// TokenBucketLimiter 全体またはトークン別の RPS 制限を提供する
+// per-token キャッシュは perTokenMaxEntries で上限を設けて DoS リスクを抑える
 type TokenBucketLimiter struct {
 	RPS      float64
 	Burst    int
@@ -64,7 +77,7 @@ type TokenBucketLimiter struct {
 
 	mu       sync.Mutex
 	global   *rate.Limiter
-	perToken map[string]*rate.Limiter
+	perToken map[string]*tokenLimiterEntry
 }
 
 // NewTokenBucketLimiter 設定値からレートリミッタを構築する
@@ -77,7 +90,7 @@ func NewTokenBucketLimiter(rps float64, burst int, perToken bool) *TokenBucketLi
 		RPS:      rps,
 		Burst:    burst,
 		PerToken: perToken,
-		perToken: map[string]*rate.Limiter{},
+		perToken: map[string]*tokenLimiterEntry{},
 	}
 }
 
@@ -102,6 +115,7 @@ func (l *TokenBucketLimiter) Handler(next http.Handler) http.Handler {
 // allow リクエストが許可されるか判定する
 // per_token=true のとき Bearer Token が無いリクエストは r.RemoteAddr ではなく
 // 専用バケットに集約して NAT 経由のレート上限バイパスを防ぐ
+// perToken キャッシュは perTokenMaxEntries で上限し、最終利用時刻の古い順に追い出す
 func (l *TokenBucketLimiter) allow(r *http.Request) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -110,17 +124,41 @@ func (l *TokenBucketLimiter) allow(r *http.Request) bool {
 		if key == "" {
 			key = "__anonymous__"
 		}
-		lim, ok := l.perToken[key]
+		now := time.Now()
+		ent, ok := l.perToken[key]
 		if !ok {
-			lim = rate.NewLimiter(rate.Limit(l.RPS), l.Burst)
-			l.perToken[key] = lim
+			if len(l.perToken) >= perTokenMaxEntries {
+				l.evictOldest()
+			}
+			ent = &tokenLimiterEntry{limiter: rate.NewLimiter(rate.Limit(l.RPS), l.Burst), lastUsed: now}
+			l.perToken[key] = ent
+		} else {
+			ent.lastUsed = now
 		}
-		return lim.Allow()
+		return ent.limiter.Allow()
 	}
 	if l.global == nil {
 		l.global = rate.NewLimiter(rate.Limit(l.RPS), l.Burst)
 	}
 	return l.global.Allow()
+}
+
+// evictOldest perToken マップから最終利用時刻が最も古いエントリを 1 件削除する
+// 呼び出し側で l.mu を保持していることが前提
+func (l *TokenBucketLimiter) evictOldest() {
+	var oldestKey string
+	var oldestAt time.Time
+	first := true
+	for k, e := range l.perToken {
+		if first || e.lastUsed.Before(oldestAt) {
+			oldestKey = k
+			oldestAt = e.lastUsed
+			first = false
+		}
+	}
+	if oldestKey != "" {
+		delete(l.perToken, oldestKey)
+	}
 }
 
 // AllowlistCIDR IP allowlist ミドルウェア

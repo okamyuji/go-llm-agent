@@ -214,6 +214,8 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 	}
 	if ns, err := memory.NewFileNoteStore(notesPath); err == nil {
 		tools = append(tools, &tool.NoteAddTool{Store: ns}, &tool.NoteSearchTool{Store: ns})
+	} else {
+		logger.Warn("notes store init failed; note_add / note_search will be disabled", "path", notesPath, "err", err)
 	}
 	toolReg := tool.NewRegistry(tools, cfg.Agent.EnabledTools)
 	store := storage.NewSessionStore(expand(cfg.Storage.SessionsDir))

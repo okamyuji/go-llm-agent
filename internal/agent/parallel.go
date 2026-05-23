@@ -90,9 +90,13 @@ func (s *service) executeOne(ctx context.Context, sessionID string, call llm.Too
 		if s.approvalTimeout > 0 {
 			apCtx, apCancel = context.WithTimeout(ctx, s.approvalTimeout)
 		}
-		d, _ := s.approver.Request(apCtx, ApprovalRequest{RunID: sessionID, CallID: call.ID, ToolName: call.Name, Arguments: call.Arguments})
+		d, aerr := s.approver.Request(apCtx, ApprovalRequest{RunID: sessionID, CallID: call.ID, ToolName: call.Name, Arguments: call.Arguments})
 		if apCancel != nil {
 			apCancel()
+		}
+		if aerr != nil && d.RunID == "" {
+			// Approver 自体が致命的に失敗した場合 (timeout 以外) は拒否扱い
+			return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: "approver failure: " + aerr.Error(), IsError: true}
 		}
 		if !d.Allowed {
 			return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: "tool execution denied: " + d.Reason, IsError: true}
@@ -112,6 +116,11 @@ func (s *service) executeOne(ctx context.Context, sessionID string, call llm.Too
 	content := res.Content
 	if terr != nil {
 		content = terr.Error()
+	}
+	// runReAct と同じ untrusted ラッパを並列経路でも付与する (CodeRabbit #03)
+	content = "[UNTRUSTED INPUT: tool=" + call.Name + "]\n" + content + "\n[END UNTRUSTED]"
+	if s.redactor != nil {
+		content = s.redactor.Redact(content)
 	}
 	return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: content, IsError: terr != nil || res.IsError}
 }

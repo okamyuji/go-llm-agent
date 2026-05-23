@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/llm/openai"
@@ -44,10 +45,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	payload := <-captured
+	var payload map[string]any
+	select {
+	case payload = <-captured:
+	case <-time.After(5 * time.Second):
+		fmt.Fprintln(os.Stderr, "ERR fake server did not receive payload within 5s")
+		os.Exit(2)
+	}
 	if tc, ok := payload["tool_choice"].(string); !ok || !strings.EqualFold(tc, "required") {
 		fmt.Fprintf(os.Stderr, "ERR tool_choice = %v, want 'required'\n", payload["tool_choice"])
-		os.Exit(2)
+		os.Exit(3)
 	}
 	fmt.Printf("tool_choice_payload=%v\n", payload["tool_choice"])
 }

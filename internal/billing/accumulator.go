@@ -88,22 +88,24 @@ func NewAccumulator(cfg Config, store Store) Accumulator {
 }
 
 // Add 1 回の LLM 呼び出しのトークンを集計し、Store に永続化する
-// 予算超過時は Snapshot を返さず ErrBudgetExceeded を返す
+// 予算超過時は Snapshot を返さず ErrBudgetExceeded を返す。
+// 予算判定・状態更新・store.Append を a.mu 内で一貫処理して同時呼び出しのレースを防ぐ。
+// store.Append 失敗時は同じロック保持中に in-memory aggregate を巻き戻して divergence を防ぐ
 func (a *accumulator) Add(ctx context.Context, sessionID, providerName, model string, in, out int) (Snapshot, error) {
 	now := a.cfg.Now().UTC()
 	date := now.Format("2006-01-02")
 	cost := computeCostJPY(a.cfg.Pricing[providerName], in, out)
 
 	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	sessSoFar := a.sessions[sessionID]
 	projectedTokens := sessSoFar.InputTokens + sessSoFar.OutputTokens + in + out
 	projectedDailyCost := a.dailyCost[date] + cost
 	if a.cfg.Budget.SessionMaxTokens > 0 && projectedTokens > a.cfg.Budget.SessionMaxTokens {
-		a.mu.Unlock()
 		return Snapshot{}, fmt.Errorf("%w: session tokens %d > %d", ErrBudgetExceeded, projectedTokens, a.cfg.Budget.SessionMaxTokens)
 	}
 	if a.cfg.Budget.DailyMaxCostJPY > 0 && projectedDailyCost > a.cfg.Budget.DailyMaxCostJPY {
-		a.mu.Unlock()
 		return Snapshot{}, fmt.Errorf("%w: daily cost %.2f > %.2f", ErrBudgetExceeded, projectedDailyCost, a.cfg.Budget.DailyMaxCostJPY)
 	}
 
@@ -133,12 +135,9 @@ func (a *accumulator) Add(ctx context.Context, sessionID, providerName, model st
 	dailySoFar.At = now
 	a.daily[date] = dailySoFar
 	a.dailyCost[date] = projectedDailyCost
-	a.mu.Unlock()
 
 	if err := a.store.Append(ctx, snap); err != nil {
-		// 永続化失敗時は in-memory aggregate を巻き戻して divergence を防ぐ
-		a.mu.Lock()
-		// sessSoFar を加算前の状態に戻すには in/out/cost を差し引く
+		// 永続化失敗時は in-memory aggregate を巻き戻す。同じロック保持中なので race free
 		rb := a.sessions[sessionID]
 		rb.InputTokens -= in
 		rb.OutputTokens -= out
@@ -150,7 +149,6 @@ func (a *accumulator) Add(ctx context.Context, sessionID, providerName, model st
 		rd.CostJPY -= cost
 		a.daily[date] = rd
 		a.dailyCost[date] -= cost
-		a.mu.Unlock()
 		return Snapshot{}, fmt.Errorf("billing append: %w", err)
 	}
 	return snap, nil
