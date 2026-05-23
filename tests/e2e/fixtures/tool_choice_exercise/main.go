@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/llm"
@@ -52,7 +51,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "ERR fake server did not receive payload within 5s")
 		os.Exit(2)
 	}
-	if tc, ok := payload["tool_choice"].(string); !ok || !strings.EqualFold(tc, "required") {
+	// OpenAI 互換クライアントは小文字 "required" を厳密に送る想定。大文字小文字違いは検出して落とす
+	if tc, ok := payload["tool_choice"].(string); !ok || tc != "required" {
 		fmt.Fprintf(os.Stderr, "ERR tool_choice = %v, want 'required'\n", payload["tool_choice"])
 		os.Exit(3)
 	}

@@ -40,6 +40,9 @@ safety:
   output_redactor:
     enabled: true
     rules:
+      # 注意 OpenAI のキー形式は将来変更され得るためヒューリスティック
+      # 既存形式 (sk-) の英数字キーに照準を合わせるが、よりロバストにしたい場合は
+      # "sk-[^\\s]+" のように非空白を集約する正規表現に切り替える運用も検討する
       - id: openai_key
         regex: "sk-[A-Za-z0-9]{20,}"
         replacement: "[REDACTED:OPENAI]"

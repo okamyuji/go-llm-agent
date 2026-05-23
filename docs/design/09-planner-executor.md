@@ -23,7 +23,7 @@ Ch5「Planner-Executor Agents」「Reflection Agents」を参照します。書�
 
 ### 5.1 アーキテクチャ概要
 
-MVP 実装では `internal/agent/strategy.go` を 1 ファイルにまとめ、同一パッケージ内で `Strategy` インターフェースと 3 戦略 (reactStrategy / plannerExecutorStrategy / reflectionStrategy) を定義します。`Strategy.run` は内部メソッドとして `*service` を受け取り、loop.go の `runReAct` に委譲します。Service は Strategy を受け取り Run に委譲します。サブパッケージ化は本実装の成熟後に検討します。
+MVP 実装では `internal/agent/strategy.go` (package agent) を 1 ファイルにまとめ、同一パッケージ内で `Strategy` インターフェースと 3 戦略 (reactStrategy / plannerExecutorStrategy / reflectionStrategy) を定義します。`Strategy.run` は非公開メソッドとして `*service` を受け取り、loop.go の `runReAct` に委譲します。Service は Strategy を受け取り Run に委譲します。サブパッケージ (`internal/agent/strategy`) への分離は本実装の成熟後に検討します。
 
 ### 5.2 設定スキーマ
 

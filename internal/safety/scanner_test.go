@@ -64,7 +64,10 @@ func TestNewScanner_InvalidRegexReturnsError(t *testing.T) {
 
 func TestScanner_EmptyInputReturnsNone(t *testing.T) {
 	t.Parallel()
-	s, _ := NewScannerFromConfig(InputScannerConfig{Enabled: true, Patterns: []InputScannerRule{{ID: "x", Regex: "y"}}})
+	s, err := NewScannerFromConfig(InputScannerConfig{Enabled: true, Patterns: []InputScannerRule{{ID: "x", Regex: "y"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := s.Scan(""); len(got) != 0 {
 		t.Errorf("empty input must yield no findings, got %v", got)
 	}

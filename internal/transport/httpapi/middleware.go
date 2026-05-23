@@ -267,10 +267,14 @@ func clientIP(r *http.Request, trustedProxies []*net.IPNet) net.IP {
 }
 
 // CORS 設定可能な CORS ヘッダミドルウェア
+// originSet と hasWildcard を NewCORS で 1 度だけ計算し、Handler 内のリクエストごとの再計算を避ける
 type CORS struct {
 	AllowOrigins []string
 	AllowMethods []string
 	AllowHeaders []string
+
+	originSet   map[string]struct{}
+	hasWildcard bool
 }
 
 // NewCORS 設定から CORS を構築する。Enabled=false なら nil
@@ -278,7 +282,18 @@ func NewCORS(enabled bool, origins, methods, headers []string) *CORS {
 	if !enabled {
 		return nil
 	}
-	return &CORS{AllowOrigins: origins, AllowMethods: methods, AllowHeaders: headers}
+	originSet := make(map[string]struct{}, len(origins))
+	for _, o := range origins {
+		originSet[o] = struct{}{}
+	}
+	_, hasWildcard := originSet["*"]
+	return &CORS{
+		AllowOrigins: origins,
+		AllowMethods: methods,
+		AllowHeaders: headers,
+		originSet:    originSet,
+		hasWildcard:  hasWildcard,
+	}
 }
 
 // Handler 次の Handler を CORS ヘッダで包む。OPTIONS は 204 で返す
@@ -286,11 +301,8 @@ func (c *CORS) Handler(next http.Handler) http.Handler {
 	if c == nil {
 		return next
 	}
-	originSet := map[string]struct{}{}
-	for _, o := range c.AllowOrigins {
-		originSet[o] = struct{}{}
-	}
-	_, hasWildcard := originSet["*"]
+	originSet := c.originSet
+	hasWildcard := c.hasWildcard
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin != "" {
