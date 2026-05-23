@@ -26,7 +26,7 @@ set -e
 cat "$WORK/out.log"
 if [[ "$RUN_EXIT" -ne 0 ]]; then
   printf "${RED}FAIL: approval exerciser exited with %d${NC}\n" "$RUN_EXIT"
-  exit 1
+  exit "$RUN_EXIT"
 fi
 if ! grep -q 'approval_allowed=true' "$WORK/out.log"; then
   printf "${RED}FAIL: expected approval_allowed=true${NC}\n"
