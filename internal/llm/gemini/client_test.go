@@ -104,3 +104,45 @@ func TestStream_SSE(t *testing.T) {
 		t.Fatalf("finish=%q", finish)
 	}
 }
+
+func TestStream_EmitsUsageFromUsageMetadata(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		chunks := []string{
+			`{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]}}]}`,
+			`{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":22}}`,
+		}
+		for _, line := range chunks {
+			_, _ = w.Write([]byte("data: " + line + "\n\n"))
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+
+	cli := gemini.New(gemini.Options{BaseURL: srv.URL, APIKey: "K"})
+	stream, err := cli.Stream(context.Background(), llm.ChatRequest{Model: "x"})
+	if err != nil {
+		t.Fatalf("stream err=%v", err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	var sawUsage bool
+	for {
+		ev, ok := stream.Recv()
+		if !ok {
+			break
+		}
+		if ev.Usage != nil {
+			if ev.Usage.InputTokens != 11 || ev.Usage.OutputTokens != 22 {
+				t.Fatalf("usage=%+v", ev.Usage)
+			}
+			sawUsage = true
+		}
+	}
+	if !sawUsage {
+		t.Fatal("expected Stream to emit Usage from usageMetadata, got none")
+	}
+}
