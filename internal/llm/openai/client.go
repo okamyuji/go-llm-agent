@@ -177,6 +177,8 @@ func toPayload(req llm.ChatRequest, stream bool) chatPayload {
 // マッピングする。強制呼び出しを意図するなら呼び出し側が "required" を指定する
 func toolChoiceJSON(tc *llm.ToolChoice) any {
 	switch tc.Mode {
+	case "auto", "":
+		return "auto"
 	case "required":
 		return "required"
 	case "any":

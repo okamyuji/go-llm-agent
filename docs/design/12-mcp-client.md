@@ -109,7 +109,7 @@ func RegisterMCPServers(ctx context.Context, cfg []ServerConfig, reg tool.Regist
 
 ## 9. リスクと対策
 
-- 任意のコマンド起動は security 上のリスクが高いため、`allow_methods` 未指定の場合は warn を出します。
+- 任意のコマンド起動は security 上のリスクが高いため、`allow_methods` 未指定は config validation で fatal エラーとして拒否し、起動を阻止します (warn では設定漏れが本番に持ち込まれるリスクがあるため fail-fast に倒す)。
 - MCP サーバが固まったときに agent が起動できなくなる懸念があるため、起動時の timeout を厳密に設定します。
 
 ## 10. 完了基準

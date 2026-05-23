@@ -108,9 +108,12 @@ if [[ "$HTTP" != "200" ]]; then
 fi
 
 printf "${YELLOW}>>> burst exhaustion should yield 429${NC}\n"
-# rate_limit.burst=4 を直前までのリクエスト (4 件) で使い切っている状態で
-# 10 件連続送信し、少なくとも 1 件が 429 になれば PASS とする
-# RateLimit を Auth より外に置く middleware 順序のため、認証 brute-force 連打も対象
+# burst=4 を確実に使い切るため、まず無条件で 8 件送って token bucket を強制 drain する
+# その後の連打で 1 件以上 429 を観測すれば PASS とする
+# (CI 環境で rps の補充が早くてもこの確認は安定する)
+for _ in 1 2 3 4 5 6 7 8; do
+  curl -s -o /dev/null -H "Authorization: Bearer $AGENT_LOCAL_TOKEN" http://127.0.0.1:14004/v1/models || true
+done
 GOT_429=0
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $AGENT_LOCAL_TOKEN" http://127.0.0.1:14004/v1/models)
@@ -120,7 +123,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   fi
 done
 if [[ "$GOT_429" -ne 1 ]]; then
-  printf "${RED}FAIL: 10 連続リクエストで 429 を 1 度も観測できませんでした${NC}\n"
+  printf "${RED}FAIL: drain 後の 10 連続リクエストで 429 を 1 度も観測できませんでした${NC}\n"
   exit 1
 fi
 

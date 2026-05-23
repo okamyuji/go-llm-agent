@@ -171,6 +171,8 @@ func toPayload(req llm.ChatRequest, stream bool) ollamaPayload {
 // 未知の Mode は "auto" にフォールバックし、設定ミス発見のため警告ログを残す
 func toolChoiceJSON(tc *llm.ToolChoice) any {
 	switch tc.Mode {
+	case "auto", "":
+		return "auto"
 	case "none":
 		return "none"
 	case "tool", "required", "any":

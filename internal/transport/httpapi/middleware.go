@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -15,26 +17,29 @@ import (
 const healthPath = "/healthz"
 
 // BearerAuth Bearer Token 認証ミドルウェア
-// tokens マップは構築後に変更しない前提で、token 値をキーに ID を値として保持する
+// digests は token 値の SHA-256 ハッシュをキーに ID を値として保持する
+// 平文を保持しないことで生トークン長の漏洩を避け、lookup の長さ比較を固定長 (32 バイト) に統一する
 type BearerAuth struct {
-	tokens map[string]string
+	digests map[[sha256.Size]byte]string
 }
 
 // NewBearerAuth secret_env 解決済みトークンマップから BearerAuth を構築する
-// マップは内部にコピーして以後の外部書き換えから保護する
+// 構築時に SHA-256 ハッシュを取り、平文トークンはメモリに残さない
+// digests は構築後に変更されない
 func NewBearerAuth(tokens map[string]string) *BearerAuth {
-	cp := make(map[string]string, len(tokens))
-	for k, v := range tokens {
-		cp[k] = v
+	digests := make(map[[sha256.Size]byte]string, len(tokens))
+	for tok, id := range tokens {
+		digests[sha256.Sum256([]byte(tok))] = id
 	}
-	return &BearerAuth{tokens: cp}
+	return &BearerAuth{digests: digests}
 }
 
 // Handler 次の Handler を Bearer Auth で保護したラッパを返す
-// tokens が空のとき認証は無効として扱う
-// 検証は crypto/subtle.ConstantTimeCompare で行いタイミングサイドチャネルを抑える
+// digests が空のとき認証は無効として扱う
+// 検証は SHA-256 ダイジェストを crypto/subtle.ConstantTimeCompare で比較するため、
+// 平文長の比較を必要とせず、タイミングサイドチャネルとトークン長漏洩の両方を抑える
 func (a *BearerAuth) Handler(next http.Handler) http.Handler {
-	if a == nil || len(a.tokens) == 0 {
+	if a == nil || len(a.digests) == 0 {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -57,14 +62,15 @@ func (a *BearerAuth) Handler(next http.Handler) http.Handler {
 	})
 }
 
-// lookup ConstantTimeCompare で全トークンを舐めて一致したかを返す
-// マップ直接ルックアップだとハッシュ比較のタイミングサイドチャネルが生じるため使わない
+// lookup 入力 token を SHA-256 でハッシュし、固定長ダイジェスト同士を ConstantTimeCompare で比較する
+// 平文長の差で漏れる情報をゼロにすると同時にタイミングサイドチャネルも抑える
 func (a *BearerAuth) lookup(value string) bool {
-	got := []byte(value)
+	d := sha256.Sum256([]byte(value))
 	matched := 0
-	for stored := range a.tokens {
-		want := []byte(stored)
-		if subtle.ConstantTimeCompare(want, got) == 1 {
+	for stored := range a.digests {
+		// stored を addressable にするため一旦ローカルへ取り、スライス化して比較する
+		s := stored
+		if subtle.ConstantTimeCompare(s[:], d[:]) == 1 {
 			matched = 1
 		}
 	}
@@ -188,7 +194,9 @@ type AllowlistCIDR struct {
 
 // NewAllowlistCIDR CIDR 文字列のリストから AllowlistCIDR を構築する
 // 文字列が空または全てパースに失敗した場合は nil を返し、ミドルウェアは適用されない
-func NewAllowlistCIDR(cidrs []string) (*AllowlistCIDR, error) {
+// trustedProxies は X-Forwarded-For / X-Real-IP を信頼する直接接続元の CIDR
+// (リバースプロキシ運用時に設定する。指定が無ければヘッダは無視され r.RemoteAddr のみで判定する)
+func NewAllowlistCIDR(cidrs []string, trustedProxies ...string) (*AllowlistCIDR, error) {
 	if len(cidrs) == 0 {
 		return nil, nil
 	}
@@ -200,7 +208,15 @@ func NewAllowlistCIDR(cidrs []string) (*AllowlistCIDR, error) {
 		}
 		nets = append(nets, n)
 	}
-	return &AllowlistCIDR{Nets: nets}, nil
+	var trusted []*net.IPNet
+	for _, c := range trustedProxies {
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			return nil, fmt.Errorf("trusted proxy cidr: %w", err)
+		}
+		trusted = append(trusted, n)
+	}
+	return &AllowlistCIDR{Nets: nets, TrustedProxies: trusted}, nil
 }
 
 // Handler 次の Handler を IP allowlist で包む

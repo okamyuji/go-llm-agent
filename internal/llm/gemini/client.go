@@ -218,6 +218,8 @@ func toPayload(req llm.ChatRequest) gemPayload {
 // 未知の Mode は AUTO にフォールバックし、設定ミスを発見しやすくするため警告ログを残す
 func toolChoiceConfig(tc *llm.ToolChoice) *gemToolConfig {
 	switch tc.Mode {
+	case "auto", "":
+		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "AUTO"}}
 	case "required", "any":
 		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "ANY"}}
 	case "none":

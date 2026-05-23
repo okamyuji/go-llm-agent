@@ -53,7 +53,7 @@ agent.Event に `ToolResults []ToolResult` を追加し、`EventToolResult` の�
 
 1. provider Stream は ToolCalls をスライスでまとめて emit します。
 2. loop.go は ToolCalls を 2 段階で処理します。最初に `require_approval=true` のツールが 1 件でも含まれるかを判定します。
-3. 含まれる場合はバリア方式に切り替え、`require_approval=true` のツールを 1 件ずつ順番に approve して実行し、approve 待ち中は他の `require_approval=false` のツールも errgroup に投入しません。これは並列実行の最中に HITL プロンプトが出現すると人間オペレータが状況把握できなくなるためです。
+3. 含まれる場合はバリア方式に切り替え、ToolCalls 全体を直列に実行します。`require_approval=true` のツールは個別に approve した上で実行し、approve 待ち中は他の `require_approval=false` のツールも投入しません。これは並列実行の最中に HITL プロンプトが出現すると人間オペレータが状況把握できなくなるためです。性能面で安全 ツール (require_approval=false) を別 errgroup へ分けるハイブリッド実装は将来フェーズで検討します。
 4. すべて `require_approval=false` の場合のみ errgroup で並列実行し、`ctx context.WithCancel` で fail_fast 時の連鎖キャンセルを行います。
 5. `fail_fast=true` の場合は最初の失敗で他の goroutine をキャンセルします。
 6. 全結果を ID 順に並べて Message に戻します。

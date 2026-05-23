@@ -81,9 +81,14 @@ type accumulator struct {
 
 // NewAccumulator Accumulator を構築する
 // Config.Now が nil のとき time.Now で代替する
+// store が nil のときは Add 時の panic を防ぐため no-op の nopStore を採用する
+// 呼び出し側で永続化が不要な場合 (テスト用途等) は明示的に NewNopStore() を渡すのが望ましい
 func NewAccumulator(cfg Config, store Store) Accumulator {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if store == nil {
+		store = nopStore{}
 	}
 	return &accumulator{
 		cfg:       cfg,
@@ -93,6 +98,14 @@ func NewAccumulator(cfg Config, store Store) Accumulator {
 		daily:     map[string]Snapshot{},
 	}
 }
+
+// nopStore Append/Query を何もせず返すフォールバック実装
+// nil Store が渡されたときに nil panic を防ぐためだけに使う
+type nopStore struct{}
+
+func (nopStore) Append(context.Context, Snapshot) error                   { return nil }
+func (nopStore) QuerySession(context.Context, string) ([]Snapshot, error) { return nil, nil }
+func (nopStore) QueryDate(context.Context, string) ([]Snapshot, error)    { return nil, nil }
 
 // Add 1 回の LLM 呼び出しのトークンを集計し、Store に永続化する
 // 予算超過時は Snapshot を返さず ErrBudgetExceeded を返す。

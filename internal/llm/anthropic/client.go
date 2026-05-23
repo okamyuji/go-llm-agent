@@ -207,6 +207,8 @@ func toPayload(req llm.ChatRequest, stream bool) msgPayload {
 // 未知の Mode は auto にフォールバックし、設定ミスを発見しやすくするため警告ログを残す
 func toolChoiceJSON(tc *llm.ToolChoice) any {
 	switch tc.Mode {
+	case "auto", "":
+		return map[string]any{"type": "auto"}
 	case "required", "any":
 		return map[string]any{"type": "any"}
 	case "none":

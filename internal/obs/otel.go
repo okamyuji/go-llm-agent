@@ -116,11 +116,19 @@ func InitTelemetry(ctx context.Context, c TelemetryConfig, logger *slog.Logger) 
 	}
 	metricExp, err := otlpmetrichttp.New(ctx, metricOpts...)
 	if err != nil {
-		closeErr := traceExp.Shutdown(ctx)
-		if closeErr != nil {
-			return nil, errors.Join(fmt.Errorf("otel metric exporter: %w", err), closeErr)
+		// metric exporter 作成失敗時は既に走り出している TracerProvider と
+		// trace exporter を一緒に shutdown して span flush goroutine の leak を防ぐ
+		shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		var errs []error
+		errs = append(errs, fmt.Errorf("otel metric exporter: %w", err))
+		if e := tp.Shutdown(shutdownCtx); e != nil {
+			errs = append(errs, fmt.Errorf("tracer provider shutdown: %w", e))
 		}
-		return nil, fmt.Errorf("otel metric exporter: %w", err)
+		if e := traceExp.Shutdown(shutdownCtx); e != nil {
+			errs = append(errs, fmt.Errorf("trace exporter shutdown: %w", e))
+		}
+		return nil, errors.Join(errs...)
 	}
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(res),

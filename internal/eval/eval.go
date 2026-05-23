@@ -135,6 +135,13 @@ func RunSuite(ctx context.Context, svc agent.Service, cases []Case, model string
 		errCh := make(chan error, 1)
 		go func() {
 			defer close(eventCh)
+			// svc.Run の panic を recover して errCh に流す
+			// 後段の <-errCh が永久ブロックする (デッドロック) のを防ぐ
+			defer func() {
+				if rec := recover(); rec != nil {
+					errCh <- fmt.Errorf("eval: panic in svc.Run: %v", rec)
+				}
+			}()
 			errCh <- svc.Run(ctx, in, eventCh)
 		}()
 		res := RunResult{CaseID: c.ID, Source: "suite"}
