@@ -138,6 +138,18 @@ E2E スクリプトは `tests/e2e/07-eval-suite.sh` です。fixtures/eval_exerc
 
 E2E スクリプトは `tests/e2e/11-rag-mvp.sh` で、fixtures/rag_exercise が 2 件のノートを保存して全文検索が機能することを確認します。設計の詳細は `docs/design/11-rag-mvp.md` を参照してください。
 
+## MCP クライアント
+
+`internal/mcp.Client` で Model Context Protocol の stdio JSON-RPC サーバに接続し、`tools/list` でメソッドを発見し `tools/call` で実行できます。SSE transport は今後の拡張点で、現状は stdio のみサポートします。
+
+```go
+c, err := mcp.NewStdioClient(ctx, []string{"./mcp/docs_server"})
+tools, _ := c.ListTools(ctx)
+res, _ := c.Call(ctx, "search_docs", json.RawMessage(`{"query":"x"}`))
+```
+
+E2E スクリプトは `tests/e2e/12-mcp-discovery.sh` です。`tests/e2e/fixtures/mcp_echo_server` を子プロセスで起動して JSON-RPC ハンドシェイクを確認します。設計の詳細は `docs/design/12-mcp-client.md` を参照してください。
+
 ## 並列ツール実行
 
 `service.ExecuteToolsParallel` で複数 ToolCall を semaphore 付きで並列実行できます。`require_approval` 対象のツールが 1 件でも含まれる場合は自動的に直列化 (バリア方式) し、人間オペレータの状況把握を優先します。`fail_fast=true` のときは最初の失敗で他の実行をキャンセルします。

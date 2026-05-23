@@ -1,0 +1,168 @@
+// Package mcp Model Context Protocol の最小クライアント
+// stdio 経由で JSON-RPC を交換し、tools/list と tools/call を発行する
+// 12 番設計書 MVP として SSE は未実装で、stdio のみサポートする
+package mcp
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os/exec"
+	"sync"
+	"sync/atomic"
+)
+
+// ToolInfo discovery 結果に現れるツール 1 件
+type ToolInfo struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"inputSchema"`
+}
+
+// CallResult tools/call の戻り値
+type CallResult struct {
+	Content string `json:"content"`
+	IsError bool   `json:"isError"`
+}
+
+// Client MCP の最小 JSON-RPC クライアント
+type Client struct {
+	cmd    *exec.Cmd
+	in     io.WriteCloser
+	out    *bufio.Scanner
+	mu     sync.Mutex
+	nextID atomic.Int64
+}
+
+// NewStdioClient stdio transport の Client を起動する
+// command の最初の要素を exec し、stdin/stdout を JSON-RPC line として使う
+func NewStdioClient(ctx context.Context, command []string) (*Client, error) {
+	if len(command) == 0 {
+		return nil, errors.New("mcp: command is empty")
+	}
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("mcp stdin: %w", err)
+	}
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("mcp stdout: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("mcp start: %w", err)
+	}
+	sc := bufio.NewScanner(out)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	return &Client{cmd: cmd, in: in, out: sc}, nil
+}
+
+// Close stdin を閉じて子プロセスを終了させる
+func (c *Client) Close() error {
+	if c.in != nil {
+		_ = c.in.Close()
+	}
+	if c.cmd == nil {
+		return nil
+	}
+	_ = c.cmd.Wait()
+	return nil
+}
+
+// rpcRequest JSON-RPC 2.0 リクエスト
+type rpcRequest struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      int64           `json:"id"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+// rpcResponse JSON-RPC 2.0 レスポンス
+type rpcResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      int64           `json:"id"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
+}
+
+// rpcError JSON-RPC エラー本体
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// call JSON-RPC を 1 往復する
+// 並列呼び出しは mu で直列化する。実用は十分なシリアル化粒度
+func (c *Client) call(method string, params any) (json.RawMessage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id := c.nextID.Add(1)
+	var p json.RawMessage
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return nil, fmt.Errorf("mcp marshal params: %w", err)
+		}
+		p = b
+	}
+	req := rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: p}
+	b, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("mcp marshal: %w", err)
+	}
+	if _, err := c.in.Write(append(b, '\n')); err != nil {
+		return nil, fmt.Errorf("mcp write: %w", err)
+	}
+	if !c.out.Scan() {
+		if err := c.out.Err(); err != nil {
+			return nil, fmt.Errorf("mcp read: %w", err)
+		}
+		return nil, errors.New("mcp: server closed connection")
+	}
+	var resp rpcResponse
+	if err := json.Unmarshal(c.out.Bytes(), &resp); err != nil {
+		return nil, fmt.Errorf("mcp unmarshal: %w", err)
+	}
+	if resp.ID != id {
+		return nil, fmt.Errorf("mcp: response id mismatch want=%d got=%d", id, resp.ID)
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("mcp error %d: %s", resp.Error.Code, resp.Error.Message)
+	}
+	return resp.Result, nil
+}
+
+// ListTools tools/list を呼び ToolInfo の配列を返す
+func (c *Client) ListTools(_ context.Context) ([]ToolInfo, error) {
+	res, err := c.call("tools/list", nil)
+	if err != nil {
+		return nil, err
+	}
+	var body struct {
+		Tools []ToolInfo `json:"tools"`
+	}
+	if err := json.Unmarshal(res, &body); err != nil {
+		return nil, fmt.Errorf("mcp tools/list: %w", err)
+	}
+	return body.Tools, nil
+}
+
+// Call tools/call を呼ぶ
+func (c *Client) Call(_ context.Context, name string, args json.RawMessage) (CallResult, error) {
+	params := struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}{Name: name, Arguments: args}
+	res, err := c.call("tools/call", params)
+	if err != nil {
+		return CallResult{}, err
+	}
+	var r CallResult
+	if err := json.Unmarshal(res, &r); err != nil {
+		return CallResult{}, fmt.Errorf("mcp tools/call: %w", err)
+	}
+	return r, nil
+}
