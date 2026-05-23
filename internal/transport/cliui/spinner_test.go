@@ -52,29 +52,21 @@ func TestSpinner_Disabled_WhenOutIsNotTTY(t *testing.T) {
 }
 
 // TestSpinner_Enabled_RendersFrameWithModelAndElapsed Enabled=true 時に
-// モデル名と thinking フェーズと \r が描画される
+// 初回描画でモデル名と thinking フェーズと \r が出る。Sleep は使わず
+// Start 直後の同期描画と Stop の同期終了に依拠する
 func TestSpinner_Enabled_RendersFrameWithModelAndElapsed(t *testing.T) {
 	buf := &safeBuffer{}
 	enabled := true
 	base := time.Unix(1700000000, 0)
-	var calls int64
-	var mu sync.Mutex
-	nowFn := func() time.Time {
-		mu.Lock()
-		defer mu.Unlock()
-		calls++
-		return base.Add(time.Duration(calls-1) * 100 * time.Millisecond)
-	}
 	s := cliui.NewSpinner(cliui.SpinnerOptions{
 		Out:      buf,
 		Enabled:  &enabled,
 		Model:    "gemini/gemini-2.5-pro",
-		Now:      nowFn,
-		Interval: 5 * time.Millisecond,
+		Now:      func() time.Time { return base },
+		Interval: 1 * time.Hour, // ticker を発火させない
 		Frames:   []string{"A", "B"},
 	})
 	s.Start(cliui.PhaseThinking, "")
-	time.Sleep(40 * time.Millisecond)
 	s.Stop()
 
 	got := buf.String()
@@ -90,23 +82,28 @@ func TestSpinner_Enabled_RendersFrameWithModelAndElapsed(t *testing.T) {
 }
 
 // TestSpinner_SetPhase_SwitchesToToolLabel SetPhase で tool ラベルに切替わり、
-// Stop で末尾が消去シーケンスで終わる
+// Stop で末尾が消去シーケンスで終わる。Sleep は使わず synchronization channel で
+// SetPhase の処理完了を待つ
 func TestSpinner_SetPhase_SwitchesToToolLabel(t *testing.T) {
 	buf := &safeBuffer{}
 	enabled := true
 	base := time.Unix(1700000000, 0)
+	renderCh := make(chan struct{}, 8)
 	s := cliui.NewSpinner(cliui.SpinnerOptions{
-		Out:      buf,
-		Enabled:  &enabled,
-		Model:    "M",
-		Now:      func() time.Time { return base },
-		Interval: 5 * time.Millisecond,
-		Frames:   []string{"x"},
+		Out:        buf,
+		Enabled:    &enabled,
+		Model:      "M",
+		Now:        func() time.Time { return base },
+		Interval:   1 * time.Hour, // ticker を発火させない
+		Frames:     []string{"x"},
+		OnRendered: func() { renderCh <- struct{}{} },
 	})
 	s.Start(cliui.PhaseThinking, "")
+	<-renderCh // 初回描画完了
 	s.SetPhase(cliui.PhaseTool, "fs_read")
-	time.Sleep(30 * time.Millisecond)
+	<-renderCh // SetPhase 後の再描画完了
 	s.Stop()
+
 	got := buf.String()
 	if !strings.Contains(got, "tool: fs_read") {
 		t.Errorf("expected tool label, got %q", got)
@@ -141,13 +138,12 @@ func TestSpinner_RestartAfterStop(t *testing.T) {
 		Enabled:  &enabled,
 		Model:    "M",
 		Now:      func() time.Time { return time.Unix(1700000000, 0) },
-		Interval: 5 * time.Millisecond,
+		Interval: 1 * time.Hour, // ticker を発火させない
 		Frames:   []string{"x"},
 	})
 	s.Start(cliui.PhaseThinking, "")
 	s.Stop()
 	s.Start(cliui.PhaseTool, "shell")
-	time.Sleep(15 * time.Millisecond)
 	s.Stop()
 	got := buf.String()
 	if !strings.Contains(got, "tool: shell") {

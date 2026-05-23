@@ -74,13 +74,17 @@ func (r *REPL) Run(ctx context.Context) error {
 		history = append(history, llm.Message{Role: llm.RoleUser, Content: line})
 		ch := make(chan agent.Event, 16)
 		go func(hist []llm.Message) {
-			_ = r.svc.Run(ctx, agent.Input{
+			defer close(ch)
+			// Service.Run が EventError を流さずに error を返した場合に備えて
+			// 受信側へ確実にエラーを伝える
+			if err := r.svc.Run(ctx, agent.Input{
 				Model:        r.opt.Model,
 				SystemPrompt: r.opt.SystemPrompt,
 				Messages:     hist,
 				MaxToolHops:  r.opt.MaxToolHops,
-			}, ch)
-			close(ch)
+			}, ch); err != nil {
+				ch <- agent.Event{Kind: agent.EventError, Err: err}
+			}
 		}(append([]llm.Message{}, history...))
 
 		turnStart := time.Now()
