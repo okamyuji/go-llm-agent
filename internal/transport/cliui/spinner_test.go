@@ -88,3 +88,69 @@ func TestSpinner_Enabled_RendersFrameWithModelAndElapsed(t *testing.T) {
 		t.Errorf("expected carriage return, got %q", got)
 	}
 }
+
+// TestSpinner_SetPhase_SwitchesToToolLabel SetPhase で tool ラベルに切替わり、
+// Stop で末尾が消去シーケンスで終わる
+func TestSpinner_SetPhase_SwitchesToToolLabel(t *testing.T) {
+	buf := &safeBuffer{}
+	enabled := true
+	base := time.Unix(1700000000, 0)
+	s := cliui.NewSpinner(cliui.SpinnerOptions{
+		Out:      buf,
+		Enabled:  &enabled,
+		Model:    "M",
+		Now:      func() time.Time { return base },
+		Interval: 5 * time.Millisecond,
+		Frames:   []string{"x"},
+	})
+	s.Start(cliui.PhaseThinking, "")
+	s.SetPhase(cliui.PhaseTool, "fs_read")
+	time.Sleep(30 * time.Millisecond)
+	s.Stop()
+	got := buf.String()
+	if !strings.Contains(got, "tool: fs_read") {
+		t.Errorf("expected tool label, got %q", got)
+	}
+	if !strings.HasSuffix(got, "\r\x1b[K") {
+		t.Errorf("expected output to end with clear sequence, got %q", got)
+	}
+}
+
+// TestSpinner_Stop_Idempotent Stop を 2 回呼んでも panic / leak しない
+func TestSpinner_Stop_Idempotent(t *testing.T) {
+	buf := &safeBuffer{}
+	enabled := true
+	s := cliui.NewSpinner(cliui.SpinnerOptions{
+		Out:      buf,
+		Enabled:  &enabled,
+		Now:      time.Now,
+		Interval: 5 * time.Millisecond,
+		Frames:   []string{"x"},
+	})
+	s.Start(cliui.PhaseThinking, "")
+	s.Stop()
+	s.Stop()
+}
+
+// TestSpinner_RestartAfterStop Stop 後に再度 Start できる
+func TestSpinner_RestartAfterStop(t *testing.T) {
+	buf := &safeBuffer{}
+	enabled := true
+	s := cliui.NewSpinner(cliui.SpinnerOptions{
+		Out:      buf,
+		Enabled:  &enabled,
+		Model:    "M",
+		Now:      func() time.Time { return time.Unix(1700000000, 0) },
+		Interval: 5 * time.Millisecond,
+		Frames:   []string{"x"},
+	})
+	s.Start(cliui.PhaseThinking, "")
+	s.Stop()
+	s.Start(cliui.PhaseTool, "shell")
+	time.Sleep(15 * time.Millisecond)
+	s.Stop()
+	got := buf.String()
+	if !strings.Contains(got, "tool: shell") {
+		t.Errorf("expected re-start with tool label, got %q", got)
+	}
+}
