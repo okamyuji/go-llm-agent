@@ -5,6 +5,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // validateMCPCommand mcp.servers.<name>.command[0] が許容パス形式かを検査する
@@ -104,9 +106,15 @@ func NewStdioClient(ctx context.Context, command []string) (*Client, error) {
 	return &Client{cmd: cmd, in: in, out: sc}, nil
 }
 
+// closeWaitTimeout cmd.Wait() を諦めて Kill にエスカレートするまでの猶予
+// MCP サーバが stdin EOF を無視するケースで shutdown 経路をハングさせない
+const closeWaitTimeout = 5 * time.Second
+
 // Close stdin を閉じて子プロセスを終了させる
 // stdin.Close と cmd.Wait のエラーを errors.Join で集約して返す
 // closed フラグを true にしてから ctx キャンセルや併走 call() が pipe に書き込まないようにする
+// cmd.Wait() が closeWaitTimeout 以内に戻らない場合は Process.Kill() を呼び、
+// 子プロセスのハングが Close() を無限にブロックしないようにする
 func (c *Client) Close() error {
 	c.mu.Lock()
 	c.closed = true
@@ -120,25 +128,42 @@ func (c *Client) Close() error {
 		}
 	}
 	if c.cmd != nil {
-		if err := c.cmd.Wait(); err != nil {
-			errs = append(errs, err)
+		done := make(chan error, 1)
+		go func() { done <- c.cmd.Wait() }()
+		select {
+		case err := <-done:
+			if err != nil {
+				errs = append(errs, err)
+			}
+		case <-time.After(closeWaitTimeout):
+			if c.cmd.Process != nil {
+				_ = c.cmd.Process.Kill()
+			}
+			if err := <-done; err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	return errors.Join(errs...)
 }
 
 // rpcRequest JSON-RPC 2.0 リクエスト
+// ID は仕様上 string / number / null のいずれもとり得るため json.RawMessage で保持する
+// 自身が送出する ID は連番の整数を Marshal したリテラルになるが、相手サーバが
+// (互換性のため) 文字列で返してくるケースでも unmarshal に失敗しない設計にする
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      int64           `json:"id"`
+	ID      json.RawMessage `json:"id"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
 // rpcResponse JSON-RPC 2.0 レスポンス
+// ID は仕様上 string / number / null のいずれもとり得るため json.RawMessage で保持し、
+// リクエスト送信時に保持したバイト列と bytes.Equal で照合する
 type rpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      int64           `json:"id"`
+	ID      json.RawMessage `json:"id"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *rpcError       `json:"error,omitempty"`
 }
@@ -165,6 +190,12 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 		return nil, ErrClientClosed
 	}
 	id := c.nextID.Add(1)
+	// 仕様 (JSON-RPC 2.0 §4.2) 上 ID は string / number / null のいずれもとり得るため
+	// 数値リテラルとして Marshal した RawMessage を保持し、応答との照合に使う
+	idRaw, err := json.Marshal(id)
+	if err != nil {
+		return nil, fmt.Errorf("mcp marshal id: %w", err)
+	}
 	var p json.RawMessage
 	if params != nil {
 		b, err := json.Marshal(params)
@@ -173,7 +204,7 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 		}
 		p = b
 	}
-	req := rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: p}
+	req := rpcRequest{JSONRPC: "2.0", ID: idRaw, Method: method, Params: p}
 	b, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("mcp marshal: %w", err)
@@ -211,7 +242,16 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 			c.in = nil
 		}
 		c.closed = true
-		<-rch
+		// stdout が閉じられず Scan が戻らないケースで cancellation 経路が無限にブロックする事故を防ぐ
+		// closeWaitTimeout 以内に rch が戻らなければ Process.Kill() で goroutine を確実に回収する
+		select {
+		case <-rch:
+		case <-time.After(closeWaitTimeout):
+			if c.cmd != nil && c.cmd.Process != nil {
+				_ = c.cmd.Process.Kill()
+			}
+			<-rch
+		}
 		return nil, ctx.Err()
 	case sr = <-rch:
 	}
@@ -225,8 +265,11 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 	if err := json.Unmarshal(sr.raw, &resp); err != nil {
 		return nil, fmt.Errorf("mcp unmarshal: %w", err)
 	}
-	if resp.ID != id {
-		return nil, fmt.Errorf("mcp: response id mismatch want=%d got=%d", id, resp.ID)
+	// JSON 表現として完全一致しているかで照合する
+	// (空白差を吸収するため json.Compact を介す方法もあるが、自身で Marshal した値と
+	//  サーバが返す値の照合は同一エンコーダ前提で十分機能する)
+	if !bytes.Equal(resp.ID, idRaw) {
+		return nil, fmt.Errorf("mcp: response id mismatch want=%s got=%s", idRaw, resp.ID)
 	}
 	if resp.Error != nil {
 		return nil, fmt.Errorf("mcp error %d: %s", resp.Error.Code, resp.Error.Message)

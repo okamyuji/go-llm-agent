@@ -88,12 +88,19 @@ func (s *service) executeConcurrent(ctx context.Context, sessionID string, calls
 // executeOne 単一 ToolCall を承認・実行・観測の全プロセスで処理する
 func (s *service) executeOne(ctx context.Context, sessionID string, call llm.ToolCall) ParallelOutcome {
 	if s.approver != nil && s.approvalRequired[call.Name] {
+		// loop.go の runReAct と同じ正規化を適用する (runID の lookup を一致させる)
+		// 空 sessionID で発行された承認待ちが parallel 経路と sequential 経路で異なるキーに
+		// 振り分けられると、Submit が空振りして deadlock 経路に入る
+		runID := sessionID
+		if runID == "" {
+			runID = "default"
+		}
 		timeout := s.approvalTimeout
 		if timeout <= 0 {
 			timeout = defaultApprovalTimeout
 		}
 		apCtx, apCancel := context.WithTimeout(ctx, timeout)
-		d, aerr := s.approver.Request(apCtx, ApprovalRequest{RunID: sessionID, CallID: call.ID, ToolName: call.Name, Arguments: call.Arguments})
+		d, aerr := s.approver.Request(apCtx, ApprovalRequest{RunID: runID, CallID: call.ID, ToolName: call.Name, Arguments: call.Arguments})
 		apCancel()
 		// loop.go の runReAct と同じ判定 (errors.Is(aerr, ErrApprovalTimeout)) を使う
 		// timeout 以外のエラーは Approver 自体の致命的失敗として拒否扱い

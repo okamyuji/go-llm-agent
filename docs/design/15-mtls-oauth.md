@@ -17,7 +17,9 @@ Ch12「mutual TLS (mTLS) authentication」「OAuth 2.0 or API keys」を参照�
 - `server.tls.cert_file` と `key_file` の指定で TLS 終端が可能になります。
 - `server.tls.client_ca_file` の指定で mTLS が有効化されます。
 - `server.oauth2` の指定で JWT 検証ミドルウェアが追加されます。
-- Bearer Token と OAuth2 と mTLS は同時併用も選択も可能です。
+- Bearer Token / OAuth2 / mTLS は設定に応じて有効化できます。複数を同時に有効化した場合の判定は AND (全て成功必須) で固定し、ある方式が成功しても他の方式が拒否したらリクエストは 401 で終端します。
+  - 例 (AND): mTLS + OAuth2 の両方を有効化した場合、クライアント証明書と JWT の両方を提示し、両方の検証に成功した場合のみハンドラに到達します。
+  - 優先度ベース (OR) の代替評価は MVP ではサポートせず、必要になった時点で別設計で追加します。
 
 ## 5. 設計
 
@@ -62,7 +64,7 @@ func (v *JWTVerifier) Handler(next http.Handler) http.Handler
 1. main.cmdServe は TLSConfig が有効な場合 `http.Server.ListenAndServeTLS` を呼びます。
 2. mTLS は `tls.Config.ClientCAs` と `ClientAuth=RequireAndVerifyClientCert` で実装します。
 3. JWT 検証は jwks_url を fetch し、署名検証と issuer/audience チェックを行います。
-4. 04 番の Bearer Auth、05 番の rate limit と組み合わせて任意のチェイン構成を可能にします。
+4. 04 番の Bearer Auth、OAuth2 JWT、mTLS の評価順は CORS → Allowlist → RateLimit → (有効なものすべて) Auth → mux で固定します。複数の Auth は AND (全て成功必須) で評価し、いずれかが失敗した時点で 401 を返します。
 
 ## 6. 実装タスク（TDD）
 

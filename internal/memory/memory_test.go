@@ -108,3 +108,51 @@ func TestTokenize_RemovesPunctuation(t *testing.T) {
 		}
 	}
 }
+
+// TestTokenize_JapaneseBigram 日本語クエリが rune 2-gram に展開されることを検証する
+// 分かち書きしない言語でも本文との部分一致でヒットすることを担保する
+func TestTokenize_JapaneseBigram(t *testing.T) {
+	t.Parallel()
+	got := tokenize("メモリ管理")
+	want := []string{"メモ", "モリ", "リ管", "管理"}
+	if len(got) != len(want) {
+		t.Fatalf("tokens: %v want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("token[%d] = %q want %q", i, got[i], w)
+		}
+	}
+}
+
+// TestTokenize_SingleRuneNonASCII 1 文字のみの非 ASCII トークンが
+// 2-gram 展開できずに脱落しないこと (そのまま 1 トークンとして残る) を確認する
+func TestTokenize_SingleRuneNonASCII(t *testing.T) {
+	t.Parallel()
+	got := tokenize("猫")
+	if len(got) != 1 || got[0] != "猫" {
+		t.Fatalf("single-rune token must survive: %v", got)
+	}
+}
+
+// TestFileNoteStore_JapaneseSearch 日本語の Title/Body を含むノートが
+// 日本語クエリで検索ヒットすることを検証する (回帰防止)
+func TestFileNoteStore_JapaneseSearch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	s, err := NewFileNoteStore(filepath.Join(dir, "notes.jsonl"))
+	if err != nil {
+		t.Fatalf("NewFileNoteStore: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := s.Add(ctx, Note{Title: "Go の メモリ管理", Body: "GC とエスケープ解析の話", Tags: []string{"go"}}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	got, err := s.Search(ctx, "メモリ管理", 5)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("expected at least 1 result for Japanese query")
+	}
+}

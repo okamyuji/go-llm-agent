@@ -37,7 +37,7 @@ agent:
     enabled: false
     model: openai/gpt-4o
     ratio: 0.10
-    record_dir: "${XDG_STATE_HOME:-.}/go-llm-agent/shadow"
+    record_dir: ~/.local/state/go-llm-agent/shadow  # 環境変数の展開は未実装のため明示パスを指定する
 ```
 
 ### 5.3 公開インターフェース

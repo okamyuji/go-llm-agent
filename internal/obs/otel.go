@@ -69,6 +69,9 @@ func noopShutdown() Shutdown {
 // InitTelemetry TelemetryConfig.Enabled が false のとき no-op Shutdown を返す
 // 有効化時は OTLP HTTP exporter と TracerProvider / MeterProvider を構築し
 // otel.SetTracerProvider と otel.SetMeterProvider にセットする
+// 途中で失敗した場合は SetTracerProvider / SetMeterProvider に渡した値を
+// 関数進入前のプロバイダに戻し、プロセスに「半 shutdown 済みプロバイダ」が
+// 残らないようにする
 func InitTelemetry(ctx context.Context, c TelemetryConfig, logger *slog.Logger) (Shutdown, error) {
 	if !c.Enabled {
 		if logger != nil {
@@ -76,6 +79,10 @@ func InitTelemetry(ctx context.Context, c TelemetryConfig, logger *slog.Logger) 
 		}
 		return noopShutdown(), nil
 	}
+
+	// 初期化途中で失敗した場合に元のプロバイダへ戻すため、進入時点の値を保持する
+	prevTP := otel.GetTracerProvider()
+	prevMP := otel.GetMeterProvider()
 
 	serviceName := c.ServiceName
 	if serviceName == "" {
@@ -133,6 +140,9 @@ func InitTelemetry(ctx context.Context, c TelemetryConfig, logger *slog.Logger) 
 		if e := traceExp.Shutdown(shutdownCtx); e != nil { //nolint:contextcheck
 			errs = append(errs, fmt.Errorf("trace exporter shutdown: %w", e))
 		}
+		// 半 shutdown 済みプロバイダがグローバルに残らないよう、進入時点のプロバイダに戻す
+		otel.SetTracerProvider(prevTP)
+		otel.SetMeterProvider(prevMP)
 		return nil, errors.Join(errs...)
 	}
 	mp := sdkmetric.NewMeterProvider(
@@ -152,6 +162,9 @@ func InitTelemetry(ctx context.Context, c TelemetryConfig, logger *slog.Logger) 
 		if shutErr := mp.Shutdown(shutdownCtx); shutErr != nil && logger != nil { //nolint:contextcheck
 			logger.Warn("otel: meter provider shutdown failed after install error", "err", shutErr)
 		}
+		// 半 shutdown 済みプロバイダがグローバルに残らないよう、進入時点のプロバイダに戻す
+		otel.SetTracerProvider(prevTP)
+		otel.SetMeterProvider(prevMP)
 		return nil, err
 	}
 

@@ -121,6 +121,7 @@ var ErrBudgetExceeded = errors.New("budget exceeded")
 
 - 高頻度書き込みで JSONL がボトルネックになる懸念があります。バッファリングと fsync 頻度を設定できるようにします。
 - 為替変動を無視しているため JPY 固定です。将来の通貨拡張に備え `Currency string` を Pricing に保持しておきます。
+- 通貨表現は MVP で float64 を採用しているため、極端な累積でわずかな丸め誤差が予算境界をすり抜ける理論的リスクがあります。本番運用で 1 円未満の精度が要求された場合は、`int64` の最小通貨単位 (銭) または `shopspring/decimal` 等の固定小数点へ移行する想定です (Heavy lift のため別フェーズで扱います)。
 
 ## 10. 完了基準
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strings"
@@ -275,7 +276,12 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config read: %w", err)
 	}
 	var cfg Config
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
+	// 厳密モードで decode する
+	// `server.auth` などセキュリティ critical なキーのタイポで、本来の制御が
+	// 暗黙に無効化される事故 (例: `server.uath:` と書いて Bearer 認証が無効化される) を防ぐ
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("config parse: %w", err)
 	}
 	if err := validateFallbackChains(cfg.Providers); err != nil {

@@ -25,6 +25,8 @@ Ch6「Foundational Approaches to Memory」「Note-Taking」「Retrieval-Augmente
 
 `internal/memory` パッケージを新設し、`Summarizer`、`NoteStore`、`Retriever` の 3 抽象を定義します。Summarizer は LLM を使い、NoteStore は MVP として JSONL ファイル (`internal/memory.FileNoteStore`) を用いた追記型ストアで全文検索を提供します。Retriever は近似類似度を Bag-of-Words + 重み付きスコア (title=3, tags=2, body=1) で計算します。将来フェーズで SQLite + FTS5 やベクター DB に差し替え可能なよう、`NoteStore` を interface として切り出しておきます。
 
+検索クエリのトークナイズは ASCII 範囲の語については空白・句読点分割をそのまま採用し、非 ASCII (CJK 等の分かち書きしない言語) を含むトークンは rune 単位の 2-gram に展開します。これにより日本語の Title/Body もクエリと部分一致でヒットさせます。形態素解析や FTS5 への置き換えは将来フェーズで対応します。
+
 ### 5.2 設定スキーマ
 
 ```yaml
@@ -42,6 +44,8 @@ memory:
 ```
 
 MVP の `storage.notes_path` 未指定時は `storage.sessions_dir/notes.jsonl` へフォールバックします。SQLite + FTS5 への切り替えは将来フェーズで `memory.notes.store: sqlite` のような設定を追加して実装します。
+
+`trigger_tokens` と `target_tokens` の計測は MVP では「メッセージごとの UTF-8 byte 数 / 4 をモデル非依存の概算トークン数として加算する」方針で実装します。対象は system / user / assistant メッセージの `Content` 文字列で、tool_call の Arguments は含めません。複数モデルを跨いで会話する場合でも閾値判定は同じ概算式で行い、要約 LLM の選定だけ `memory.summary.model` 設定に従います。将来 OpenAI 系の tiktoken やプロバイダ別の正規トークナイザを差し込めるよう、`tokenCounter` を interface として `internal/memory` に切り出す予定です。
 
 ### 5.3 公開インターフェース
 

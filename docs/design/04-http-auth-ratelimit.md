@@ -118,6 +118,9 @@ func (a *AllowlistCIDR) Handler(next http.Handler) http.Handler
 
 - ローカル運用で AGENT_LOCAL_TOKEN を平文に書く事故を防ぐため secret_env 指定だけ受け付け、values の直書きは拒否します。
 - per_token=true のレートリミッタは map のサイズが膨らみすぎないように LRU で管理します。
+  - `max_entries` の既定値は 1,000 トークンを目安とし、超過時は最旧アクセスのバケットを evict します。
+  - 24 時間未利用のバケットも TTL ベースで evict 候補としてもよい運用設計とします。
+  - `lru_capacity` (上限値)、`lru_size` (現在の登録数)、`lru_evictions_total`、`lru_hit_ratio` の 4 指標を Observability メトリクスとして出すことで、容量チューニングと攻撃検知の双方を支えます。
 
 ## 10. 完了基準
 

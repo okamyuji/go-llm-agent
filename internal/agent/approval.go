@@ -105,16 +105,23 @@ func (a *HTTPApprover) Request(ctx context.Context, r ApprovalRequest) (Approval
 
 // Submit 外部からの Decision を該当 channel に流し込む
 // 未登録の RunID/CallID は false を返す
+//
+// 排他制御 mu を取った状態のままで lookup と送信を行うことで、Request 側の timeout 経路
+// (cleanup → delete(a.pending, k)) との TOCTOU race を防ぐ
+// チャネルバッファは Request 側で 1 を確保しているため Lock 内の send はブロックしない
+// 送信成功時にはエントリを即時 delete することで「Submit と Request 終了の race による
+// 二重送信や late delivery」を抑制する (Request 側の cleanup でも防御している二重防壁)
 func (a *HTTPApprover) Submit(d ApprovalDecision) bool {
 	k := approvalKey{RunID: d.RunID, CallID: d.CallID}
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	ch, ok := a.pending[k]
-	a.mu.Unlock()
 	if !ok {
 		return false
 	}
 	select {
 	case ch <- d:
+		delete(a.pending, k)
 		return true
 	default:
 		return false

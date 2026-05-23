@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"text/template"
 )
@@ -129,8 +130,20 @@ func NewRenderer(allowedKeys []string) Renderer {
 // SSTI 注意 text/template の Funcs を本実装では絶対に登録しない
 // FuncMap を追加すると {{call .Func arg}} 構文経由で任意関数が呼ばれ得るため、
 // テンプレートファイル書き換え権限を持つ攻撃者に対してコード実行に直結する
+// なお text/template の builtin `call` は空 FuncMap でも有効なため、vars に関数値を
+// 渡してテンプレート側で `{{call .X arg}}` されるとやはり任意実行になり得る
+// このため vars の各値が reflect.Func 型を含む場合は即エラーで弾く
 // 信頼境界外からテンプレート本体を受け取らない運用 (loader dir の write 権限を制限) を前提とする
 func (r *renderer) Render(t Template, vars map[string]any) (string, error) {
+	// vars に func 型を混入させない (builtin `call` 経由の任意実行を防ぐ)
+	for k, v := range vars {
+		if v == nil {
+			continue
+		}
+		if reflect.TypeOf(v).Kind() == reflect.Func {
+			return "", fmt.Errorf("prompt: function-typed variable %q is forbidden", k)
+		}
+	}
 	if len(r.allowed) > 0 {
 		for k := range vars {
 			if !r.allowed[k] {

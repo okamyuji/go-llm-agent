@@ -216,13 +216,14 @@ func toPayload(req llm.ChatRequest) gemPayload {
 // toolChoiceConfig ChatRequest.ToolChoice を Gemini の functionCallingConfig に変換する
 // Gemini は AUTO / ANY / NONE と allowedFunctionNames を使う
 // 未知の Mode は AUTO にフォールバックし、設定ミスを発見しやすくするため警告ログを残す
+// "required" と "any" は OpenAI / Anthropic でも「ツール呼び出し強制」相当として揃えるため
+// Gemini でもどちらも ANY にマップする
 func toolChoiceConfig(tc *llm.ToolChoice) *gemToolConfig {
 	switch tc.Mode {
-	case "auto", "any", "":
-		// llm.ToolChoice.Mode "any" は OpenAI で "auto" 相当 (model can pick) として扱うため、
-		// Gemini の対応モードも AUTO を返す。"required" のみが ANY (function 呼び出し強制)
+	case "auto", "":
 		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "AUTO"}}
-	case "required":
+	case "required", "any":
+		// 他プロバイダと意味を揃え、ツール呼び出しを強制する
 		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "ANY"}}
 	case "none":
 		return &gemToolConfig{FunctionCallingConfig: gemFCCConfig{Mode: "NONE"}}

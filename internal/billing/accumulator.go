@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"math"
 	"sync"
 	"time"
 )
@@ -82,12 +84,15 @@ type accumulator struct {
 // NewAccumulator Accumulator を構築する
 // Config.Now が nil のとき time.Now で代替する
 // store が nil のときは Add 時の panic を防ぐため no-op の nopStore を採用する
+// production の wiring ミスで永続化が消える事故を表面化させるため、フォールバック時には
+// slog.Warn を一度だけ出してオペレータに気付かせる
 // 呼び出し側で永続化が不要な場合 (テスト用途等) は明示的に NewNopStore() を渡すのが望ましい
 func NewAccumulator(cfg Config, store Store) Accumulator {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
 	if store == nil {
+		slog.Warn("billing: nil store passed to NewAccumulator, persistence disabled")
 		store = nopStore{}
 	}
 	return &accumulator{
@@ -130,7 +135,13 @@ func (a *accumulator) Add(ctx context.Context, sessionID, providerName, model st
 	prevDailyCost, dailyCostExisted := a.dailyCost[date]
 
 	sessSoFar := prevSess
-	projectedTokens := sessSoFar.InputTokens + sessSoFar.OutputTokens + in + out
+	// int64 で計算し、int overflow による予算チェックすり抜けを防ぐ
+	// 32bit プラットフォームでも安全に評価でき、超過時は MaxInt 越えとして即拒否する
+	projected64 := int64(sessSoFar.InputTokens) + int64(sessSoFar.OutputTokens) + int64(in) + int64(out)
+	if projected64 > int64(math.MaxInt) {
+		return Snapshot{}, fmt.Errorf("billing: token count overflow (in=%d out=%d session_so_far=%d)", in, out, sessSoFar.InputTokens+sessSoFar.OutputTokens)
+	}
+	projectedTokens := int(projected64)
 	projectedDailyCost := prevDailyCost + cost
 	if a.cfg.Budget.SessionMaxTokens > 0 && projectedTokens > a.cfg.Budget.SessionMaxTokens {
 		return Snapshot{}, fmt.Errorf("%w: session tokens %d > %d", ErrBudgetExceeded, projectedTokens, a.cfg.Budget.SessionMaxTokens)

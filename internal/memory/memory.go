@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -50,13 +51,31 @@ func NewFileNoteStore(path string) (NoteStore, error) {
 	return &fileNoteStore{path: path}, nil
 }
 
+// maxJSONLRecordBytes Add で許容する 1 レコードの最大バイト数
+// Search の bufio.Scanner バッファ上限 (16 MiB) を超えるレコードを書くと、
+// それ以降の全 Search が scanner error で破綻するため、書き込み時点で同じ上限を強制する
+// 末尾改行を含めたサイズで比較する
+const maxJSONLRecordBytes = 16 * 1024 * 1024
+
+// ErrNoteTooLarge Add で 1 レコードのサイズが maxJSONLRecordBytes を超えた場合に返す
+var ErrNoteTooLarge = fmt.Errorf("notes: record exceeds %d bytes", maxJSONLRecordBytes)
+
 // Add ノートを追加する。ID 未指定の場合は UUID v4 を生成する
+// 1 レコードの JSON 表現が maxJSONLRecordBytes を超える場合は ErrNoteTooLarge を返す
 func (s *fileNoteStore) Add(_ context.Context, n Note) (Note, error) {
 	if n.ID == "" {
 		n.ID = uuid.NewString()
 	}
 	if n.CreatedAt.IsZero() {
 		n.CreatedAt = time.Now().UTC()
+	}
+	b, err := json.Marshal(n)
+	if err != nil {
+		return Note{}, fmt.Errorf("notes marshal: %w", err)
+	}
+	// +1 は末尾改行の分
+	if len(b)+1 > maxJSONLRecordBytes {
+		return Note{}, fmt.Errorf("%w (got %d)", ErrNoteTooLarge, len(b)+1)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -65,10 +84,6 @@ func (s *fileNoteStore) Add(_ context.Context, n Note) (Note, error) {
 		return Note{}, fmt.Errorf("notes open: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	b, err := json.Marshal(n)
-	if err != nil {
-		return Note{}, fmt.Errorf("notes marshal: %w", err)
-	}
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		return Note{}, fmt.Errorf("notes write: %w", err)
 	}
@@ -110,7 +125,9 @@ func (s *fileNoteStore) Search(_ context.Context, query string, topK int) ([]Not
 	}
 	var ranked []scored
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	// LLM が生成する長文ノートを 1 レコードとして格納するため、初期 64KiB から
+	// 最大 16MiB まで拡張する (internal/mcp/client.go のスキャナと同水準)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	// 行番号で問題箇所を特定できるよう lineIdx を回す
 	lineIdx := 0
 	for scanner.Scan() {
@@ -170,17 +187,46 @@ func scoreNote(n Note, terms []string) int {
 	return score
 }
 
-// tokenize 検索語を小文字化して空白で分割する
+// tokenize 検索語を小文字化して分割する
+// ASCII のみのトークンは空白・記号で分割した語をそのまま採用する
+// 非 ASCII 文字 (CJK など) を含むトークンは分かち書きが期待できないため rune 2-gram に展開し、
+// scoreNote の strings.Contains による部分一致で日本語ノートも検索可能にする
+// MVP 段階の実装で、より高品質な検索が必要な場合は SQLite FTS5 やベクター DB へ差し替える
 func tokenize(q string) []string {
 	q = strings.ToLower(q)
 	raw := strings.FieldsFunc(q, func(r rune) bool {
 		return r == ' ' || r == '\t' || r == '\n' || r == ',' || r == '.' || r == '!' || r == '?'
 	})
 	out := make([]string, 0, len(raw))
-	for _, r := range raw {
-		if len(r) > 0 {
-			out = append(out, r)
+	for _, tok := range raw {
+		if tok == "" {
+			continue
+		}
+		if isASCIIOnly(tok) {
+			out = append(out, tok)
+			continue
+		}
+		runes := []rune(tok)
+		if len(runes) == 1 {
+			out = append(out, tok)
+			continue
+		}
+		// 非 ASCII を含むトークンを長さ 2 の rune 連結で展開する
+		// 例: 「メモリ管理」 → ["メモ", "モリ", "リ管", "管理"]
+		for i := 0; i+1 < len(runes); i++ {
+			out = append(out, string(runes[i:i+2]))
 		}
 	}
 	return out
+}
+
+// isASCIIOnly s が全て ASCII 範囲の文字で構成されているかを判定する
+// utf8.RuneSelf (=128) 未満のバイトのみで埋まっていれば真
+func isASCIIOnly(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }
