@@ -13,25 +13,35 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 )
 
 // validateMCPCommand mcp.servers.<name>.command[0] が許容パス形式かを検査する
-// 絶対パス、または ./ ・ ../ で始まる相対パスのみを受け付ける
-// 単純な実行ファイル名 (例: "node") は PATH 解決による任意コマンド実行リスクがあるため拒否する
+// 受け付けるのは絶対パスのみ、かつ正規化後に .. セグメントを含まないものに限定する
+// PATH 経由の任意コマンド実行 (例: "node") と path traversal (例: "/opt/srv/../../etc/passwd") を防ぐ
 func validateMCPCommand(path string) error {
 	if path == "" {
 		return errors.New("mcp: command[0] is empty")
 	}
-	if filepath.IsAbs(path) {
-		return nil
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("mcp: command[0] must be an absolute path, got %q", path)
 	}
-	if strings.HasPrefix(path, "./") || strings.HasPrefix(path, "../") {
-		return nil
+	cleaned := filepath.Clean(path)
+	// Clean 後でも .. が残るのは現在ディレクトリより上を参照しているケース。Clean が
+	// 絶対パスの先頭境界を越える .. は除去するが、保守のため明示的に再確認する
+	if hasDotDotSegment(cleaned) {
+		return fmt.Errorf("mcp: command[0] must not contain .. segments, got %q", path)
 	}
-	return fmt.Errorf("mcp: command[0] must be an absolute path or start with ./ or ../ got=%q", path)
+	return nil
+}
+
+// hasDotDotSegment cleaned パスに ".." セグメントが含まれるかを判定する
+// strings.SplitSeq + slices.Contains は短いシーケンス操作向けの簡潔形
+func hasDotDotSegment(p string) bool {
+	return slices.Contains(slices.Collect(strings.SplitSeq(p, string(filepath.Separator))), "..")
 }
 
 // ToolInfo discovery 結果に現れるツール 1 件

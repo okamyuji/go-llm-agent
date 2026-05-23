@@ -61,6 +61,10 @@ type Accumulator interface {
 // ErrBudgetExceeded 予算超過を示すセンチネルエラー
 var ErrBudgetExceeded = errors.New("billing: budget exceeded")
 
+// ErrInvalidTokenCount 負のトークン数が渡された場合のセンチネルエラー
+// 負数はランタイムで予算判定や累計値を破壊するため Add 段階で拒否する
+var ErrInvalidTokenCount = errors.New("billing: token count must be non-negative")
+
 // accumulator Accumulator の実装
 // 集計はメモリ上に保持し、永続化は Store に委譲する
 // 読み取り経路 (SessionTotal / DailyTotal) は RWMutex の RLock を使い、
@@ -95,6 +99,9 @@ func NewAccumulator(cfg Config, store Store) Accumulator {
 // 予算判定・状態更新・store.Append を a.mu 内で一貫処理して同時呼び出しのレースを防ぐ。
 // store.Append 失敗時は同じロック保持中に in-memory aggregate を巻き戻して divergence を防ぐ
 func (a *accumulator) Add(ctx context.Context, sessionID, providerName, model string, in, out int) (Snapshot, error) {
+	if in < 0 || out < 0 {
+		return Snapshot{}, fmt.Errorf("%w: in=%d out=%d", ErrInvalidTokenCount, in, out)
+	}
 	now := a.cfg.Now().UTC()
 	date := now.Format("2006-01-02")
 	cost := computeCostJPY(a.cfg.Pricing[providerName], in, out)

@@ -86,4 +86,20 @@ func TestNewStdioClient_RejectsBareName(t *testing.T) {
 	if _, err := NewStdioClient(context.Background(), []string{"some-tool"}); err == nil {
 		t.Fatal("bare command name must be rejected")
 	}
+	// ./ ../ で始まる相対パスも明示的に拒否することを担保する
+	if _, err := NewStdioClient(context.Background(), []string{"./local-bin"}); err == nil {
+		t.Fatal("./relative path must be rejected (absolute only)")
+	}
+	if _, err := NewStdioClient(context.Background(), []string{"../up"}); err == nil {
+		t.Fatal("../relative path must be rejected (absolute only)")
+	}
+}
+
+// TestNewStdioClient_RejectsDotDotInAbsolutePath 絶対パスでも .. セグメントを含むものは
+// path traversal の余地があるため拒否する
+func TestNewStdioClient_RejectsDotDotInAbsolutePath(t *testing.T) {
+	t.Parallel()
+	if _, err := NewStdioClient(context.Background(), []string{"/opt/srv/../bin/sh"}); err == nil {
+		t.Fatal("absolute path containing .. must be rejected")
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -84,7 +85,10 @@ func TestUsageEndpoint_DateScope(t *testing.T) {
 	pricing := map[string]billing.Pricing{
 		"openai": {InputPerMillionJPY: 1, OutputPerMillionJPY: 1},
 	}
-	acc := billing.NewAccumulator(billing.Config{Pricing: pricing}, &fakeStore{})
+	// 集計タイムスタンプを 1 度だけ取得し、acc.Add と /v1/usage クエリの date が
+	// UTC 日付境界を跨いだ瞬間にズレない (UTC 真夜中の flaky) ようにする
+	base := time.Now().UTC()
+	acc := billing.NewAccumulator(billing.Config{Pricing: pricing, Now: func() time.Time { return base }}, &fakeStore{})
 	if _, err := acc.Add(context.Background(), "sess-a", "openai", "gpt", 200_000, 100_000); err != nil {
 		t.Fatalf("acc.Add: %v", err)
 	}
@@ -92,8 +96,7 @@ func TestUsageEndpoint_DateScope(t *testing.T) {
 	srv := httptest.NewServer(httpapi.New(fakeSvc{}, cfg, acc).Handler())
 	defer srv.Close()
 
-	// 過去のテストはハードコード日付 "2026-05-23" を使っていたため、UTC の実日付を採用する形に直す
-	date := time.Now().UTC().Format("2006-01-02")
+	date := base.Format("2006-01-02")
 	res := doGet(t, srv.URL+"/v1/usage?date="+date)
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
@@ -157,13 +160,21 @@ func TestUsageEndpoint_PostRejected(t *testing.T) {
 }
 
 // fakeStore Accumulator 専用の最小モック
-type fakeStore struct{ items []billing.Snapshot }
+// Append と Query 系を並行で叩くテストでも race-free になるよう sync.RWMutex で保護する
+type fakeStore struct {
+	mu    sync.RWMutex
+	items []billing.Snapshot
+}
 
 func (s *fakeStore) Append(_ context.Context, snap billing.Snapshot) error {
+	s.mu.Lock()
 	s.items = append(s.items, snap)
+	s.mu.Unlock()
 	return nil
 }
 func (s *fakeStore) QuerySession(_ context.Context, id string) ([]billing.Snapshot, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var out []billing.Snapshot
 	for _, it := range s.items {
 		if it.SessionID == id {
@@ -173,8 +184,12 @@ func (s *fakeStore) QuerySession(_ context.Context, id string) ([]billing.Snapsh
 	return out, nil
 }
 func (s *fakeStore) QueryDate(_ context.Context, date string) ([]billing.Snapshot, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if date == "" {
-		return s.items, nil
+		// 内部スライスを直接返すと呼び出し側がロック外で読み書きしうるため、コピーを返す
+		cp := append([]billing.Snapshot(nil), s.items...)
+		return cp, nil
 	}
 	var out []billing.Snapshot
 	for _, it := range s.items {
