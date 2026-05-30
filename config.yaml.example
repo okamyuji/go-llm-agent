@@ -13,6 +13,7 @@ providers:
     # 許可モデルを明示する（空ならプロバイダー側に委譲）。サプライチェーン耐性のため
     # 検証済みモデルだけをここに列挙することを推奨。
     allow_models:
+      - gpt-5-mini
       - gpt-4.1-mini
       - gpt-4o-mini
     # 1,000,000 トークンあたりの円換算単価。未指定なら CostJPY は 0 として集計される。
@@ -31,9 +32,10 @@ providers:
   anthropic:
     base_url: https://api.anthropic.com
     api_key_env: ANTHROPIC_API_KEY
+    # ANTHROPIC_API_KEY が未設定の場合、CLI は CLAUDE_API_KEY も互換名として試す。
     allow_models:
-      - claude-3-5-sonnet-latest
-      - claude-3-5-haiku-latest
+      - claude-sonnet-4-6
+      - claude-haiku-4-5
     pricing:
       input_per_million_jpy: 480
       output_per_million_jpy: 2400

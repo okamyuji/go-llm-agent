@@ -182,16 +182,13 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 	provs := map[string]llm.Provider{}
 	// resolveAPIKey APIKeyEnv が未設定または resolver で解決失敗した場合に error を返す
 	// 起動時に明示的に失敗を呼び出し側へ伝え、サイレント空キーでの実呼び出しを避ける
-	resolveAPIKey := func(name, envKey string) (string, error) {
-		if envKey == "" {
-			return "", fmt.Errorf("provider %q: api_key_env is empty", name)
-		}
-		key, err := resolver.Resolve(envKey)
+	resolveAPIKey := func(name string, envKeys ...string) (string, error) {
+		key, usedEnv, err := secret.ResolveAny(resolver, envKeys...)
 		if err != nil {
-			return "", fmt.Errorf("provider %q: resolve api key from %q: %w", name, envKey, err)
+			return "", fmt.Errorf("provider %q: resolve api key from %v: %w", name, envKeys, err)
 		}
 		if key == "" {
-			return "", fmt.Errorf("provider %q: api key from env %q resolved to empty value", name, envKey)
+			return "", fmt.Errorf("provider %q: api key from env %q resolved to empty value", name, usedEnv)
 		}
 		return key, nil
 	}
@@ -203,7 +200,7 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 		provs["openai"] = wrapWithRetry("openai", openai.New(openai.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
 	}
 	if pc, ok := cfg.Providers["anthropic"]; ok {
-		key, err := resolveAPIKey("anthropic", pc.APIKeyEnv)
+		key, err := resolveAPIKey("anthropic", pc.APIKeyEnv, "CLAUDE_API_KEY")
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}

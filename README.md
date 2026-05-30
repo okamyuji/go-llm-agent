@@ -24,7 +24,7 @@ make build
 ./bin/agent chat --model gemini/gemini-2.5-pro
 ```
 
-> `config.yaml` は個人ローカル設定として `.gitignore` 対象です。リポジトリには安全寄りの `config.yaml.example` のみがコミットされます。設定例の完全な内容は `config.yaml.example` を参照してください。
+> `config.yaml` は個人ローカル設定として `.gitignore` 対象です。リポジトリには安全寄りの `config.yaml.example` のみがコミットされます。Anthropic/Claude のキーは `ANTHROPIC_API_KEY` を基本名とし、CLI は互換名として `CLAUDE_API_KEY` も試します。設定例の完全な内容は `config.yaml.example` を参照してください。
 
 ## セキュリティ
 
@@ -244,7 +244,7 @@ E2Eスクリプトは `tests/e2e/05-tool-choice-validation.sh` です。fixtures
 `internal/agent.Router` でリクエスト単位のcanary振り分けとshadow実行設定を表現できます。`Pick(seed)` は決定論的で、同じseedには常に同じDecisionを返します。shadow ratioは副作用拡大を抑えるため0.5を上限としてハードキャップします。
 
 ```go
-r := agent.NewRouter("openai/gpt-4o-mini", "anthropic/claude-3-5-sonnet-latest", 0.05, "openai/gpt-4o", 0.10)
+r := agent.NewRouter("openai/gpt-4o-mini", "anthropic/claude-sonnet-4-6", 0.05, "openai/gpt-4o", 0.10)
 d := r.Pick(seedFromRequest)
 ```
 

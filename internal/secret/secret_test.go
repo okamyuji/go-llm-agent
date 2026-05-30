@@ -70,3 +70,24 @@ func TestResolveMissing(t *testing.T) {
 		t.Fatalf("未設定でエラーを返すこと")
 	}
 }
+
+func TestResolveAnyUsesFallback(t *testing.T) {
+	t.Setenv("PRIMARY_TEST_KEY", "")
+	t.Setenv("FALLBACK_TEST_KEY", "fallback")
+	r := secret.NewResolver("")
+	v, used, err := secret.ResolveAny(r, "PRIMARY_TEST_KEY", "FALLBACK_TEST_KEY")
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if v != "fallback" || used != "FALLBACK_TEST_KEY" {
+		t.Fatalf("fallback value/name mismatch value=%q used=%q", v, used)
+	}
+}
+
+func TestResolveAnyMissing(t *testing.T) {
+	r := secret.NewResolver("")
+	_, _, err := secret.ResolveAny(r, "MISSING_ONE", "MISSING_TWO")
+	if err == nil {
+		t.Fatalf("expected error when all candidates are missing")
+	}
+}
