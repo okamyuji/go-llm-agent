@@ -1,0 +1,36 @@
+# 「素のモデル」計測用設定。今回追加した機能をすべて無効にし、
+# curl 直接呼び出しのベースライン (システムプロンプトなし・ツールなし・
+# temperature 0・think false) と同一条件を agent バイナリで再現する。
+# 機能追加による非機能劣化が無いことの検証に使う。
+default_model: ollama/gemma4:e4b
+
+providers:
+  ollama:
+    base_url: http://localhost:11434
+    temperature: 0
+    think: false
+
+agent:
+  max_tool_hops: 0
+  enabled_tools: []
+  # ツール定義の広告ごと抑制 (curl 素の「ツールなし」と同一条件にする)
+  tool_choice:
+    mode: none
+  # system_prompt / system_prompt_file とも未指定 = システムメッセージなし
+  # enricher 未指定 = コンテキスト注入なし
+
+tools:
+  shell:
+    timeout_seconds: 30
+    max_timeout_seconds: 300
+    allow_binaries: [git]
+  http_fetch:
+    deny_private_networks: true
+    timeout_seconds: 15
+
+server:
+  addr: 127.0.0.1:14000
+
+logging:
+  format: text
+  level: info

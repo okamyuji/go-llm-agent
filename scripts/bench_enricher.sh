@@ -1,12 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-AGENT="/tmp/agent-bench"
-CONFIG="/Users/yujiokamoto/devs/golang/go-llm-agent/bench-config.yaml"
-OUTDIR="/tmp/bench_dynamic_v3"
+# BENCH_CONFIG / BENCH_OUTDIR / BENCH_MODELS 環境変数で上書き可能
+AGENT="${BENCH_AGENT:-/tmp/agent-bench}"
+CONFIG="${BENCH_CONFIG:-/Users/yujiokamoto/devs/golang/go-llm-agent/bench-config.yaml}"
+OUTDIR="${BENCH_OUTDIR:-/tmp/bench_dynamic_v3}"
 mkdir -p "$OUTDIR"
 
-MODELS=("ollama/gemma4:e4b" "ollama/qwen3.5:9b" "ollama/qwen2.5-coder:14b")
+IFS=' ' read -r -a MODELS <<< "${BENCH_MODELS:-ollama/gemma4:e4b ollama/qwen3.5:9b ollama/qwen2.5-coder:14b}"
 
 declare -A QUESTIONS
 
