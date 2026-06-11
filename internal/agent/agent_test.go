@@ -33,15 +33,17 @@ func (f *fakeStream) Recv() (llm.StreamEvent, bool) {
 func (f *fakeStream) Close() error { return nil }
 
 type fakeProvider struct {
-	streams [][]llm.StreamEvent
-	call    int
+	streams  [][]llm.StreamEvent
+	call     int
+	requests []llm.ChatRequest
 }
 
 func (f *fakeProvider) Name() string { return "fake" }
 func (f *fakeProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
 	return nil, nil
 }
-func (f *fakeProvider) Stream(_ context.Context, _ llm.ChatRequest) (llm.ChatStream, error) {
+func (f *fakeProvider) Stream(_ context.Context, req llm.ChatRequest) (llm.ChatStream, error) {
+	f.requests = append(f.requests, req)
 	ev := f.streams[f.call]
 	f.call++
 	return &fakeStream{events: ev}, nil
@@ -99,6 +101,59 @@ func TestRun_BasicToolLoop(t *testing.T) {
 	}
 	if kinds[len(kinds)-1] != agent.EventFinal {
 		t.Fatalf("最後は Final 期待 got %v", kinds[len(kinds)-1])
+	}
+}
+
+func TestRun_ToolChoiceNoneSuppressesToolAdvertisement(t *testing.T) {
+	prov := &fakeProvider{streams: [][]llm.StreamEvent{
+		{{DeltaText: "answer"}},
+	}}
+	reg := fakeReg{p: prov}
+	tools := tool.NewRegistry([]tool.Tool{echoTool{}}, []string{"echo"})
+	svc := agent.New(reg, tools)
+
+	out := make(chan agent.Event, 16)
+	err := svc.Run(context.Background(), agent.Input{
+		Model:       "fake/m",
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		MaxToolHops: 3,
+		ToolChoice:  &llm.ToolChoice{Mode: "none"},
+	}, out)
+	close(out)
+	if err != nil {
+		t.Fatalf("run err=%v", err)
+	}
+	if len(prov.requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(prov.requests))
+	}
+	if len(prov.requests[0].Tools) != 0 {
+		t.Errorf("tool_choice none should suppress tool advertisement, got %d tools", len(prov.requests[0].Tools))
+	}
+	if prov.requests[0].ToolChoice != nil {
+		t.Errorf("tool_choice should be nil when tools are suppressed, got %+v", prov.requests[0].ToolChoice)
+	}
+}
+
+func TestRun_DefaultToolChoiceNoneSuppressesTools(t *testing.T) {
+	prov := &fakeProvider{streams: [][]llm.StreamEvent{
+		{{DeltaText: "answer"}},
+	}}
+	reg := fakeReg{p: prov}
+	tools := tool.NewRegistry([]tool.Tool{echoTool{}}, []string{"echo"})
+	svc := agent.New(reg, tools, agent.WithDefaultToolChoice(&llm.ToolChoice{Mode: "none"}))
+
+	out := make(chan agent.Event, 16)
+	err := svc.Run(context.Background(), agent.Input{
+		Model:       "fake/m",
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		MaxToolHops: 3,
+	}, out)
+	close(out)
+	if err != nil {
+		t.Fatalf("run err=%v", err)
+	}
+	if len(prov.requests[0].Tools) != 0 {
+		t.Errorf("default tool_choice none should suppress tools, got %d tools", len(prov.requests[0].Tools))
 	}
 }
 

@@ -96,6 +96,103 @@ tools:
     allow_domains: [example.com]
 `
 
+const promptFileYAML = `
+default_model: openai/gpt-4.1-mini
+
+providers:
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+
+agent:
+  max_tool_hops: 4
+  enabled_tools: [fs_read]
+  system_prompt_file: prompts/my-system.md
+
+tools:
+  shell:
+    allow_binaries: [git]
+
+server:
+  addr: 127.0.0.1:14000
+`
+
+func TestLoad_SystemPromptFile(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	promptContent := "You are a helpful assistant.\nBe concise."
+	if err := os.WriteFile(filepath.Join(promptDir, "my-system.md"), []byte(promptContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(promptFileYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load err=%v", err)
+	}
+	if cfg.Agent.SystemPrompt != promptContent {
+		t.Fatalf("system_prompt got=%q want=%q", cfg.Agent.SystemPrompt, promptContent)
+	}
+}
+
+func TestLoad_SystemPromptFileMissing(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(promptFileYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.Load(cfgPath)
+	if err == nil {
+		t.Fatal("missing prompt file should error")
+	}
+}
+
+const conflictYAML = `
+default_model: openai/gpt-4.1-mini
+
+providers:
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+
+agent:
+  max_tool_hops: 4
+  enabled_tools: [fs_read]
+  system_prompt: "inline prompt"
+  system_prompt_file: prompts/my-system.md
+
+tools:
+  shell:
+    allow_binaries: [git]
+
+server:
+  addr: 127.0.0.1:14000
+`
+
+func TestLoad_SystemPromptConflict(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "my-system.md"), []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(conflictYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.Load(cfgPath)
+	if err == nil {
+		t.Fatal("both system_prompt and system_prompt_file should error")
+	}
+}
+
 func TestLoad_HardeningFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

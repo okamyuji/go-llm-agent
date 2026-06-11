@@ -49,6 +49,66 @@ func TestChat_Sync(t *testing.T) {
 	}
 }
 
+func TestChat_TemperatureAndThink(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": map[string]any{"role": "assistant", "content": "ok"},
+			"done":    true,
+		})
+	}))
+	defer srv.Close()
+
+	temp := 0.0
+	think := false
+	cli := ollama.New(ollama.Options{BaseURL: srv.URL, Temperature: &temp, Think: &think})
+	_, err := cli.Chat(context.Background(), llm.ChatRequest{
+		Model:    "qwen3.5",
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	opts, ok := captured["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("options not sent: %+v", captured)
+	}
+	if got, ok := opts["temperature"].(float64); !ok || got != 0.0 {
+		t.Errorf("temperature got=%v", opts["temperature"])
+	}
+	if got, ok := captured["think"].(bool); !ok || got != false {
+		t.Errorf("think got=%v", captured["think"])
+	}
+}
+
+func TestChat_NoInferenceOptionsOmitted(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": map[string]any{"role": "assistant", "content": "ok"},
+			"done":    true,
+		})
+	}))
+	defer srv.Close()
+
+	cli := ollama.New(ollama.Options{BaseURL: srv.URL})
+	_, err := cli.Chat(context.Background(), llm.ChatRequest{
+		Model:    "llama3.1",
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if _, exists := captured["options"]; exists {
+		t.Errorf("options should be omitted when unset: %+v", captured["options"])
+	}
+	if _, exists := captured["think"]; exists {
+		t.Errorf("think should be omitted when unset: %+v", captured["think"])
+	}
+}
+
 func TestStream_NDJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		flusher, _ := w.(http.Flusher)

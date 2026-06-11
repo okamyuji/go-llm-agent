@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -85,6 +86,9 @@ type OTelConfig struct {
 }
 
 // ProviderConfig プロバイダー固有設定
+// Temperature 非 nil のとき推論温度を固定する (0 で決定的出力、ベンチマーク再現性向上)
+// Think 非 nil のとき thinking モードを制御する (Ollama の Qwen 系 reasoning モデル等。
+// false で thinking 無効化し空応答・低速問題を回避する)
 type ProviderConfig struct {
 	BaseURL               string        `yaml:"base_url"`
 	APIKeyEnv             string        `yaml:"api_key_env"`
@@ -93,6 +97,8 @@ type ProviderConfig struct {
 	RequestTimeoutSeconds int           `yaml:"request_timeout_seconds"`
 	Retry                 RetryConfig   `yaml:"retry"`
 	FallbackTo            string        `yaml:"fallback_to"`
+	Temperature           *float64      `yaml:"temperature"`
+	Think                 *bool         `yaml:"think"`
 }
 
 // RetryConfig リトライ設定。MaxAttempts<=1 でリトライ無効
@@ -111,9 +117,10 @@ type PricingConfig struct {
 
 // AgentConfig エージェントループ設定
 type AgentConfig struct {
-	MaxToolHops     int                   `yaml:"max_tool_hops"`
-	EnabledTools    []string              `yaml:"enabled_tools"`
-	SystemPrompt    string                `yaml:"system_prompt"`
+	MaxToolHops      int                   `yaml:"max_tool_hops"`
+	EnabledTools     []string              `yaml:"enabled_tools"`
+	SystemPrompt     string                `yaml:"system_prompt"`
+	SystemPromptFile string                `yaml:"system_prompt_file"`
 	Budget          BudgetConfig          `yaml:"budget"`
 	ToolChoice      ToolChoiceConfig      `yaml:"tool_choice"`
 	ToolValidation  ToolValidationConfig  `yaml:"tool_validation"`
@@ -122,6 +129,27 @@ type AgentConfig struct {
 	PlannerExecutor PlannerExecutorConfig `yaml:"planner_executor"`
 	Reflection      ReflectionConfig      `yaml:"reflection"`
 	ParallelTools   ParallelToolsConfig   `yaml:"parallel_tools"`
+	Enricher        EnricherConfig        `yaml:"enricher"`
+}
+
+// EnricherConfig コンテキスト拡充の設定
+type EnricherConfig struct {
+	Enabled    bool                  `yaml:"enabled"`
+	PromptsDir string                `yaml:"prompts_dir"`
+	Languages  map[string]string     `yaml:"languages"`
+	Dynamic    EnricherDynamicConfig `yaml:"dynamic"`
+}
+
+// EnricherDynamicConfig 動的ドキュメント検索の設定。
+// 検出された言語の公式ドキュメントをフェッチし、質問に関連する
+// セクションだけをキーワードマッチで選択してコンテキストに注入する
+type EnricherDynamicConfig struct {
+	Enabled       bool                `yaml:"enabled"`
+	MaxSections   int                 `yaml:"max_sections"`
+	MaxBytes      int                 `yaml:"max_bytes"`
+	CacheDir      string              `yaml:"cache_dir"`
+	CacheTTLHours int                 `yaml:"cache_ttl_hours"`
+	Sources       map[string][]string `yaml:"sources"`
 }
 
 // ParallelToolsConfig 並列ツール実行の設定
@@ -290,7 +318,32 @@ func Load(path string) (*Config, error) {
 	if err := validateApproval(cfg.Agent.Approval); err != nil {
 		return nil, err
 	}
+	if err := resolveSystemPromptFile(&cfg, path); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+// resolveSystemPromptFile system_prompt_file が指定されている場合、config ファイルからの
+// 相対パスとしてファイルを読み込み SystemPrompt に設定する。
+// system_prompt と system_prompt_file の両方が指定されている場合はエラーにする
+func resolveSystemPromptFile(cfg *Config, configPath string) error {
+	if cfg.Agent.SystemPromptFile == "" {
+		return nil
+	}
+	if cfg.Agent.SystemPrompt != "" {
+		return fmt.Errorf("config: system_prompt と system_prompt_file は同時に指定できません")
+	}
+	p := cfg.Agent.SystemPromptFile
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(filepath.Dir(configPath), p)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return fmt.Errorf("config: system_prompt_file read: %w", err)
+	}
+	cfg.Agent.SystemPrompt = strings.TrimSpace(string(b))
+	return nil
 }
 
 // validateApproval 起動時に approval 設定の妥当性を検査する

@@ -14,16 +14,22 @@ import (
 )
 
 // Options クライアント生成オプション
+// Temperature 非 nil のとき全リクエストの options.temperature に設定する (0 で決定的出力)
+// Think 非 nil のとき全リクエストの think に設定する (false で thinking モード無効化)
 type Options struct {
 	BaseURL               string
 	HTTPClient            *http.Client
 	RequestTimeoutSeconds int
+	Temperature           *float64
+	Think                 *bool
 }
 
 // Client Ollama API クライアント
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURL     string
+	http        *http.Client
+	temperature *float64
+	think       *bool
 }
 
 // maxRequestTimeoutSeconds RequestTimeoutSeconds の上限 (24 時間)
@@ -44,7 +50,7 @@ func New(o Options) *Client {
 	if o.BaseURL == "" {
 		o.BaseURL = "http://localhost:11434"
 	}
-	return &Client{baseURL: o.BaseURL, http: c}
+	return &Client{baseURL: o.BaseURL, http: c, temperature: o.Temperature, think: o.Think}
 }
 
 // Name プロバイダー名を返す
@@ -81,6 +87,8 @@ type ollamaPayload struct {
 	Stream     bool             `json:"stream"`
 	Tools      []ollamaToolDecl `json:"tools,omitempty"`
 	ToolChoice any              `json:"tool_choice,omitempty"`
+	Options    map[string]any   `json:"options,omitempty"`
+	Think      *bool            `json:"think,omitempty"`
 }
 
 type ollamaResp struct {
@@ -97,7 +105,7 @@ type ollamaResp struct {
 
 // Chat 同期で Ollama に問い合わせる
 func (c *Client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
-	p := toPayload(req, false)
+	p := c.toPayload(req, false)
 	body, err := json.Marshal(p)
 	if err != nil {
 		return nil, fmt.Errorf("ollama marshal: %w", err)
@@ -146,8 +154,14 @@ func (c *Client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 	return out, nil
 }
 
-func toPayload(req llm.ChatRequest, stream bool) ollamaPayload {
+func (c *Client) toPayload(req llm.ChatRequest, stream bool) ollamaPayload {
 	p := ollamaPayload{Model: req.Model, Stream: stream}
+	if c.temperature != nil {
+		p.Options = map[string]any{"temperature": *c.temperature}
+	}
+	if c.think != nil {
+		p.Think = c.think
+	}
 	for _, m := range req.Messages {
 		om := ollamaMsg{Role: string(m.Role), Content: m.Content, Name: m.Name}
 		for _, tc := range m.ToolCalls {

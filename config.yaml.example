@@ -52,17 +52,53 @@ providers:
     base_url: http://localhost:11434
     # ローカル Ollama はモデル列挙を端的にしづらいため allow_models は空のままにする
     allow_models: []
+    # temperature 非 nil で推論温度を固定 (0 で決定的出力、ベンチマーク再現性向上)。
+    # think 非 nil で thinking モードを制御 (Qwen 系 reasoning モデルの空応答回避には false)。
+    # どちらも未指定 (コメントアウト) ならリクエストに含めず Ollama 既定値に従う。
+    # temperature: 0
+    # think: false
 
 agent:
   max_tool_hops: 8
   # 既定は readonly のみ。fs_write / shell を有効にしたい場合は意図して追記する。
   # enabled_tools を空または未指定にすると Registry が DefaultReadonlyTools を採用する。
   enabled_tools: [fs_read, search_files, http_fetch]
-  system_prompt: |
-    あなたは慎重で正確な開発支援エージェントです。
-    ユーザーの依頼を達成するために必要なら提供されたツールを使い、
-    破壊的な操作を行う前に意図を確認してください。
-    回答は日本語で簡潔にまとめます。
+  # system_prompt と system_prompt_file は排他。両方指定するとエラーになる。
+  # system_prompt_file は config.yaml からの相対パスでプロンプトファイルを参照する。
+  # system_prompt: |
+  #   あなたは慎重で正確な開発支援エージェントです。
+  system_prompt_file: prompts/coding-accuracy.md
+  # コンテキスト拡充 (enricher)。ユーザーメッセージから言語を自動検出し、
+  # 対応する言語仕様リファレンスをコンテキストに注入してコーディング精度を向上させる。
+  # languages は静的specファイル (dynamic が無効か検索結果が空のときのフォールバック)。
+  # dynamic は公式ドキュメントから質問キーワードに関連するセクションだけを
+  # 取得して注入する動的検索。取得結果は cache_dir (既定: OSキャッシュディレクトリ) に
+  # cache_ttl_hours の間キャッシュされる。
+  # 対応言語: ruby / go / python / javascript / typescript / react / csharp /
+  # java / springboot / rust (検出キーワードは internal/enricher/enricher.go 参照)
+  enricher:
+    enabled: true
+    prompts_dir: prompts
+    languages:
+      ruby: ruby-spec.md
+      go: go-spec.md
+    dynamic:
+      enabled: true
+      max_sections: 5
+      max_bytes: 6000
+      cache_ttl_hours: 24
+      sources:
+        ruby:
+          - https://docs.ruby-lang.org/ja/latest/doc/spec=2fvariables.html
+          - https://docs.ruby-lang.org/ja/latest/doc/spec=2fcontrol.html
+          - https://docs.ruby-lang.org/ja/latest/doc/spec=2flambda_proc.html
+        go:
+          - https://go.dev/ref/spec
+          - https://go.dev/doc/faq
+        rust:
+          - https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html
+        # 他言語 (typescript / react / csharp / java / springboot 等) も
+        # 同じ形式で公式ドキュメント URL を列挙する
   # 予算上限。0 は無制限を意味し、上限到達時は agent.Run が ErrBudgetExceeded で停止する。
   # storage.sessions_dir 配下に billing.jsonl が追記される。
   budget:

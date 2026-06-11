@@ -126,6 +126,36 @@ E2Eスクリプトは `tests/e2e/07-eval-suite.sh` です。fixtures/eval_exerci
 
 E2Eスクリプトは `tests/e2e/11-rag-mvp.sh` で、fixtures/rag_exerciseが2件のノートを保存して全文検索が機能することを確認します。設計の詳細は `docs/design/11-rag-mvp.md` を参照してください。
 
+## コンテキスト拡充 (enricher)
+
+ユーザーメッセージからプログラミング言語をキーワードベースで自動検出し、言語仕様リファレンスをLLM呼び出し前のコンテキストに注入してコーディング質問の回答精度を高めます。`agent.WithContextEnricher` オプションで注入され、システムプロンプト挿入後・入力スキャナ前に実行されます。enricherの失敗はwarnログを残して非拡充で続行するため、可用性に影響しません。
+
+2つのモードがあり、`dynamic` を優先して結果が空なら `languages` の静的specファイルにフォールバックします。
+
+- 静的モード: `languages` に言語名とspecファイル (config.yamlからの相対パス) を列挙し、検出言語のファイル全文を注入します。
+- 動的モード: `dynamic.sources` の公式ドキュメントURL群をフェッチし、HTML→テキスト変換と見出し単位のセクション分割を行い、質問から抽出した識別子トークン (`defer` や `Proc.new` 等) とのキーワードマッチで上位 `max_sections` 件 (合計 `max_bytes` 以内) だけを注入します。フェッチ結果は `cache_dir` (既定はOSキャッシュディレクトリ) に `cache_ttl_hours` の間キャッシュされます。
+
+```yaml
+agent:
+  enricher:
+    enabled: true
+    prompts_dir: prompts
+    languages:
+      ruby: ruby-spec.md
+      go: go-spec.md
+    dynamic:
+      enabled: true
+      max_sections: 5
+      max_bytes: 6000
+      cache_ttl_hours: 24
+      sources:
+        go:
+          - https://go.dev/ref/spec
+          - https://go.dev/doc/faq
+```
+
+検出対応言語は ruby / go / python / javascript / typescript / react / csharp / java / springboot / rust です (検出キーワードは `internal/enricher/enricher.go` を参照)。ローカルLLMでの実測では、質問に関連するセクションだけを絞り込んで注入することが重要で、無関係な情報を含む大きなリファレンスの全文注入はかえって正答率を下げます。
+
 ## プロンプトテンプレート版管理
 
 `internal/prompt` パッケージで `<name>@<version>.tmpl` 形式のテンプレートをファイルからロードできます。`Renderer` は `text/template` の安全なサブセットを使い、許可リスト外の変数キーや欠落キーはrenderエラーとして弾きます。OTel spanの `prompt.version` 属性に乗せてA/B比較する想定です。

@@ -60,6 +60,11 @@ type Service interface {
 	Run(ctx context.Context, in Input, out chan<- Event) error
 }
 
+// ContextEnricher LLM 呼び出し前にメッセージを拡充する関数。
+// システムプロンプト挿入後、安全スキャナ前に呼ばれる。
+// ユーザーメッセージを解析し、関連する言語仕様などの追加コンテキストを注入できる
+type ContextEnricher func(ctx context.Context, messages []llm.Message) ([]llm.Message, error)
+
 type service struct {
 	reg               llm.Registry
 	tools             tool.Registry
@@ -73,6 +78,7 @@ type service struct {
 	approvalRequired  map[string]bool
 	approvalTimeout   time.Duration
 	strategy          Strategy
+	enricher          ContextEnricher
 }
 
 // New Service を構築する。billing.Accumulator は nil 可で、その場合は集計を無効にする
@@ -120,6 +126,11 @@ func WithRedactor(r safety.Redactor) Option {
 // WithStrategy 戦略を注入する。未指定の場合は ReAct が既定
 func WithStrategy(st Strategy) Option {
 	return func(s *service) { s.strategy = st }
+}
+
+// WithContextEnricher LLM 呼び出し前にメッセージを拡充する関数を注入する
+func WithContextEnricher(e ContextEnricher) Option {
+	return func(s *service) { s.enricher = e }
 }
 
 // WithApprover 承認ハンドラを注入する。required ツールセットも合わせて指定する

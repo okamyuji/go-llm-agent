@@ -1,0 +1,119 @@
+default_model: ollama/gemma4:e4b
+
+providers:
+  ollama:
+    base_url: http://localhost:11434
+    # ベンチマーク再現性のため決定的出力に固定
+    temperature: 0
+    # Qwen 系 reasoning モデルの thinking モードを無効化 (空応答・低速問題の回避)
+    think: false
+
+agent:
+  max_tool_hops: 0
+  enabled_tools: []
+  # ベンチマーク中のツール呼び出しJSON誤出力を防ぐ
+  tool_choice:
+    mode: none
+  system_prompt_file: prompts/coding-accuracy.md
+  enricher:
+    enabled: true
+    prompts_dir: prompts
+    languages:
+      ruby: ruby-spec.md
+      go: go-spec.md
+    dynamic:
+      enabled: true
+      max_sections: 5
+      max_bytes: 6000
+      cache_ttl_hours: 24
+      sources:
+        ruby:
+          - https://docs.ruby-lang.org/ja/latest/doc/spec=2fvariables.html
+          - https://docs.ruby-lang.org/ja/latest/doc/spec=2fliteral.html
+          - https://docs.ruby-lang.org/ja/latest/doc/spec=2foperator.html
+          - https://docs.ruby-lang.org/ja/latest/doc/spec=2fcontrol.html
+          - https://docs.ruby-lang.org/ja/latest/doc/spec=2fcall.html
+          - https://docs.ruby-lang.org/ja/latest/doc/spec=2fdef.html
+          - https://docs.ruby-lang.org/ja/latest/doc/spec=2fobject.html
+          - https://docs.ruby-lang.org/ja/latest/doc/spec=2flambda_proc.html
+        go:
+          - https://go.dev/ref/spec
+          - https://go.dev/doc/faq
+          - https://go.dev/wiki/CommonMistakes
+          - https://go.dev/doc/effective_go
+          - https://go.dev/ref/mem
+        typescript:
+          - https://www.typescriptlang.org/docs/handbook/2/everyday-types.html
+          - https://www.typescriptlang.org/docs/handbook/2/narrowing.html
+          - https://www.typescriptlang.org/docs/handbook/2/functions.html
+          - https://www.typescriptlang.org/docs/handbook/2/objects.html
+          - https://www.typescriptlang.org/docs/handbook/2/generics.html
+          - https://www.typescriptlang.org/docs/handbook/2/classes.html
+          - https://www.typescriptlang.org/docs/handbook/2/type-declarations.html
+        javascript:
+          - https://developer.mozilla.org/ja/docs/Web/JavaScript/Guide/Grammar_and_types
+          - https://developer.mozilla.org/ja/docs/Web/JavaScript/Guide/Functions
+          - https://developer.mozilla.org/ja/docs/Web/JavaScript/Guide/Loops_and_iteration
+          - https://developer.mozilla.org/ja/docs/Web/JavaScript/Guide/Using_promises
+          - https://developer.mozilla.org/ja/docs/Web/JavaScript/Closures
+          - https://developer.mozilla.org/ja/docs/Web/JavaScript/Equality_comparisons_and_sameness
+        react:
+          - https://ja.react.dev/learn/state-a-components-memory
+          - https://ja.react.dev/learn/render-and-commit
+          - https://ja.react.dev/learn/state-as-a-snapshot
+          - https://ja.react.dev/learn/synchronizing-with-effects
+          - https://ja.react.dev/learn/you-might-not-need-an-effect
+          - https://ja.react.dev/reference/react/useState
+          - https://ja.react.dev/reference/react/useEffect
+          - https://ja.react.dev/reference/react/useMemo
+        csharp:
+          - https://learn.microsoft.com/ja-jp/dotnet/csharp/language-reference/builtin-types/value-types
+          - https://learn.microsoft.com/ja-jp/dotnet/csharp/language-reference/builtin-types/reference-types
+          - https://learn.microsoft.com/ja-jp/dotnet/csharp/asynchronous-programming/async-scenarios
+          - https://learn.microsoft.com/ja-jp/dotnet/csharp/programming-guide/classes-and-structs/passing-parameters
+          - https://learn.microsoft.com/ja-jp/dotnet/csharp/fundamentals/types/
+          - https://learn.microsoft.com/ja-jp/dotnet/standard/linq/
+        java:
+          - https://docs.oracle.com/javase/tutorial/java/nutsandbolts/datatypes.html
+          - https://docs.oracle.com/javase/tutorial/java/nutsandbolts/variables.html
+          - https://docs.oracle.com/javase/tutorial/java/javaOO/objects.html
+          - https://docs.oracle.com/javase/tutorial/java/concepts/index.html
+          - https://docs.oracle.com/javase/tutorial/essential/concurrency/index.html
+          - https://dev.java/learn/language-basics/
+        springboot:
+          - https://docs.spring.io/spring-boot/reference/using/spring-beans-and-dependency-injection.html
+          - https://docs.spring.io/spring-framework/reference/core/beans/dependencies/factory-autowire.html
+          - https://docs.spring.io/spring-framework/reference/core/beans/annotation-config/autowired.html
+          - https://docs.spring.io/spring-framework/reference/data-access/transaction/declarative/annotations.html
+          - https://docs.spring.io/spring-boot/reference/web/servlet.html
+        rust:
+          - https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html
+          - https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html
+          - https://doc.rust-lang.org/book/ch06-02-match.html
+          - https://doc.rust-lang.org/book/ch10-02-traits.html
+          - https://doc.rust-lang.org/book/ch15-00-smart-pointers.html
+          - https://doc.rust-lang.org/book/ch16-00-concurrency.html
+          - https://doc.rust-lang.org/reference/expressions/operator-expr.html
+        python:
+          - https://docs.python.org/ja/3/reference/datamodel.html
+          - https://docs.python.org/ja/3/reference/executionmodel.html
+          - https://docs.python.org/ja/3/tutorial/classes.html
+          - https://docs.python.org/ja/3/tutorial/datastructures.html
+          - https://docs.python.org/ja/3/tutorial/controlflow.html
+          - https://docs.python.org/ja/3/faq/programming.html
+
+tools:
+  shell:
+    timeout_seconds: 30
+    max_timeout_seconds: 300
+    allow_binaries: [git]
+  http_fetch:
+    deny_private_networks: true
+    timeout_seconds: 15
+
+server:
+  addr: 127.0.0.1:14000
+
+logging:
+  format: text
+  level: info

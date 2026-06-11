@@ -39,6 +39,14 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 	if in.SystemPrompt != "" {
 		msgs = append([]llm.Message{{Role: llm.RoleSystem, Content: in.SystemPrompt}}, msgs...)
 	}
+	if s.enricher != nil {
+		enriched, enrichErr := s.enricher(ctx, msgs)
+		if enrichErr != nil {
+			slog.WarnContext(ctx, "context enricher failed, proceeding without enrichment", "err", enrichErr)
+		} else {
+			msgs = enriched
+		}
+	}
 	// 06 番設計書 入力スキャナを最初の LLM 呼び出し前にすべての user/system メッセージへ適用する
 	// 検出された場合は EventError で早期リターンする (fail-closed)
 	// クライアントには PatternID 等の detector 内部情報を返さない (検出ロジック露出を防ぐ)
@@ -57,8 +65,6 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 			}
 		}
 	}
-	tools := s.specs()
-
 	validationRetries := 0
 	lastValidationCallID := ""
 	maxValidationRetries := max(in.ValidationMaxRetries, 0)
@@ -68,6 +74,14 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 	tc := in.ToolChoice
 	if tc == nil {
 		tc = s.defaultToolChoice
+	}
+	// tool_choice none はツール定義の広告ごと抑制する。
+	// 定義を広告したまま「呼ぶな」と指示しても、tool_choice を無視するモデルが
+	// ツール呼び出し JSON をテキストとして出力する事故を防げないため
+	tools := s.specs()
+	if tc != nil && tc.Mode == "none" {
+		tools = nil
+		tc = nil
 	}
 	for hop := 0; hop <= in.MaxToolHops; hop++ {
 		llmCtx, llmSpan := obs.StartLLMSpan(ctx, prov.Name(), model)

@@ -14,6 +14,7 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/config"
+	"github.com/okamyuji/go-llm-agent/internal/enricher"
 	"github.com/okamyuji/go-llm-agent/internal/eval"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/llm/anthropic"
@@ -123,7 +124,7 @@ func cmdEval(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts, _, optsErr := agentOptions(cfg, tools, acc)
+	opts, _, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath))
 	if optsErr != nil {
 		return optsErr
 	}
@@ -214,7 +215,12 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 		provs["gemini"] = wrapWithRetry("gemini", gemini.New(gemini.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
 	}
 	if pc, ok := cfg.Providers["ollama"]; ok {
-		provs["ollama"] = wrapWithRetry("ollama", ollama.New(ollama.Options{BaseURL: pc.BaseURL, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
+		provs["ollama"] = wrapWithRetry("ollama", ollama.New(ollama.Options{
+			BaseURL:               pc.BaseURL,
+			RequestTimeoutSeconds: pc.RequestTimeoutSeconds,
+			Temperature:           pc.Temperature,
+			Think:                 pc.Think,
+		}), pc.Retry)
 	}
 	allowModels := map[string][]string{}
 	fallbackMap := map[string]string{}
@@ -261,7 +267,7 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 // agentOptions config に基づき agent.Service のオプション集合を組み立てる
 // safety / billing / strategy などの構築でエラーになった場合、呼び出し側に伝播する
 // HTTPApprover を生成した場合、第 2 戻り値で返す。chat/run サブコマンドでは捨ててよい
-func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulator) ([]agent.Option, *agent.HTTPApprover, error) {
+func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulator, configDir string) ([]agent.Option, *agent.HTTPApprover, error) {
 	var opts []agent.Option
 	var approver *agent.HTTPApprover
 	if acc != nil {
@@ -311,6 +317,21 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 		approver = agent.NewHTTPApprover()
 		timeout := time.Duration(cfg.Agent.Approval.TimeoutSeconds) * time.Second
 		opts = append(opts, agent.WithApprover(approver, cfg.Agent.Approval.RequiredTools, timeout))
+	}
+	if e := enricher.New(enricher.Config{
+		Enabled:    cfg.Agent.Enricher.Enabled,
+		PromptsDir: cfg.Agent.Enricher.PromptsDir,
+		Languages:  cfg.Agent.Enricher.Languages,
+		Dynamic: enricher.DynamicConfig{
+			Enabled:       cfg.Agent.Enricher.Dynamic.Enabled,
+			MaxSections:   cfg.Agent.Enricher.Dynamic.MaxSections,
+			MaxBytes:      cfg.Agent.Enricher.Dynamic.MaxBytes,
+			CacheDir:      cfg.Agent.Enricher.Dynamic.CacheDir,
+			CacheTTLHours: cfg.Agent.Enricher.Dynamic.CacheTTLHours,
+			Sources:       cfg.Agent.Enricher.Dynamic.Sources,
+		},
+	}, configDir); e != nil {
+		opts = append(opts, agent.WithContextEnricher(e))
 	}
 	return opts, approver, nil
 }
@@ -407,7 +428,7 @@ func cmdChat(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts, _, optsErr := agentOptions(cfg, tools, acc)
+	opts, _, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath))
 	if optsErr != nil {
 		return optsErr
 	}
@@ -441,7 +462,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts, _, optsErr := agentOptions(cfg, tools, acc)
+	opts, _, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath))
 	if optsErr != nil {
 		return optsErr
 	}
@@ -468,7 +489,7 @@ func cmdServe(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts, approver, optsErr := agentOptions(cfg, tools, acc)
+	opts, approver, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath))
 	if optsErr != nil {
 		return optsErr
 	}
