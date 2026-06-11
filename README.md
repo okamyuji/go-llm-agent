@@ -156,6 +156,8 @@ agent:
 
 検出対応言語は ruby / go / python / javascript / typescript / react / csharp / java / springboot / rust です (検出キーワードは `internal/enricher/enricher.go` を参照)。ローカルLLMでの実測では、質問に関連するセクションだけを絞り込んで注入することが重要で、無関係な情報を含む大きなリファレンスの全文注入はかえって正答率を下げます。
 
+注入効果はモデル依存です。実測 (3モデル x 6問のコーディング質問) では、コーディング特化モデル (qwen2.5-coder) はツール広告抑制と決定的出力の併用で3.5点から5.5点 (6点満点) まで一貫して改善した一方、小型汎用モデル (gemma4) は素のまま (enricher無効) が最も安定しました。enricherはopt-inであり、無効時のリクエストは機能追加前とバイト同等です (素のgemma4で応答のバイト単位一致を実測確認済み)。ベンチマーク資材は `scripts/bench_enricher.sh` と `bench-config.yaml` / `bench-config-plain.yaml` を参照してください。
+
 ## プロンプトテンプレート版管理
 
 `internal/prompt` パッケージで `<name>@<version>.tmpl` 形式のテンプレートをファイルからロードできます。`Renderer` は `text/template` の安全なサブセットを使い、許可リスト外の変数キーや欠落キーはrenderエラーとして弾きます。OTel spanの `prompt.version` 属性に乗せてA/B比較する想定です。
@@ -255,6 +257,8 @@ E2Eスクリプトは `tests/e2e/06-injection-and-redact.sh` です。fixtures/s
 
 `agent.tool_choice` でLLM のツール呼び出し挙動を制御できます。`mode` は `auto` / `required` / `none` / `tool` の 4 種類で、`tool` を指定したときは `name` に具体的なツール名を入れます。各プロバイダー (OpenAI / Anthropic / Gemini / Ollama) のネイティブなtool_choice仕様にマッピングされます。
 
+`mode: none` はツール定義の広告ごと抑制します。定義を広告したまま「呼ぶな」と指示するだけでは、tool_choiceを無視するモデルがツール呼び出しJSONをテキストとして出力する事故を防げないためです。純粋なQA用途では `enabled_tools: []` がDefaultReadonlyToolsにフォールバックする点に注意し、`mode: none` を明示してください。
+
 `agent.tool_validation` で、ツール呼び出し時にLLMが生成するJSON引数を `tool.Spec.Schema` に照らして検証できます。スキーマ違反のときは `max_retries` 回までLLMに修正を促し、超過すると `EventError` で停止します。
 
 ```yaml
@@ -337,6 +341,20 @@ providers:
 リトライ対象は `llm.ProviderError.Retryable=true` の429と5xx系のみで、4xxの入力エラーやcontextのキャンセルは即座に失敗します。バックオフは指数増加でジッタを掛け、`MaxBackoff` を上限とします。リトライ試行数とフォールバック発火回数はOTel メトリクス `llm.retry.attempts` と `llm.fallback.total` に記録されます。
 
 E2Eスクリプトは `tests/e2e/03-llm-retry.sh` です。`tests/e2e/fixtures/retry_exercise` のフェイクプロバイダーを介して 429を2回返した後成功するシナリオを検証します。設計の詳細は `docs/design/03-llm-retry-backoff.md` を参照してください。
+
+## 推論オプション (temperature / think)
+
+`providers.ollama` の `temperature` と `think` で推論パラメータを制御できます。どちらもポインタ型で、未指定なら一切リクエストに含めず Ollama の既定値に従います (既存挙動からの変更なし)。
+
+```yaml
+providers:
+  ollama:
+    base_url: http://localhost:11434
+    temperature: 0   # 決定的出力 (ベンチマーク再現性)
+    think: false     # thinking モード無効化 (Qwen 系 reasoning モデルの空応答・低速回避)
+```
+
+注意点として、効果はモデル依存です。実測では `temperature: 0` はコーディング特化モデル (qwen2.5-coder) では精度と再現性を両立しましたが、小型汎用モデル (gemma4) では誤答の固定化、reasoningモデル (qwen3.5) ではgreedy decodingによる繰り返しループを誘発しました。`think: false` はQwen系reasoningモデルのQA用途で空応答 (thinkingがトークンを使い切る) を防ぐために実質必須です。
 
 ## トークンとコストの集計
 
