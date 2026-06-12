@@ -29,14 +29,14 @@ type DynamicConfig struct {
 }
 
 const (
-	defaultMaxSections    = 5
-	defaultMaxBytes       = 6000
-	defaultCacheTTLHours  = 24
-	maxFetchBodyBytes     = 4 << 20
-	maxSectionBodyBytes   = 2500
-	maxTermOccurrences    = 5
-	titleMatchWeight      = 3
-	fetchTimeoutSeconds   = 20
+	defaultMaxSections   = 5
+	defaultMaxBytes      = 6000
+	defaultCacheTTLHours = 24
+	maxFetchBodyBytes    = 4 << 20
+	maxSectionBodyBytes  = 2500
+	maxTermOccurrences   = 5
+	titleMatchWeight     = 3
+	fetchTimeoutSeconds  = 20
 )
 
 // retriever 公式ドキュメントから質問に関連するセクションを検索する

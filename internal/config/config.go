@@ -121,15 +121,15 @@ type AgentConfig struct {
 	EnabledTools     []string              `yaml:"enabled_tools"`
 	SystemPrompt     string                `yaml:"system_prompt"`
 	SystemPromptFile string                `yaml:"system_prompt_file"`
-	Budget          BudgetConfig          `yaml:"budget"`
-	ToolChoice      ToolChoiceConfig      `yaml:"tool_choice"`
-	ToolValidation  ToolValidationConfig  `yaml:"tool_validation"`
-	Approval        ApprovalConfig        `yaml:"approval"`
-	Strategy        string                `yaml:"strategy"`
-	PlannerExecutor PlannerExecutorConfig `yaml:"planner_executor"`
-	Reflection      ReflectionConfig      `yaml:"reflection"`
-	ParallelTools   ParallelToolsConfig   `yaml:"parallel_tools"`
-	Enricher        EnricherConfig        `yaml:"enricher"`
+	Budget           BudgetConfig          `yaml:"budget"`
+	ToolChoice       ToolChoiceConfig      `yaml:"tool_choice"`
+	ToolValidation   ToolValidationConfig  `yaml:"tool_validation"`
+	Approval         ApprovalConfig        `yaml:"approval"`
+	Strategy         string                `yaml:"strategy"`
+	PlannerExecutor  PlannerExecutorConfig `yaml:"planner_executor"`
+	Reflection       ReflectionConfig      `yaml:"reflection"`
+	ParallelTools    ParallelToolsConfig   `yaml:"parallel_tools"`
+	Enricher         EnricherConfig        `yaml:"enricher"`
 }
 
 // EnricherConfig コンテキスト拡充の設定
