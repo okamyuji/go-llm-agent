@@ -10,6 +10,15 @@ permissions:
   contents: read
 
 jobs:
+  # 共通CI: go vet / build / test（Goバージョンはgo.modから解決）
+  ci:
+    uses: okamyuji/reusable-workflows/.github/workflows/go-ci.yml@v1
+
+  # 共通セキュリティスキャン: gitleaks（全履歴、GITHUB_TOKEN受け渡しは reusable 側に内蔵）。
+  # pre-commit フック内の gitleaks は作業ツリー防衛として残し、こちらは履歴スキャンを担う。
+  security:
+    uses: okamyuji/reusable-workflows/.github/workflows/security-scan.yml@v1
+
   pre-commit:
     name: pre-commit (quality-gate + gitleaks)
     runs-on: ubuntu-latest
