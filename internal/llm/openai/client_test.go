@@ -120,3 +120,41 @@ func TestChat_Error(t *testing.T) {
 		t.Fatalf("statuscode/retryable %+v", pe)
 	}
 }
+
+func TestChatDeclaresToolsWithParametersAndDescription(t *testing.T) {
+	// ツール宣言は OpenAI 仕様どおり function.parameters に JSON Schema、
+	// function.description に説明を送る。tool-call 用の "arguments" キーを流用してはならない。
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	c := openai.New(openai.Options{BaseURL: srv.URL, APIKey: "x"})
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{
+		Model:    "m",
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}},
+		Tools:    []llm.ToolSpec{{Name: "fs_read", Description: "Read a file", Schema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`)}},
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	tools, ok := gotBody["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %v", gotBody["tools"])
+	}
+	fn := tools[0].(map[string]any)["function"].(map[string]any)
+	if _, hasArgs := fn["arguments"]; hasArgs {
+		t.Errorf("tool declaration must not use 'arguments', got %v", fn)
+	}
+	params, ok := fn["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("function.parameters missing, got %v", fn)
+	}
+	if params["type"] != "object" {
+		t.Errorf("parameters.type = %v, want object", params["type"])
+	}
+	if fn["description"] != "Read a file" {
+		t.Errorf("function.description = %v, want 'Read a file'", fn["description"])
+	}
+}
