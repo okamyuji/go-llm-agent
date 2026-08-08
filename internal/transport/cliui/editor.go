@@ -92,14 +92,11 @@ func (e *lineEditor) readLine() (string, error) {
 			e.write("\r\n")
 			return "", errInterrupted
 		case keyEOF:
+			// readline / bash 慣習に合わせ、空バッファのみ EOF、非空では Ctrl-D を無視する
 			if len(buf) == 0 {
 				return "", io.EOF
 			}
-			// 非空ならバッファを確定 (端末の Ctrl-D 慣習)
-			e.write("\r\n")
-			line := string(buf)
-			e.pushHistory(line)
-			return line, nil
+			continue
 		default:
 			// keyEsc / keyUnknown は行編集中は無視する
 			continue
@@ -121,6 +118,10 @@ func (e *lineEditor) pushHistory(line string) {
 
 // render は行頭からプロンプトとバッファを描き直し、カーソルを正しい桁へ置く。
 // East Asian Wide を考慮して後方桁数ぶんカーソルを左に戻す。
+//
+// 既知の制約 (v1 のスコープ): プロンプト + バッファが端末幅を超えて折り返す場合、
+// \r\x1b[K は現在の行しか消さないため折り返し行の描画が乱れる。1 行入力エディタとして
+// 通常のプロンプト長を前提とし、複数行への reflow は扱わない。
 func (e *lineEditor) render(buf []rune, cursor int) {
 	// 行頭へ戻り行末まで消去 → プロンプト + バッファを描画
 	e.write("\r\x1b[K")

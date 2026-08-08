@@ -106,3 +106,27 @@ func TestRenderContainsPromptAndText(t *testing.T) {
 		t.Errorf("output missing typed text: %q", s)
 	}
 }
+
+func TestReadLineDraftRestoredOnDown(t *testing.T) {
+	// 履歴を 1 件作った後、下書き "wip" を入力途中に Up→Down すると下書きが戻る。
+	e := newLineEditor(strings.NewReader("done\r"), &bytes.Buffer{}, ">> ")
+	_, _ = e.readLine()
+	// "wip" 入力 → Up(履歴 done) → Down(下書き wip 復元) → Enter
+	e.in = newKeyReader(strings.NewReader("wip\x1b[A\x1b[B\r"))
+	got, _ := e.readLine()
+	if got != "wip" {
+		t.Errorf("draft restore: got %q, want wip", got)
+	}
+}
+
+func TestReadLineCtrlDIgnoredWhenNonEmpty(t *testing.T) {
+	// 非空バッファでの Ctrl-D は無視し、続く入力と Enter で確定する (readline 慣習)。
+	e := newLineEditor(strings.NewReader("ab\x04c\r"), &bytes.Buffer{}, ">> ")
+	got, err := e.readLine()
+	if err != nil {
+		t.Fatalf("readLine err=%v", err)
+	}
+	if got != "abc" {
+		t.Errorf("got %q, want abc (Ctrl-D ignored on non-empty)", got)
+	}
+}

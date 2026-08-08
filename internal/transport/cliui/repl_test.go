@@ -161,3 +161,24 @@ func TestRepl_EscCancelsTurn(t *testing.T) {
 		t.Errorf("ESC cancellation must not surface as an error, got %q", got)
 	}
 }
+
+// TestRepl_CtrlCDuringGenerationQuits raw モードでは Ctrl-C は SIGINT にならずキーとして届く。
+// 生成中の Ctrl-C はそのターンを中断しセッションを終了する。
+func TestRepl_CtrlCDuringGenerationQuits(t *testing.T) {
+	in := strings.NewReader("hi\n\x03")
+	var out bytes.Buffer
+	r := cliui.NewREPL(blockingSvc{}, cliui.Options{Model: "test/m", In: in, Out: &out})
+	done := make(chan error, 1)
+	go func() { done <- r.Run(context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run err=%v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("REPL did not terminate on Ctrl-C during generation")
+	}
+	if strings.Contains(out.String(), "[error]") {
+		t.Errorf("Ctrl-C must not surface as an error, got %q", out.String())
+	}
+}

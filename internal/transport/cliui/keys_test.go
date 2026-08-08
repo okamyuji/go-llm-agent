@@ -74,3 +74,31 @@ func TestKeyReaderEscThenRune(t *testing.T) {
 		t.Errorf("second=%v/%q, want keyRune/x", ev2.kind, ev2.r)
 	}
 }
+
+func TestKeyReaderBareEscViaTimeout(t *testing.T) {
+	// raw 端末経路 (バイトチャネル) で、ESC の後に続きが来なければ escTimeout で keyEsc を返す。
+	// io.Reader 経路の EOF 依存ではなく、実端末で単独 ESC が届くことを担保する。
+	ch := make(chan byte, 4)
+	ch <- 0x1b // ESC のみ。以降のバイトは送らない
+	kr := newKeyReaderFromBytes(ch)
+	ev, err := kr.readKey()
+	if err != nil {
+		t.Fatalf("readKey err=%v", err)
+	}
+	if ev.kind != keyEsc {
+		t.Errorf("kind=%d, want keyEsc (timeout path)", ev.kind)
+	}
+}
+
+func TestKeyReaderArrowViaChan(t *testing.T) {
+	// バイトチャネル経路でも矢印 (連続到着) を正しく解釈する。
+	ch := make(chan byte, 8)
+	for _, b := range []byte{0x1b, '[', 'A'} {
+		ch <- b
+	}
+	kr := newKeyReaderFromBytes(ch)
+	ev, _ := kr.readKey()
+	if ev.kind != keyUp {
+		t.Errorf("kind=%d, want keyUp", ev.kind)
+	}
+}
