@@ -1,11 +1,11 @@
 # go-llm-agent
 
-Go 1.25製のCGOなし単一バイナリAIエージェントです。OpenAI、Anthropic、Google Gemini、Ollamaを同一CLIとHTTP APIから扱えます。LiteLLMのように複数のLLMプロバイダーを統一インターフェースで操作でき、その上に薄いエージェントループ (tool calling、会話履歴、内蔵ツール) を提供します。
+Go 1.25製のCGOなし単一バイナリAIエージェントです。OpenAI、Anthropic、Google Gemini、Ollama、llama.cpp (llama-server) を同一CLIとHTTP APIから扱えます。LiteLLMのように複数のLLMプロバイダーを統一インターフェースで操作でき、その上に薄いエージェントループ (tool calling、会話履歴、内蔵ツール) を提供します。
 
 ## 主な特徴
 
 - 単一バイナリで配布できます。CGO不要で Linux、macOS、Windowsのamd64とarm64に対応します
-- 4プロバイダー (OpenAI、Anthropic、Google Gemini、Ollama) を統一した抽象層として扱えます
+- 5プロバイダー (OpenAI、Anthropic、Google Gemini、Ollama、llama.cpp) を統一した抽象層として扱えます
 - ストリーミングとtool callingを初期サポートします
 - 内蔵ツールはfs_read、fs_write、shell、http_fetch、search_filesの5種類です
 - 対話REPL、ワンショットrun、OpenAI互換HTTP APIの3種類のインターフェースを提供します
@@ -255,7 +255,7 @@ E2Eスクリプトは `tests/e2e/06-injection-and-redact.sh` です。fixtures/s
 
 ## ツール呼び出しの強制度とスキーマ検証
 
-`agent.tool_choice` でLLM のツール呼び出し挙動を制御できます。`mode` は `auto` / `required` / `none` / `tool` の 4 種類で、`tool` を指定したときは `name` に具体的なツール名を入れます。各プロバイダー (OpenAI / Anthropic / Gemini / Ollama) のネイティブなtool_choice仕様にマッピングされます。
+`agent.tool_choice` でLLM のツール呼び出し挙動を制御できます。`mode` は `auto` / `required` / `none` / `tool` の 4 種類で、`tool` を指定したときは `name` に具体的なツール名を入れます。各プロバイダー (OpenAI / Anthropic / Gemini / Ollama / llama.cpp) のネイティブなtool_choice仕様にマッピングされます。
 
 `mode: none` はツール定義の広告ごと抑制します。定義を広告したまま「呼ぶな」と指示するだけでは、tool_choiceを無視するモデルがツール呼び出しJSONをテキストとして出力する事故を防げないためです。純粋なQA用途では `enabled_tools: []` がDefaultReadonlyToolsにフォールバックする点に注意し、`mode: none` を明示してください。
 
@@ -355,6 +355,33 @@ providers:
 ```
 
 注意点として、効果はモデル依存です。実測では `temperature: 0` はコーディング特化モデル (qwen2.5-coder) では精度と再現性を両立しましたが、小型汎用モデル (gemma4) では誤答の固定化、reasoningモデル (qwen3.5) ではgreedy decodingによる繰り返しループを誘発しました。`think: false` はQwen系reasoningモデルのQA用途で空応答 (thinkingがトークンを使い切る) を防ぐために実質必須です。
+
+## llama.cpp (llama-server) ローカル推論
+
+`providers.llamacpp` は llama.cpp の `llama-server` (OpenAI 互換 API) に直結するプロバイダーです。Ollama デーモンを介さず GGUF を直接ロードして完全ローカルで tool calling まで動きます。llama-server は tool calling に `--jinja` が必須です。
+
+```yaml
+providers:
+  llamacpp:
+    base_url: http://localhost:8080/v1
+    request_timeout_seconds: 300
+    think: false                    # Qwen 系の thinking 抑制 (chat_template_kwargs.enable_thinking=false)
+    tool_call_id_format: "alnum9"   # Mistral-Nemo 系テンプレート専用の tool_call_id 対策
+    allow_models: []
+```
+
+起動例:
+
+```bash
+llama-server -m model.gguf --jinja -c 8192 --port 8080
+```
+
+このプロバイダーは全リクエストに `cache_prompt: true` を送り、エージェントループの prefill 再利用を効かせます。ストリーミングで断片化して届く tool call は `index` 単位で連結し、各断片の `arguments` (JSON 文字列断片) をデコード結合して、完全なツール呼び出しとして 1 回だけ surface します。連結後の `arguments` はオブジェクト形式に正規化され、内蔵ツールがそのまま `json.Unmarshal` できます。
+
+- `think` はポインタ型で、`false` のとき `chat_template_kwargs.enable_thinking=false` を送信し Qwen 系 reasoning モデルの thinking を抑制します。未指定なら送信しません。Mistral 系など非 reasoning モデルでは不要です。
+- `tool_call_id_format: "alnum9"` は tool_call_id を 9 文字英数字へ決定的に書き換えます。Mistral-Nemo 系 (Shisa 等) のチャットテンプレートは tool_call_id に「9 文字英数字」を強制し、llama-server が生成する 32 文字 ID を 2 ターン目で拒否するため、その回避に使います。Qwen 系などこの制約を持たないモデルでは未指定にします。
+
+常用する場合は、日本語品質で勝る **Shisa v2 (Mistral-Nemo 12B) + `tool_call_id_format: "alnum9"`** 構成を実運用の第一候補として推奨します。Qwen 系 (`think: false`) は tool_call_id の制約が無く導入が単純ですが、日本語出力の品質は Shisa に劣ります。
 
 ## トークンとコストの集計
 

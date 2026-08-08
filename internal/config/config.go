@@ -99,6 +99,11 @@ type ProviderConfig struct {
 	FallbackTo            string        `yaml:"fallback_to"`
 	Temperature           *float64      `yaml:"temperature"`
 	Think                 *bool         `yaml:"think"`
+	// ToolCallIDFormat はツール呼び出し ID の正規化方式。llamacpp プロバイダーでのみ参照する。
+	// "alnum9" 指定時、tool_call_id を 9 文字英数字へ書き換える (Mistral-Nemo 系テンプレートが
+	// 「9 文字英数字」を強制し、llama-server 生成の 32 文字 ID を 2 ターン目で 400 拒否する問題への対策)。
+	// 空文字なら書き換えない (Qwen 等はこの制約を持たない)。
+	ToolCallIDFormat string `yaml:"tool_call_id_format"`
 }
 
 // RetryConfig リトライ設定。MaxAttempts<=1 でリトライ無効
