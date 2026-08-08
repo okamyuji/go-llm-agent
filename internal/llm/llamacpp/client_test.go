@@ -299,6 +299,58 @@ func TestProviderTemperatureUsedAsDefaultWhenRequestUnset(t *testing.T) {
 	}
 }
 
+func TestProviderMaxTokensUsedAsDefaultAndRepeatPenaltySent(t *testing.T) {
+	// max_tokens の provider 既定は request 側が未指定のとき送る（暴走・長時間化の上限）。
+	// repeat_penalty は設定時に常に送る（繰り返し暴走の抑制）。
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	rp := 1.15
+	c := llamacpp.New(llamacpp.Options{BaseURL: srv.URL, MaxTokens: iptr(512), RepeatPenalty: &rp})
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if v, ok := gotBody["max_tokens"].(float64); !ok || v != 512 {
+		t.Errorf("max_tokens = %v, want provider default 512", gotBody["max_tokens"])
+	}
+	if v, ok := gotBody["repeat_penalty"].(float64); !ok || v != 1.15 {
+		t.Errorf("repeat_penalty = %v, want 1.15", gotBody["repeat_penalty"])
+	}
+
+	// request 側 MaxTokens が provider 既定を上書きする
+	gotBody = nil
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}, MaxTokens: iptr(64)}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if v, ok := gotBody["max_tokens"].(float64); !ok || v != 64 {
+		t.Errorf("request max_tokens = %v, want 64 (overrides provider default)", gotBody["max_tokens"])
+	}
+}
+
+func TestChatOmitsRepeatPenaltyWhenUnset(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	c := llamacpp.New(llamacpp.Options{BaseURL: srv.URL})
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if _, exists := gotBody["repeat_penalty"]; exists {
+		t.Errorf("repeat_penalty should be omitted when unset, body=%v", gotBody)
+	}
+	if _, exists := gotBody["max_tokens"]; exists {
+		t.Errorf("max_tokens should be omitted when neither request nor provider sets it, body=%v", gotBody)
+	}
+}
+
 func TestChatSendsEnableThinkingWhenThinkSet(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/goleak"
 
@@ -25,6 +26,16 @@ func (fakeSvc) Run(_ context.Context, _ agent.Input, out chan<- agent.Event) err
 	final := llm.Message{Role: llm.RoleAssistant, Content: "hello"}
 	out <- agent.Event{Kind: agent.EventFinal, Final: &final}
 	return nil
+}
+
+// blockingSvc は delta を 1 つ出した後、context キャンセル (ESC 中断) まで待つ。
+// 長時間生成をシミュレートし、ESC でそのターンだけ止まることを検証する。
+type blockingSvc struct{}
+
+func (blockingSvc) Run(ctx context.Context, _ agent.Input, out chan<- agent.Event) error {
+	out <- agent.Event{Kind: agent.EventDelta, Delta: "生成中"}
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 // scriptedSvc 指定したイベント列をそのまま流す
@@ -122,5 +133,31 @@ func TestRepl_ToolCallSummary(t *testing.T) {
 	got := out.String()
 	if !strings.Contains(got, "1 tool") {
 		t.Errorf("expected '1 tool' in summary, got %q", got)
+	}
+}
+
+// TestRepl_EscCancelsTurn 生成中に ESC を送るとそのターンだけ中断し、
+// セッションは継続して次の入力 (/quit) を処理できる。
+func TestRepl_EscCancelsTurn(t *testing.T) {
+	// "hi"+Enter で 1 ターン開始 → ESC で中断 → "/quit"+Enter で終了
+	in := strings.NewReader("hi\n\x1b/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(blockingSvc{}, cliui.Options{Model: "test/m", In: in, Out: &out})
+	done := make(chan error, 1)
+	go func() { done <- r.Run(context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run err=%v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("REPL did not terminate — ESC likely did not cancel the turn")
+	}
+	got := out.String()
+	if !strings.Contains(got, "中断しました") {
+		t.Errorf("expected interrupt notice, got %q", got)
+	}
+	if strings.Contains(got, "[error]") {
+		t.Errorf("ESC cancellation must not surface as an error, got %q", got)
 	}
 }

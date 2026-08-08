@@ -67,6 +67,12 @@ providers:
     # 連結・正規化されるため追加設定は不要。prefill が長引くため timeout は長めが安全。
     request_timeout_seconds: 300
     allow_models: []
+    # max_tokens は 1 応答の生成上限。長文・繰り返し暴走で context を埋め尽くすのを防ぐ。
+    # request 側指定があればそちらが優先。対話 REPL では ESC 中断と併せて有効。
+    # max_tokens: 1024
+    # repeat_penalty は繰り返し抑制係数 (llama-server 対応)。量子化/abliterated モデルの
+    # 同一フレーズ反復を抑える。1.1〜1.2 程度が目安。未指定なら送らない。
+    # repeat_penalty: 1.15
     # think: false で Qwen 系 reasoning モデルの thinking を抑制する
     # (chat_template_kwargs.enable_thinking=false を送る)。Mistral 系など非 reasoning は未指定でよい。
     # think: false

@@ -1,8 +1,8 @@
 package cliui
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -46,25 +46,55 @@ func NewREPL(svc agent.Service, opt Options) *REPL {
 	if opt.MaxToolHops <= 0 {
 		opt.MaxToolHops = 8
 	}
-	sp := opt.Spinner
-	if sp == nil && !opt.DisableSpinner {
-		sp = NewSpinner(SpinnerOptions{Out: out, Model: opt.Model})
-	}
-	return &REPL{svc: svc, opt: opt, in: in, out: out, sp: sp}
+	return &REPL{svc: svc, opt: opt, in: in, out: out, sp: opt.Spinner}
 }
 
-// Run REPL ループを実行する。/quit または EOF で終了
+// Run REPL ループを実行する。/quit・Ctrl-C・EOF で終了。
+// 端末では raw モードにし、日本語を桁ずれなく描画・↑↓履歴・生成中 ESC 中断を扱う。
 func (r *REPL) Run(ctx context.Context) error {
-	sc := bufio.NewScanner(r.in)
-	sc.Buffer(make([]byte, 1<<20), 16<<20)
-	history := []llm.Message{}
-	fmt.Fprintln(r.out, "go-llm-agent REPL  /quit で終了")
-	for {
-		fmt.Fprint(r.out, ">> ")
-		if !sc.Scan() {
-			return sc.Err()
+	restore, raw := enableRawMode(r.in)
+	defer restore()
+
+	// raw モードでは出力後処理が無効なので、単独 \n を \r\n へ変換する
+	effOut := r.out
+	if raw {
+		effOut = newCRLFWriter(r.out)
+	}
+
+	// スピナー: 注入があればそれを、無ければ TTY/raw のとき有効化して生成する
+	if r.sp == nil && !r.opt.DisableSpinner {
+		enabled := raw || isTTY(r.out)
+		r.sp = NewSpinner(SpinnerOptions{Out: effOut, Model: r.opt.Model, Enabled: &enabled})
+	}
+
+	// 入力は 1 本の goroutine で読み、keyCh へ流す。行編集と生成中 ESC 監視が時分割で消費する
+	kr := newKeyReader(r.in)
+	keyCh := make(chan keyEvent, 64)
+	go func() {
+		for {
+			ev, err := kr.readKey()
+			if err != nil {
+				close(keyCh)
+				return
+			}
+			keyCh <- ev
 		}
-		line := strings.TrimSpace(sc.Text())
+	}()
+	src := &bufKeySource{ch: keyCh}
+	editor := newLineEditorFromSource(src, effOut, ">> ")
+
+	history := []llm.Message{}
+	newline(effOut, "go-llm-agent REPL  /quit で終了")
+
+	for {
+		line, err := editor.readLine()
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, errInterrupted) {
+				return nil
+			}
+			return err
+		}
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -72,30 +102,49 @@ func (r *REPL) Run(ctx context.Context) error {
 			return nil
 		}
 		history = append(history, llm.Message{Role: llm.RoleUser, Content: line})
-		ch := make(chan agent.Event, 16)
-		go func(hist []llm.Message) {
-			defer close(ch)
-			// Service.Run が EventError を流さずに error を返した場合に備えて
-			// 受信側へ確実にエラーを伝える
-			if err := r.svc.Run(ctx, agent.Input{
-				Model:        r.opt.Model,
-				SystemPrompt: r.opt.SystemPrompt,
-				Messages:     hist,
-				MaxToolHops:  r.opt.MaxToolHops,
-			}, ch); err != nil {
-				ch <- agent.Event{Kind: agent.EventError, Err: err}
-			}
-		}(append([]llm.Message{}, history...))
 
-		turnStart := time.Now()
-		var toolCount, usageIn, usageOut int
-		var finalContent strings.Builder
-		r.startSpinner(PhaseThinking, "")
-		for ev := range ch {
+		assistant := r.runTurn(ctx, effOut, keyCh, src, append([]llm.Message{}, history...))
+		history = append(history, assistant)
+	}
+}
+
+// runTurn は 1 ターンを実行する。生成中の keyCh を監視し、ESC でそのターンだけ中断する。
+// 非 ESC キーは src へ退避し次の行編集へ引き継ぐ。返り値は履歴に積む assistant メッセージ。
+func (r *REPL) runTurn(ctx context.Context, out io.Writer, keyCh <-chan keyEvent, src *bufKeySource, hist []llm.Message) llm.Message {
+	turnCtx, cancelTurn := context.WithCancel(ctx)
+	defer cancelTurn()
+
+	ch := make(chan agent.Event, 16)
+	go func() {
+		defer close(ch)
+		if err := r.svc.Run(turnCtx, agent.Input{
+			Model:        r.opt.Model,
+			SystemPrompt: r.opt.SystemPrompt,
+			Messages:     hist,
+			MaxToolHops:  r.opt.MaxToolHops,
+		}, ch); err != nil {
+			ch <- agent.Event{Kind: agent.EventError, Err: err}
+		}
+	}()
+
+	turnStart := time.Now()
+	var toolCount, usageIn, usageOut int
+	var finalContent strings.Builder
+	interrupted := false
+	kc := keyCh // close 検知後に nil 化して以降の select を無効化する
+	r.startSpinner(PhaseThinking, "")
+
+	for ch != nil {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				ch = nil
+				continue
+			}
 			switch ev.Kind {
 			case agent.EventDelta:
 				r.stopSpinner()
-				_, _ = io.WriteString(r.out, ev.Delta)
+				_, _ = io.WriteString(out, ev.Delta)
 				finalContent.WriteString(ev.Delta)
 			case agent.EventToolCall:
 				r.stopSpinner()
@@ -103,7 +152,7 @@ func (r *REPL) Run(ctx context.Context) error {
 				if ev.ToolCall != nil {
 					name = ev.ToolCall.Name
 				}
-				fmt.Fprintf(r.out, "\n[tool_call %s]\n", name)
+				fmt.Fprintf(out, "\n[tool_call %s]\n", name)
 				toolCount++
 				r.startSpinner(PhaseTool, name)
 			case agent.EventToolResult:
@@ -112,7 +161,7 @@ func (r *REPL) Run(ctx context.Context) error {
 				if ev.ToolResult != nil {
 					name = ev.ToolResult.Name
 				}
-				fmt.Fprintf(r.out, "[tool_result %s]\n", name)
+				fmt.Fprintf(out, "[tool_result %s]\n", name)
 				r.startSpinner(PhaseThinking, "")
 			case agent.EventUsage:
 				if ev.Usage != nil {
@@ -121,19 +170,44 @@ func (r *REPL) Run(ctx context.Context) error {
 				}
 			case agent.EventFinal:
 				r.stopSpinner()
-				fmt.Fprintln(r.out)
+				fmt.Fprintln(out)
 			case agent.EventError:
 				r.stopSpinner()
-				fmt.Fprintf(r.out, "\n[error] %v\n", ev.Err)
+				// ESC 中断による context キャンセルはユーザー操作なのでエラー表示しない
+				if interrupted && errors.Is(ev.Err, context.Canceled) {
+					continue
+				}
+				fmt.Fprintf(out, "\n[error] %v\n", ev.Err)
+			}
+		case k, ok := <-kc:
+			if !ok {
+				kc = nil // 入力ストリーム終端。以降この case は選択されない
+				continue
+			}
+			if k.kind == keyEsc {
+				if !interrupted {
+					interrupted = true
+					cancelTurn()
+					r.stopSpinner()
+					fmt.Fprint(out, "\n[中断しました]\n")
+				}
+			} else {
+				// 生成中の非 ESC キーは次の行編集へ引き継ぐ
+				src.pushback(k)
 			}
 		}
-		r.stopSpinner()
-		if !r.opt.DisableSpinner {
-			fmt.Fprintf(r.out, "↳ done in %.1fs · %d tool · in %d / out %d tok\n",
-				time.Since(turnStart).Seconds(), toolCount, usageIn, usageOut)
-		}
-		history = append(history, llm.Message{Role: llm.RoleAssistant, Content: finalContent.String()})
 	}
+	r.stopSpinner()
+	if !r.opt.DisableSpinner {
+		fmt.Fprintf(out, "↳ done in %.1fs · %d tool · in %d / out %d tok\n",
+			time.Since(turnStart).Seconds(), toolCount, usageIn, usageOut)
+	}
+	return llm.Message{Role: llm.RoleAssistant, Content: finalContent.String()}
+}
+
+// newline は raw モードでも桁が戻るよう本文の後に改行を出力する。
+func newline(out io.Writer, s string) {
+	fmt.Fprint(out, s+"\n")
 }
 
 // startSpinner sp が nil でなければスピナー描画を開始する

@@ -228,6 +228,8 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 			BaseURL:               pc.BaseURL,
 			RequestTimeoutSeconds: pc.RequestTimeoutSeconds,
 			Temperature:           pc.Temperature,
+			MaxTokens:             pc.MaxTokens,
+			RepeatPenalty:         pc.RepeatPenalty,
 			Think:                 pc.Think,
 			ToolCallIDFormat:      pc.ToolCallIDFormat,
 		}), pc.Retry)

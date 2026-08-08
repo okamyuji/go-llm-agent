@@ -28,6 +28,13 @@ type Options struct {
 	// Temperature 非 nil のとき全リクエストの既定 temperature に設定する。
 	// リクエスト側 ChatRequest.Temperature が指定されていればそちらが優先する。
 	Temperature *float64
+	// MaxTokens 非 nil のとき既定の生成上限トークン数に設定する。
+	// 1 応答が context を埋め尽くすまで走る暴走・長時間化を防ぐ。
+	// リクエスト側 ChatRequest.MaxTokens が指定されていればそちらが優先する。
+	MaxTokens *int
+	// RepeatPenalty 非 nil のとき全リクエストに repeat_penalty を送る。
+	// 量子化/abliterated モデルの繰り返し暴走を抑える (llama-server 対応パラメータ)。
+	RepeatPenalty *float64
 	// Think 非 nil のとき chat_template_kwargs.enable_thinking に設定する。
 	// false で Qwen 系 reasoning モデルの thinking を抑制し、ツール呼び出しを速く安定させる。
 	Think *bool
@@ -38,11 +45,13 @@ type Options struct {
 
 // Client llama-server の OpenAI 互換 Chat Completions API クライアント
 type Client struct {
-	baseURL      string
-	http         *http.Client
-	temperature  *float64
-	think        *bool
-	toolIDFormat string
+	baseURL       string
+	http          *http.Client
+	temperature   *float64
+	maxTokens     *int
+	repeatPenalty *float64
+	think         *bool
+	toolIDFormat  string
 }
 
 // ローカル推論は prefill が長引きやすいため、雲プロバイダーより長い既定タイムアウトを取る
@@ -64,7 +73,7 @@ func New(o Options) *Client {
 	if o.BaseURL == "" {
 		o.BaseURL = "http://localhost:8080/v1"
 	}
-	return &Client{baseURL: o.BaseURL, http: c, temperature: o.Temperature, think: o.Think, toolIDFormat: o.ToolCallIDFormat}
+	return &Client{baseURL: o.BaseURL, http: c, temperature: o.Temperature, maxTokens: o.MaxTokens, repeatPenalty: o.RepeatPenalty, think: o.Think, toolIDFormat: o.ToolCallIDFormat}
 }
 
 // Name プロバイダー名を返す
@@ -79,6 +88,7 @@ type chatPayload struct {
 	CachePrompt        bool              `json:"cache_prompt"`
 	Temperature        *float64          `json:"temperature,omitempty"`
 	MaxTokens          *int              `json:"max_tokens,omitempty"`
+	RepeatPenalty      *float64          `json:"repeat_penalty,omitempty"`
 	ChatTemplateKwargs map[string]any    `json:"chat_template_kwargs,omitempty"`
 }
 
@@ -210,12 +220,17 @@ func (c *Client) toPayload(req llm.ChatRequest, stream bool) chatPayload {
 		// リクエスト側が未指定なら provider 既定を使う
 		temperature = c.temperature
 	}
+	maxTokens := req.MaxTokens
+	if maxTokens == nil {
+		maxTokens = c.maxTokens
+	}
 	p := chatPayload{
-		Model:       req.Model,
-		Stream:      stream,
-		CachePrompt: true,
-		Temperature: temperature,
-		MaxTokens:   req.MaxTokens,
+		Model:         req.Model,
+		Stream:        stream,
+		CachePrompt:   true,
+		Temperature:   temperature,
+		MaxTokens:     maxTokens,
+		RepeatPenalty: c.repeatPenalty,
 	}
 	if c.think != nil {
 		// Qwen 系テンプレートの enable_thinking フラグ。false で thinking を抑制する
