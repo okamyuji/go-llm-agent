@@ -26,6 +26,8 @@ type streamReader struct {
 	order    []int
 	// flushed はツール呼び出しを outbox へ流し終えたか。二重 flush を防ぐ
 	flushed bool
+	// scanErrSent は scan.Err() を一度 surface したか。二重送出を防ぐ
+	scanErrSent bool
 	// client は ID 正規化 (normalizeToolID) を呼ぶために保持する
 	client *Client
 }
@@ -107,6 +109,12 @@ func (r *streamReader) Recv() (llm.StreamEvent, bool) {
 			return ev, true
 		}
 		if !r.scan.Scan() {
+			// Scan() は clean EOF と read エラー (接続リセット、行長超過等) の両方で false を返す。
+			// エラーを正常終了として握り潰さないよう scan.Err() を検査して surface する。
+			if err := r.scan.Err(); err != nil && !r.scanErrSent {
+				r.scanErrSent = true
+				return llm.StreamEvent{Err: err}, true
+			}
 			// stream 終端: 未 flush のツール呼び出しがあれば流す
 			if r.flushToolCalls() {
 				continue
@@ -200,10 +208,16 @@ func (r *streamReader) flushToolCalls() bool {
 	r.flushed = true
 	for _, idx := range r.order {
 		acc := r.toolAccs[idx]
+		args := normalizeArgs(json.RawMessage(acc.args.String()))
+		if len(args) == 0 {
+			// 引数フラグメントが皆無だった場合、下流 Unmarshal が成立するよう {} にする
+			// (Chat 経路の空文字列 arguments と挙動を揃える)
+			args = json.RawMessage(`{}`)
+		}
 		call := llm.ToolCall{
 			ID:        r.client.normalizeToolID(acc.id),
 			Name:      acc.name,
-			Arguments: normalizeArgs(json.RawMessage(acc.args.String())),
+			Arguments: args,
 		}
 		r.outbox = append(r.outbox, llm.StreamEvent{ToolCall: &call, ToolCalls: []llm.ToolCall{call}})
 	}

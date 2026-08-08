@@ -227,6 +227,7 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 		provs["llamacpp"] = wrapWithRetry("llamacpp", llamacpp.New(llamacpp.Options{
 			BaseURL:               pc.BaseURL,
 			RequestTimeoutSeconds: pc.RequestTimeoutSeconds,
+			Temperature:           pc.Temperature,
 			Think:                 pc.Think,
 			ToolCallIDFormat:      pc.ToolCallIDFormat,
 		}), pc.Retry)

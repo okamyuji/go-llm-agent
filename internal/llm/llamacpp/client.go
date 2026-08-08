@@ -25,6 +25,9 @@ type Options struct {
 	BaseURL               string
 	HTTPClient            *http.Client
 	RequestTimeoutSeconds int
+	// Temperature 非 nil のとき全リクエストの既定 temperature に設定する。
+	// リクエスト側 ChatRequest.Temperature が指定されていればそちらが優先する。
+	Temperature *float64
 	// Think 非 nil のとき chat_template_kwargs.enable_thinking に設定する。
 	// false で Qwen 系 reasoning モデルの thinking を抑制し、ツール呼び出しを速く安定させる。
 	Think *bool
@@ -37,6 +40,7 @@ type Options struct {
 type Client struct {
 	baseURL      string
 	http         *http.Client
+	temperature  *float64
 	think        *bool
 	toolIDFormat string
 }
@@ -60,7 +64,7 @@ func New(o Options) *Client {
 	if o.BaseURL == "" {
 		o.BaseURL = "http://localhost:8080/v1"
 	}
-	return &Client{baseURL: o.BaseURL, http: c, think: o.Think, toolIDFormat: o.ToolCallIDFormat}
+	return &Client{baseURL: o.BaseURL, http: c, temperature: o.Temperature, think: o.Think, toolIDFormat: o.ToolCallIDFormat}
 }
 
 // Name プロバイダー名を返す
@@ -97,9 +101,17 @@ type chatPayloadFunc struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+// chatPayloadTool はツール宣言。tool-call とは別形状で、JSON Schema は parameters、
+// 説明は description に入れる (OpenAI / llama-server 仕様)。
 type chatPayloadTool struct {
-	Type     string          `json:"type"`
-	Function chatPayloadFunc `json:"function"`
+	Type     string              `json:"type"`
+	Function chatPayloadToolFunc `json:"function"`
+}
+
+type chatPayloadToolFunc struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 type chatResp struct {
@@ -193,11 +205,16 @@ func normalizeArgs(raw json.RawMessage) json.RawMessage {
 }
 
 func (c *Client) toPayload(req llm.ChatRequest, stream bool) chatPayload {
+	temperature := req.Temperature
+	if temperature == nil {
+		// リクエスト側が未指定なら provider 既定を使う
+		temperature = c.temperature
+	}
 	p := chatPayload{
 		Model:       req.Model,
 		Stream:      stream,
 		CachePrompt: true,
-		Temperature: req.Temperature,
+		Temperature: temperature,
 		MaxTokens:   req.MaxTokens,
 	}
 	if c.think != nil {
@@ -207,15 +224,20 @@ func (c *Client) toPayload(req llm.ChatRequest, stream bool) chatPayload {
 	for _, m := range req.Messages {
 		pm := chatPayloadMsg{Role: string(m.Role), Content: m.Content, Name: m.Name, ToolCallID: m.ToolCallID}
 		for _, tc := range m.ToolCalls {
+			args := tc.Arguments
+			if len(args) == 0 {
+				// nil/空 arguments は "arguments":null を避けて {} を送る (Jinja テンプレート対策)
+				args = json.RawMessage(`{}`)
+			}
 			pm.ToolCalls = append(pm.ToolCalls, chatPayloadCall{
 				ID: tc.ID, Type: "function",
-				Function: chatPayloadFunc{Name: tc.Name, Arguments: tc.Arguments},
+				Function: chatPayloadFunc{Name: tc.Name, Arguments: args},
 			})
 		}
 		p.Messages = append(p.Messages, pm)
 	}
 	for _, t := range req.Tools {
-		p.Tools = append(p.Tools, chatPayloadTool{Type: "function", Function: chatPayloadFunc{Name: t.Name, Arguments: t.Schema}})
+		p.Tools = append(p.Tools, chatPayloadTool{Type: "function", Function: chatPayloadToolFunc{Name: t.Name, Description: t.Description, Parameters: t.Schema}})
 	}
 	if req.ToolChoice != nil {
 		p.ToolChoice = toolChoiceJSON(req.ToolChoice)

@@ -320,6 +320,9 @@ func Load(path string) (*Config, error) {
 	if err := validateFallbackChains(cfg.Providers); err != nil {
 		return nil, err
 	}
+	if err := validateProviders(cfg.Providers); err != nil {
+		return nil, err
+	}
 	if err := validateApproval(cfg.Agent.Approval); err != nil {
 		return nil, err
 	}
@@ -348,6 +351,21 @@ func resolveSystemPromptFile(cfg *Config, configPath string) error {
 		return fmt.Errorf("config: system_prompt_file read: %w", err)
 	}
 	cfg.Agent.SystemPrompt = strings.TrimSpace(string(b))
+	return nil
+}
+
+// validateProviders 起動時にプロバイダー固有設定の妥当性を検査する。
+// tool_call_id_format は llamacpp プロバイダーが解釈する値のみ許可し、タイポを
+// 実行時 (2 ターン目の HTTP 400) でなく起動時に fail-fast させる。
+func validateProviders(providers map[string]ProviderConfig) error {
+	for name, pc := range providers {
+		switch pc.ToolCallIDFormat {
+		case "", "alnum9":
+			// 空 (書き換えなし) と alnum9 のみ許可
+		default:
+			return fmt.Errorf("config: provider %q の tool_call_id_format は \"\" または \"alnum9\" のみサポート (got %q)", name, pc.ToolCallIDFormat)
+		}
+	}
 	return nil
 }
 

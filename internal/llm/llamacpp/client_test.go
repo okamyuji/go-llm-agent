@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -269,6 +270,35 @@ func TestStreamNormalizesStringEncodedToolCallArguments(t *testing.T) {
 	}
 }
 
+func TestProviderTemperatureUsedAsDefaultWhenRequestUnset(t *testing.T) {
+	// providers.llamacpp.temperature を設定したら既定値として送る (ollama と同じ挙動)。
+	// リクエスト側 Temperature が優先する。
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	temp := 0.0
+	c := llamacpp.New(llamacpp.Options{BaseURL: srv.URL, Temperature: &temp})
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if v, ok := gotBody["temperature"].(float64); !ok || v != 0.0 {
+		t.Errorf("temperature = %v, want provider default 0.0", gotBody["temperature"])
+	}
+
+	// リクエスト側指定が provider 既定を上書きする
+	gotBody = nil
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}, Temperature: f64(0.7)}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if v, ok := gotBody["temperature"].(float64); !ok || v != 0.7 {
+		t.Errorf("request temperature = %v, want 0.7 (overrides provider default)", gotBody["temperature"])
+	}
+}
+
 func TestChatSendsEnableThinkingWhenThinkSet(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -348,8 +378,14 @@ func TestToolCallIDNormalizationIsDeterministic(t *testing.T) {
 	defer srv.Close()
 
 	c := llamacpp.New(llamacpp.Options{BaseURL: srv.URL, ToolCallIDFormat: "alnum9"})
-	res1, _ := c.Chat(context.Background(), llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}})
-	res2, _ := c.Chat(context.Background(), llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}})
+	res1, err := c.Chat(context.Background(), llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}})
+	if err != nil {
+		t.Fatalf("first Chat: %v", err)
+	}
+	res2, err := c.Chat(context.Background(), llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}})
+	if err != nil {
+		t.Fatalf("second Chat: %v", err)
+	}
 	if res1.Message.ToolCalls[0].ID != res2.Message.ToolCalls[0].ID {
 		t.Errorf("same original id mapped to different values: %q vs %q", res1.Message.ToolCalls[0].ID, res2.Message.ToolCalls[0].ID)
 	}
@@ -397,6 +433,152 @@ func TestStreamNormalizesToolCallIDToAlnum9(t *testing.T) {
 	}
 	if !alnum9(got) {
 		t.Errorf("stream normalized id = %q, want 9-char alphanumeric", got)
+	}
+}
+
+func TestChatDeclaresToolsWithParametersAndDescription(t *testing.T) {
+	// ツール宣言は OpenAI 仕様どおり function.parameters に JSON Schema、function.description に説明を送る。
+	// tool-call 用の "arguments" キーを流用してはならない。
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	c := llamacpp.New(llamacpp.Options{BaseURL: srv.URL})
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{
+		Model:    "m",
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}},
+		Tools:    []llm.ToolSpec{{Name: "fs_read", Description: "Read a file", Schema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`)}},
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	tools, ok := gotBody["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %v", gotBody["tools"])
+	}
+	fn := tools[0].(map[string]any)["function"].(map[string]any)
+	if _, hasArgs := fn["arguments"]; hasArgs {
+		t.Errorf("tool declaration must not use 'arguments', got %v", fn)
+	}
+	params, ok := fn["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("function.parameters missing, got %v", fn)
+	}
+	if params["type"] != "object" {
+		t.Errorf("parameters.type = %v, want object", params["type"])
+	}
+	if fn["description"] != "Read a file" {
+		t.Errorf("function.description = %v, want 'Read a file'", fn["description"])
+	}
+}
+
+func TestChatReplayedToolCallWithNilArgsSendsEmptyObject(t *testing.T) {
+	// 保存済み tool call の Arguments が nil のとき "arguments":null を送ると Jinja テンプレートが壊れる。
+	// {} を送ること。
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	c := llamacpp.New(llamacpp.Options{BaseURL: srv.URL})
+	if _, err := c.Chat(context.Background(), llm.ChatRequest{
+		Model: "m",
+		Messages: []llm.Message{
+			{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c1", Name: "noarg", Arguments: nil}}},
+		},
+	}); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	msgs := gotBody["messages"].([]any)
+	last := msgs[len(msgs)-1].(map[string]any)
+	tcs := last["tool_calls"].([]any)
+	fn := tcs[0].(map[string]any)["function"].(map[string]any)
+	// nil arguments は null ではなく空オブジェクト {} として送る
+	args, hasArgs := fn["arguments"]
+	if !hasArgs || args == nil {
+		t.Errorf("arguments is null/absent (%v), want empty object {}", args)
+	}
+	if m, ok := args.(map[string]any); !ok || len(m) != 0 {
+		t.Errorf("arguments = %v, want empty object {}", args)
+	}
+}
+
+func TestStreamEmptyToolCallArgumentsBecomeEmptyObject(t *testing.T) {
+	// 引数フラグメントが一切来ない tool call は、下流 Unmarshal が成立するよう {} にする。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"noarg\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	c := llamacpp.New(llamacpp.Options{BaseURL: srv.URL})
+	st, err := c.Stream(context.Background(), llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	var got string
+	for {
+		ev, ok := st.Recv()
+		if !ok {
+			break
+		}
+		if ev.ToolCall != nil {
+			got = string(ev.ToolCall.Arguments)
+		}
+	}
+	if got != `{}` {
+		t.Errorf("empty stream tool call arguments = %q, want {}", got)
+	}
+}
+
+func TestStreamSurfacesScannerError(t *testing.T) {
+	// 読み取りエラー (接続リセット等) を正常終了として握り潰さず、ev.Err で surface する。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Errorf("ResponseWriter does not support hijacking")
+			return
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		// SSE ヘッダと未完の data 行 (改行なし) を書いてから RST で切断する
+		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"))
+		_, _ = conn.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial"))
+		if tc, ok := conn.(*net.TCPConn); ok {
+			_ = tc.SetLinger(0) // RST で切断し、クライアント側に read エラーを起こす
+		}
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+
+	c := llamacpp.New(llamacpp.Options{BaseURL: srv.URL})
+	st, err := c.Stream(context.Background(), llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "x"}}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	var sawErr bool
+	for {
+		ev, ok := st.Recv()
+		if !ok {
+			break
+		}
+		if ev.Err != nil {
+			sawErr = true
+		}
+	}
+	if !sawErr {
+		t.Error("scanner read error was swallowed as normal completion; expected ev.Err")
 	}
 }
 
