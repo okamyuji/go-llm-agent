@@ -160,6 +160,9 @@ func TestRepl_EscCancelsTurn(t *testing.T) {
 	if strings.Contains(got, "[error]") {
 		t.Errorf("ESC cancellation must not surface as an error, got %q", got)
 	}
+	if strings.Contains(got, "done in") {
+		t.Errorf("turn summary must be suppressed after interruption, got %q", got)
+	}
 }
 
 // TestRepl_CtrlCDuringGenerationQuits raw モードでは Ctrl-C は SIGINT にならずキーとして届く。

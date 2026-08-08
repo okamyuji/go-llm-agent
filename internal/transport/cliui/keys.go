@@ -83,34 +83,35 @@ func (b *chanByteReader) peekByte(d time.Duration) (byte, bool) {
 }
 
 // keyReader はバイト供給をキーイベントへデコードする。
-// pending は ESC 判定で読み過ぎた 1 バイトの押し戻し先 (-1 で無し)。
+// pending は ESC 判定で読み過ぎた 1 バイトの押し戻し先 (hasPending で有無を表す)。
 type keyReader struct {
-	br      byteReader
-	pending int
+	br         byteReader
+	pending    byte
+	hasPending bool
 }
 
 func newKeyReader(rd io.Reader) *keyReader {
-	return &keyReader{br: &ioByteReader{r: bufio.NewReader(rd)}, pending: -1}
+	return &keyReader{br: &ioByteReader{r: bufio.NewReader(rd)}}
 }
 
 // newKeyReaderFromBytes は raw 端末のバイトチャネルからキーを解読する。
 func newKeyReaderFromBytes(ch <-chan byte) *keyReader {
-	return &keyReader{br: &chanByteReader{ch: ch}, pending: -1}
+	return &keyReader{br: &chanByteReader{ch: ch}}
 }
 
 func (k *keyReader) rb() (byte, bool) {
-	if k.pending >= 0 {
-		b := byte(k.pending)
-		k.pending = -1
+	if k.hasPending {
+		b := k.pending
+		k.hasPending = false
 		return b, true
 	}
 	return k.br.readByte()
 }
 
 func (k *keyReader) pb(d time.Duration) (byte, bool) {
-	if k.pending >= 0 {
-		b := byte(k.pending)
-		k.pending = -1
+	if k.hasPending {
+		b := k.pending
+		k.hasPending = false
 		return b, true
 	}
 	return k.br.peekByte(d)
@@ -159,7 +160,8 @@ func (k *keyReader) readEscape() (keyEvent, error) {
 		return keyEvent{kind: keyEsc}, nil
 	}
 	if b2 != '[' && b2 != 'O' {
-		k.pending = int(b2)
+		k.pending = b2
+		k.hasPending = true
 		return keyEvent{kind: keyEsc}, nil
 	}
 	b3, ok := k.pb(escTimeout)

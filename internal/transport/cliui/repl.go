@@ -232,7 +232,8 @@ func (r *REPL) runTurn(ctx context.Context, out io.Writer, keyCh <-chan keyEvent
 		}
 	}
 	r.stopSpinner()
-	if !r.opt.DisableSpinner {
+	// 中断時は「[中断しました]」を既に出しているため done サマリは抑制する
+	if !r.opt.DisableSpinner && !interrupted {
 		fmt.Fprintf(out, "↳ done in %.1fs · %d tool · in %d / out %d tok\n",
 			time.Since(turnStart).Seconds(), toolCount, usageIn, usageOut)
 	}
