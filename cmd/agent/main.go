@@ -19,6 +19,7 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/llm/anthropic"
 	"github.com/okamyuji/go-llm-agent/internal/llm/gemini"
+	"github.com/okamyuji/go-llm-agent/internal/llm/llamacpp"
 	"github.com/okamyuji/go-llm-agent/internal/llm/ollama"
 	"github.com/okamyuji/go-llm-agent/internal/llm/openai"
 	"github.com/okamyuji/go-llm-agent/internal/llm/retry"
@@ -220,6 +221,15 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 			RequestTimeoutSeconds: pc.RequestTimeoutSeconds,
 			Temperature:           pc.Temperature,
 			Think:                 pc.Think,
+		}), pc.Retry)
+	}
+	if pc, ok := cfg.Providers["llamacpp"]; ok {
+		provs["llamacpp"] = wrapWithRetry("llamacpp", llamacpp.New(llamacpp.Options{
+			BaseURL:               pc.BaseURL,
+			RequestTimeoutSeconds: pc.RequestTimeoutSeconds,
+			Temperature:           pc.Temperature,
+			Think:                 pc.Think,
+			ToolCallIDFormat:      pc.ToolCallIDFormat,
 		}), pc.Retry)
 	}
 	allowModels := map[string][]string{}

@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/okamyuji/go-llm-agent/internal/config"
@@ -214,5 +215,33 @@ func TestLoad_HardeningFields(t *testing.T) {
 	}
 	if got := cfg.Tools.HTTPFetch.AllowDomains; len(got) != 1 || got[0] != "example.com" {
 		t.Fatalf("allow_domains got=%v", got)
+	}
+}
+
+func TestLoad_RejectsInvalidToolCallIDFormat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "providers:\n  llamacpp:\n    base_url: http://localhost:8080/v1\n    tool_call_id_format: alnum-9\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("want error for invalid tool_call_id_format, got nil")
+	}
+	if !strings.Contains(err.Error(), "tool_call_id_format") {
+		t.Errorf("error should mention tool_call_id_format, got: %v", err)
+	}
+}
+
+func TestLoad_AcceptsValidToolCallIDFormat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "providers:\n  llamacpp:\n    base_url: http://localhost:8080/v1\n    tool_call_id_format: alnum9\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err != nil {
+		t.Fatalf("valid alnum9 rejected: %v", err)
 	}
 }

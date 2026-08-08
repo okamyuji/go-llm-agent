@@ -99,6 +99,11 @@ type ProviderConfig struct {
 	FallbackTo            string        `yaml:"fallback_to"`
 	Temperature           *float64      `yaml:"temperature"`
 	Think                 *bool         `yaml:"think"`
+	// ToolCallIDFormat はツール呼び出し ID の正規化方式。llamacpp プロバイダーでのみ参照する。
+	// "alnum9" 指定時、tool_call_id を 9 文字英数字へ書き換える (Mistral-Nemo 系テンプレートが
+	// 「9 文字英数字」を強制し、llama-server 生成の 32 文字 ID を 2 ターン目で 400 拒否する問題への対策)。
+	// 空文字なら書き換えない (Qwen 等はこの制約を持たない)。
+	ToolCallIDFormat string `yaml:"tool_call_id_format"`
 }
 
 // RetryConfig リトライ設定。MaxAttempts<=1 でリトライ無効
@@ -315,6 +320,9 @@ func Load(path string) (*Config, error) {
 	if err := validateFallbackChains(cfg.Providers); err != nil {
 		return nil, err
 	}
+	if err := validateProviders(cfg.Providers); err != nil {
+		return nil, err
+	}
 	if err := validateApproval(cfg.Agent.Approval); err != nil {
 		return nil, err
 	}
@@ -343,6 +351,21 @@ func resolveSystemPromptFile(cfg *Config, configPath string) error {
 		return fmt.Errorf("config: system_prompt_file read: %w", err)
 	}
 	cfg.Agent.SystemPrompt = strings.TrimSpace(string(b))
+	return nil
+}
+
+// validateProviders 起動時にプロバイダー固有設定の妥当性を検査する。
+// tool_call_id_format は llamacpp プロバイダーが解釈する値のみ許可し、タイポを
+// 実行時 (2 ターン目の HTTP 400) でなく起動時に fail-fast させる。
+func validateProviders(providers map[string]ProviderConfig) error {
+	for name, pc := range providers {
+		switch pc.ToolCallIDFormat {
+		case "", "alnum9":
+			// 空 (書き換えなし) と alnum9 のみ許可
+		default:
+			return fmt.Errorf("config: provider %q の tool_call_id_format は \"\" または \"alnum9\" のみサポート (got %q)", name, pc.ToolCallIDFormat)
+		}
+	}
 	return nil
 }
 
