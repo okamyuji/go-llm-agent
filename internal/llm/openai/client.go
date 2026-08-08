@@ -80,9 +80,17 @@ type chatPayloadFunc struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
+// chatPayloadTool はツール宣言。tool-call とは別形状で、JSON Schema は parameters、
+// 説明は description に入れる (OpenAI Chat Completions 仕様)。
 type chatPayloadTool struct {
-	Type     string          `json:"type"`
-	Function chatPayloadFunc `json:"function"`
+	Type     string              `json:"type"`
+	Function chatPayloadToolFunc `json:"function"`
+}
+
+type chatPayloadToolFunc struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 type chatResp struct {
@@ -168,7 +176,7 @@ func toPayload(req llm.ChatRequest, stream bool) chatPayload {
 		p.Messages = append(p.Messages, pm)
 	}
 	for _, t := range req.Tools {
-		p.Tools = append(p.Tools, chatPayloadTool{Type: "function", Function: chatPayloadFunc{Name: t.Name, Arguments: t.Schema}})
+		p.Tools = append(p.Tools, chatPayloadTool{Type: "function", Function: chatPayloadToolFunc{Name: t.Name, Description: t.Description, Parameters: t.Schema}})
 	}
 	if req.ToolChoice != nil {
 		p.ToolChoice = toolChoiceJSON(req.ToolChoice)
