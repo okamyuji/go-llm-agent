@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -248,12 +249,18 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 
 	logger := obs.NewLogger(obs.LoggerOptions{Format: cfg.Logging.Format, Level: cfg.Logging.Level})
 	sb := tool.NewSandboxWithDeny(cfg.Tools.FS.AllowPaths, cfg.Tools.FS.DenyPaths)
+	webFetch := tool.NewWebFetch(cfg.Tools.WebFetch, logger)
+	if slices.Contains(cfg.Agent.EnabledTools, "web_fetch") {
+		webFetch.WarnIfWebgrabMissing()
+	}
 	tools := []tool.Tool{
 		tool.NewFSReadWithLogger(sb, cfg.Tools.FS.MaxReadBytes, logger),
 		tool.NewFSWriteWithLogger(sb, logger),
 		tool.NewShell(cfg.Tools.Shell, logger),
 		tool.NewHTTPFetchWithLogger(cfg.Tools.HTTPFetch, logger),
 		tool.NewSearchFiles(sb, cfg.Tools.SearchFiles),
+		tool.NewWebSearch(cfg.Tools.WebSearch),
+		webFetch,
 	}
 	notesPath := cfg.Storage.NotesPath
 	if notesPath == "" {

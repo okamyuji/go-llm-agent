@@ -245,3 +245,88 @@ func TestLoad_AcceptsValidToolCallIDFormat(t *testing.T) {
 		t.Fatalf("valid alnum9 rejected: %v", err)
 	}
 }
+
+func TestLoad_WebToolsDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	ws := cfg.Tools.WebSearch
+	if ws.Endpoint != "" || ws.MaxResults != 0 {
+		t.Errorf("web_search はゼロ値のまま (既定はツール側で適用): %+v", ws)
+	}
+	wf := cfg.Tools.WebFetch
+	if wf.WebgrabPath != "" || wf.MaxChars != 0 {
+		t.Errorf("web_fetch はゼロ値のまま: %+v", wf)
+	}
+}
+
+func TestLoad_WebSearchRejectsOutOfRangeMaxResults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "tools:\n  web_search:\n    max_results: 11\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "max_results") {
+		t.Fatalf("want max_results range error, got %v", err)
+	}
+}
+
+func TestLoad_WebSearchRejectsNonHTTPEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "tools:\n  web_search:\n    endpoint: ftp://example.com/\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "endpoint") {
+		t.Fatalf("want endpoint scheme error, got %v", err)
+	}
+}
+
+func TestLoad_WebFetchRejectsTooSmallMaxChars(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "tools:\n  web_fetch:\n    max_chars: 99\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "max_chars") {
+		t.Fatalf("want max_chars range error, got %v", err)
+	}
+}
+
+func TestLoad_WebToolsAcceptsValidConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "tools:\n  web_search:\n    endpoint: https://html.duckduckgo.com/html/\n    max_results: 5\n  web_fetch:\n    webgrab_path: /usr/local/bin/webgrab\n    max_chars: 4000\n    allow_domains: [example.com]\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("valid web tools config rejected: %v", err)
+	}
+	if cfg.Tools.WebFetch.AllowDomains[0] != "example.com" {
+		t.Errorf("allow_domains not parsed: %+v", cfg.Tools.WebFetch)
+	}
+}
+
+func TestLoad_WebSearchRejectsHostlessEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "tools:\n  web_search:\n    endpoint: \"https:///path\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "endpoint") {
+		t.Fatalf("want hostless endpoint error, got %v", err)
+	}
+}

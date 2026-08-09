@@ -186,6 +186,26 @@ tools:
     allow_domains: []
   search_files:
     max_results: 200
+  # web_search / web_fetch は enabled_tools に明示した場合のみ有効 (design/17)。
+  # 取得内容は未検証の外部データ。fs_write / shell と併用する場合は
+  # agent.approval.required_tools に書き込み系ツールを列挙することを強く推奨する。
+  web_search:
+    # DuckDuckGo HTML 互換エンドポイント。テストや別ミラーで差し替え可能。
+    endpoint: https://html.duckduckgo.com/html/
+    # Go 既定 UA は bot 判定されるためブラウザ風 UA を使う。
+    user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+    max_results: 5        # 1..10
+    timeout_seconds: 15
+  web_fetch:
+    # webgrab CLI のパス (PATH 解決または絶対パス)。導入方法は README 参照。
+    webgrab_path: webgrab
+    # 本文の最大文字数。ctx 8192 のローカル LLM では 4000 前後を推奨。
+    max_chars: 4000
+    timeout_seconds: 30
+    # FQDN 末尾一致の許可リスト。空なら全公開ドメイン許可。
+    # 注意: 初期 URL の制限であり、リダイレクト後の着地先は拘束しない (出所保証ではない)。
+    # 内部アドレスへの到達は webgrab の SSRF 防止が全ホップで遮断する。
+    allow_domains: []
 
 server:
   addr: 127.0.0.1:14000
