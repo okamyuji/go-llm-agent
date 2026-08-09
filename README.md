@@ -146,12 +146,14 @@ LLM が「検索 → URL 選択 → 本文取得 → 回答」を tool calling �
 - `web_search`: DuckDuckGo HTML から検索結果 (タイトル・URL・抜粋) を上位 N 件抽出して JSON で返します。広告ブロックは除外します。
 - `web_fetch`: URL の本文をボイラープレート除去済み Markdown で返します。長い本文は `start_index` でページングできます。
 
-`web_fetch` は外部 CLI [webgrab] に本文抽出を委譲します。webgrab は本文抽出 (Readability)、全リダイレクトホップでの SSRF 防止、出力インジェクション無害化を実装済みです。crates.io には未公開のため、ソースからインストールします:
+`web_fetch` は外部 CLI webgrab に本文抽出を委譲します。webgrab は本文抽出 (Readability)、全リダイレクトホップでの SSRF 防止、出力インジェクション無害化を実装済みです。crates.io には未公開のため、webgrab のソースツリー (リポジトリ名 llm-web-fetch) を取得してソースからインストールします:
 
 ```bash
-git clone <webgrabリポジトリ> && cd llm-web-fetch
+cd /path/to/llm-web-fetch
 cargo install --path .
 ```
+
+webgrab が PATH に無い環境では `web_fetch` は呼び出し時にエラーを返します (他のツールは影響を受けません)。
 
 ```yaml
 tools:

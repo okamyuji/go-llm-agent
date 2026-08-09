@@ -318,3 +318,15 @@ func TestLoad_WebToolsAcceptsValidConfig(t *testing.T) {
 		t.Errorf("allow_domains not parsed: %+v", cfg.Tools.WebFetch)
 	}
 }
+
+func TestLoad_WebSearchRejectsHostlessEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "tools:\n  web_search:\n    endpoint: \"https:///path\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "endpoint") {
+		t.Fatalf("want hostless endpoint error, got %v", err)
+	}
+}

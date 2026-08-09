@@ -417,8 +417,8 @@ func validateWebTools(t ToolsConfig) error {
 	}
 	if ep := t.WebSearch.Endpoint; ep != "" {
 		u, err := url.Parse(ep)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			return fmt.Errorf("config: tools.web_search.endpoint は http/https の URL が必要 (got %q)", ep)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+			return fmt.Errorf("config: tools.web_search.endpoint はホスト名を含む http/https の URL が必要 (got %q)", ep)
 		}
 	}
 	if v := t.WebFetch.MaxChars; v != 0 && v < 100 {

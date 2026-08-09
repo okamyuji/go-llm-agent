@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -188,5 +189,48 @@ func TestWebFetch_BrokenJSONFromStdout(t *testing.T) {
 		`{"url":"https://example.com/"}`)
 	if !res.IsError {
 		t.Fatalf("broken JSON must error: %+v", res)
+	}
+}
+
+func TestWebFetch_HostlessURLRejected(t *testing.T) {
+	for _, u := range []string{"https:///path", "http:opaque"} {
+		res := runFetch(t, config.WebFetchToolConfig{WebgrabPath: "/nonexistent", MaxChars: 4000},
+			fmt.Sprintf(`{"url":%q}`, u))
+		if !res.IsError || !strings.Contains(res.Content, "http") {
+			t.Fatalf("hostless url %q must be rejected before exec: %+v", u, res)
+		}
+	}
+}
+
+func TestWebFetch_StartFailureDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	// LookPath は通るが起動に失敗する (存在しないインタプリタの shebang)
+	stub := filepath.Join(dir, "webgrab-bad")
+	if err := os.WriteFile(stub, []byte("#!/nonexistent/interp\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := runFetch(t, config.WebFetchToolConfig{WebgrabPath: stub, MaxChars: 4000},
+		`{"url":"https://example.com/"}`)
+	if !res.IsError {
+		t.Fatalf("start failure must return error result: %+v", res)
+	}
+}
+
+func TestWebFetch_AuditLogOmitsQueryAndUserinfo(t *testing.T) {
+	dir := t.TempDir()
+	stub, _ := writeStubWebgrab(t, dir, stubJSON("x", 1), 0)
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	wf := NewWebFetch(config.WebFetchToolConfig{WebgrabPath: stub, MaxChars: 4000}, logger)
+	_, err := wf.Execute(context.Background(), json.RawMessage(`{"url":"https://user:secret@example.com/path?token=tkn123"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if strings.Contains(got, "secret") || strings.Contains(got, "tkn123") {
+		t.Errorf("audit log must omit userinfo and query: %s", got)
+	}
+	if !strings.Contains(got, "example.com/path") {
+		t.Errorf("audit log should keep host+path: %s", got)
 	}
 }

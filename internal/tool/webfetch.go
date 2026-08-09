@@ -93,8 +93,8 @@ func (t *WebFetchTool) Execute(ctx context.Context, raw json.RawMessage) (Result
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 	u, err := url.Parse(a.URL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return Result{IsError: true, Content: "web_fetch: url は http/https のみ受け付けます"}, nil
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		return Result{IsError: true, Content: "web_fetch: url はホスト名を含む http/https のみ受け付けます"}, nil
 	}
 	host := strings.ToLower(u.Hostname())
 	if !t.hostAllowed(host) {
@@ -130,7 +130,8 @@ func (t *WebFetchTool) Execute(ctx context.Context, raw json.RawMessage) (Result
 	cmd.WaitDelay = 2 * time.Second
 
 	runErr := cmd.Run()
-	t.audit(ctx, a.URL, host, cmd.ProcessState.ExitCode(), stdout.Len(), runErr == nil)
+	// ProcessState.ExitCode() は nil レシーバ安全 (起動失敗時は -1 を返す)
+	t.audit(ctx, sanitizeAuditURL(u), host, cmd.ProcessState.ExitCode(), stdout.Len(), runErr == nil)
 
 	if runErr != nil {
 		return Result{IsError: true, Content: t.mapExitError(cctx, runErr, &stderr)}, nil
@@ -195,6 +196,16 @@ func (t *WebFetchTool) hostAllowed(host string) bool {
 		}
 	}
 	return false
+}
+
+// sanitizeAuditURL は監査ログ用に userinfo・クエリ・フラグメントを除いた URL を返す。
+// 署名付きクエリやトークンをログへ永続化しないため (host+path は追跡性のため残す)
+func sanitizeAuditURL(u *url.URL) string {
+	c := *u
+	c.User = nil
+	c.RawQuery = ""
+	c.Fragment = ""
+	return c.String()
 }
 
 func (t *WebFetchTool) audit(ctx context.Context, fullURL, host string, exitCode, bytesLen int, ok bool) {
