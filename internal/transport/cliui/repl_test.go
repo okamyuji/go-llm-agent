@@ -28,16 +28,6 @@ func (fakeSvc) Run(_ context.Context, _ agent.Input, out chan<- agent.Event) err
 	return nil
 }
 
-// blockingSvc は delta を 1 つ出した後、context キャンセル (ESC 中断) まで待つ。
-// 長時間生成をシミュレートし、ESC でそのターンだけ止まることを検証する。
-type blockingSvc struct{}
-
-func (blockingSvc) Run(ctx context.Context, _ agent.Input, out chan<- agent.Event) error {
-	out <- agent.Event{Kind: agent.EventDelta, Delta: "生成中"}
-	<-ctx.Done()
-	return ctx.Err()
-}
-
 // scriptedSvc 指定したイベント列をそのまま流す
 type scriptedSvc struct {
 	events []agent.Event
@@ -136,6 +126,16 @@ func TestRepl_ToolCallSummary(t *testing.T) {
 	}
 }
 
+// blockingSvc は delta を 1 つ出した後、context キャンセル (ESC 中断) まで待つ。
+// 長時間生成をシミュレートし、ESC でそのターンだけ止まることを検証する。
+type blockingSvc struct{}
+
+func (blockingSvc) Run(ctx context.Context, _ agent.Input, out chan<- agent.Event) error {
+	out <- agent.Event{Kind: agent.EventDelta, Delta: "生成中"}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 // TestRepl_EscCancelsTurn 生成中に ESC を送るとそのターンだけ中断し、
 // セッションは継続して次の入力 (/quit) を処理できる。
 func TestRepl_EscCancelsTurn(t *testing.T) {
@@ -165,8 +165,7 @@ func TestRepl_EscCancelsTurn(t *testing.T) {
 	}
 }
 
-// TestRepl_CtrlCDuringGenerationQuits raw モードでは Ctrl-C は SIGINT にならずキーとして届く。
-// 生成中の Ctrl-C はそのターンを中断しセッションを終了する。
+// TestRepl_CtrlCDuringGenerationQuits 生成中の Ctrl-C はそのターンを中断しセッションを終了する。
 func TestRepl_CtrlCDuringGenerationQuits(t *testing.T) {
 	in := strings.NewReader("hi\n\x03")
 	var out bytes.Buffer
@@ -183,5 +182,22 @@ func TestRepl_CtrlCDuringGenerationQuits(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "[error]") {
 		t.Errorf("Ctrl-C must not surface as an error, got %q", out.String())
+	}
+}
+
+// TestRepl_EscThenCtrlCQuits ESC と Ctrl-C が同一バッチで届いても Ctrl-C は失われず終了する。
+func TestRepl_EscThenCtrlCQuits(t *testing.T) {
+	in := strings.NewReader("hi\n\x1b\x03")
+	var out bytes.Buffer
+	r := cliui.NewREPL(blockingSvc{}, cliui.Options{Model: "test/m", In: in, Out: &out})
+	done := make(chan error, 1)
+	go func() { done <- r.Run(context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run err=%v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("REPL did not terminate — Ctrl-C after ESC was lost")
 	}
 }
