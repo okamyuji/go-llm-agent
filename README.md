@@ -95,6 +95,19 @@ bash scripts/verify-hardening.sh
 | `agent config` | 設定ファイルの内容をダンプします |
 | `agent eval`   | ゴールデンデータセットでagentを評価します |
 
+### REPL の入力と履歴
+
+`agent chat` の入力行は端末の cooked モードでそのまま読みます。描画・編集・折り返しは端末と IME が担うため、日本語変換は崩れません。生成中は raw モードに切り替わり、ESC でそのターンを中断、Ctrl-C でセッションを終了します。
+
+矢印キーでの履歴呼び出しは内蔵していません。履歴と行編集が必要な場合は [rlwrap](https://github.com/hanslub42/rlwrap) で包んでください。GNU readline が履歴・行編集・IME 共存を提供します。
+
+```bash
+brew install rlwrap
+rlwrap -H ~/.agent_history ./bin/agent chat -config /path/to/config.yaml
+```
+
+`-H` は履歴の永続化先です。alias に登録すると常用しやすくなります。rlwrap 配下でも生成中の ESC 中断はそのまま機能します。
+
 ## 評価フレームワーク
 
 `agent eval --suite <dir> --report <path>` でYAML形式のゴールデンケースを実行し、tool_recall / tool_precision / param_accuracy / phrase_recall を計算したJSONレポートを書き出します。1 件でも合格条件を満たさなければ `exit code 1` で停止するため、CIのクオリティゲートに組み込めます。
