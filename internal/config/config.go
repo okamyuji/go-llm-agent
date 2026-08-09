@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,6 +217,24 @@ type ToolsConfig struct {
 	Shell       ShellToolConfig     `yaml:"shell"`
 	HTTPFetch   HTTPFetchToolConfig `yaml:"http_fetch"`
 	SearchFiles SearchFilesConfig   `yaml:"search_files"`
+	WebSearch   WebSearchToolConfig `yaml:"web_search"`
+	WebFetch    WebFetchToolConfig  `yaml:"web_fetch"`
+}
+
+// WebSearchToolConfig web_search の設定 (design/17)
+type WebSearchToolConfig struct {
+	Endpoint       string `yaml:"endpoint"`
+	UserAgent      string `yaml:"user_agent"`
+	MaxResults     int    `yaml:"max_results"`
+	TimeoutSeconds int    `yaml:"timeout_seconds"`
+}
+
+// WebFetchToolConfig web_fetch の設定 (design/17)
+type WebFetchToolConfig struct {
+	WebgrabPath    string   `yaml:"webgrab_path"`
+	MaxChars       int      `yaml:"max_chars"`
+	TimeoutSeconds int      `yaml:"timeout_seconds"`
+	AllowDomains   []string `yaml:"allow_domains"`
 }
 
 // FSToolConfig fs_read と fs_write の設定
@@ -330,6 +349,9 @@ func Load(path string) (*Config, error) {
 	if err := validateApproval(cfg.Agent.Approval); err != nil {
 		return nil, err
 	}
+	if err := validateWebTools(cfg.Tools); err != nil {
+		return nil, err
+	}
 	if err := resolveSystemPromptFile(&cfg, path); err != nil {
 		return nil, err
 	}
@@ -384,6 +406,23 @@ func validateApproval(a ApprovalConfig) error {
 	}
 	if len(a.RequiredTools) > 0 && a.TimeoutSeconds <= 0 {
 		return fmt.Errorf("config: agent.approval.timeout_seconds は required_tools 指定時に正の整数で必須 (got %d)", a.TimeoutSeconds)
+	}
+	return nil
+}
+
+// validateWebTools 起動時に web_search / web_fetch 設定の妥当性を検査する (design/17 §7)
+func validateWebTools(t ToolsConfig) error {
+	if v := t.WebSearch.MaxResults; v != 0 && (v < 1 || v > 10) {
+		return fmt.Errorf("config: tools.web_search.max_results は 1..10 (got %d)", v)
+	}
+	if ep := t.WebSearch.Endpoint; ep != "" {
+		u, err := url.Parse(ep)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("config: tools.web_search.endpoint は http/https の URL が必要 (got %q)", ep)
+		}
+	}
+	if v := t.WebFetch.MaxChars; v != 0 && v < 100 {
+		return fmt.Errorf("config: tools.web_fetch.max_chars は 100 以上 (got %d)", v)
 	}
 	return nil
 }

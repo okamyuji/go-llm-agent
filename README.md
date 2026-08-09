@@ -7,7 +7,7 @@ Go 1.25製のCGOなし単一バイナリAIエージェントです。OpenAI、An
 - 単一バイナリで配布できます。CGO不要で Linux、macOS、Windowsのamd64とarm64に対応します
 - 5プロバイダー (OpenAI、Anthropic、Google Gemini、Ollama、llama.cpp) を統一した抽象層として扱えます
 - ストリーミングとtool callingを初期サポートします
-- 内蔵ツールはfs_read、fs_write、shell、http_fetch、search_filesの5種類です
+- 内蔵ツールはfs_read、fs_write、shell、http_fetch、search_files、web_search、web_fetchの7種類です (ほかにRAG用のnote_add / note_search)
 - 対話REPL、ワンショットrun、OpenAI互換HTTP APIの3種類のインターフェースを提供します
 - pre-commitとCIでgofmt、go vet、staticcheck、golangci-lint、govulncheck、go test --count=1 --shuffle=on、gitleaksを全部通します
 
@@ -138,6 +138,35 @@ E2Eスクリプトは `tests/e2e/07-eval-suite.sh` です。fixtures/eval_exerci
 `note_add` と `note_search` の2つの内蔵ツールでJSONLベースのローカルノートを操作できます。スコアは title=3 / tags=2 / body=1 の重みで計算し、上位 `top_k` 件を返します。ノートは `storage.notes_path` (空なら `sessions_dir/notes.jsonl`) に追記します。`memory.NoteStore` インターフェースを介すため、将来SQLite FTS5やベクターDBに差し替え可能です。
 
 E2Eスクリプトは `tests/e2e/11-rag-mvp.sh` で、fixtures/rag_exerciseが2件のノートを保存して全文検索が機能することを確認します。設計の詳細は `docs/design/11-rag-mvp.md` を参照してください。
+
+## Web 検索と本文取得 (web_search / web_fetch)
+
+LLM が「検索 → URL 選択 → 本文取得 → 回答」を tool calling で自律的に行うための 2 ツールです。どちらも `agent.enabled_tools` に明示した場合のみ有効になります。
+
+- `web_search`: DuckDuckGo HTML から検索結果 (タイトル・URL・抜粋) を上位 N 件抽出して JSON で返します。広告ブロックは除外します。
+- `web_fetch`: URL の本文をボイラープレート除去済み Markdown で返します。長い本文は `start_index` でページングできます。
+
+`web_fetch` は外部 CLI [webgrab] に本文抽出を委譲します。webgrab は本文抽出 (Readability)、全リダイレクトホップでの SSRF 防止、出力インジェクション無害化を実装済みです。crates.io には未公開のため、ソースからインストールします:
+
+```bash
+git clone <webgrabリポジトリ> && cd llm-web-fetch
+cargo install --path .
+```
+
+```yaml
+tools:
+  web_search:
+    max_results: 5
+  web_fetch:
+    webgrab_path: webgrab
+    max_chars: 4000   # ctx 8192 のローカル LLM では 4000 前後を推奨
+agent:
+  enabled_tools: [fs_read, search_files, note_add, note_search, web_search, web_fetch]
+```
+
+取得内容は未検証の外部データとして `[UNTRUSTED INPUT]` 標識付きで LLM に渡ります。Web 由来の本文はプロンプトインジェクションのベクタになるため、`fs_write` や `shell` と併用する場合は `agent.approval.required_tools` に書き込み系ツールを列挙して HITL 承認を必ず挟んでください。取得結果を保存したい場合は LLM に `note_add` を使わせると RAG (ローカルノート) に蓄積されます。
+
+E2Eスクリプトは `tests/e2e/17-web-tools.sh` で、実ネットワークに出ずに httptest とスタブ webgrab で検証します。設計の詳細は `docs/design/17-web-search-fetch.md` を参照してください。
 
 ## コンテキスト拡充 (enricher)
 
