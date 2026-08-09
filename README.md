@@ -396,6 +396,68 @@ llama-server -m model.gguf --jinja -c 8192 --port 8080
 
 常用する場合は、日本語品質で勝る **Shisa v2 (Mistral-Nemo 12B) + `tool_call_id_format: "alnum9"`** 構成を実運用の第一候補として推奨します。Qwen 系 (`think: false`) は tool_call_id の制約が無く導入が単純ですが、日本語出力の品質は Shisa に劣ります。
 
+### macOS での常駐化 (launchd)
+
+llama-server を launchd の LaunchAgent として登録すると、ログイン時に自動起動し、クラッシュ時も自動復帰します。
+
+常駐化の前にリソース影響を実測してください。`ps` の RSS は mmap されたモデル重みを含まないため、`footprint <pid>` で dirty メモリを確認します。目安として 12B Q4 + `-c 8192` の場合、常駐 dirty は約 3.7GB (大半が KV cache)、アイドル CPU は 1% 未満です。モデル重み本体は mmap のクリーンページとして扱われ、他のアプリがメモリを要求すると OS が自動回収するため、常駐しても開発作業を圧迫しません。dirty を減らしたい場合は `-c` を下げます (KV cache は `-c` にほぼ比例)。
+
+`~/Library/LaunchAgents/local.llama-server.plist` を作成します:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>local.llama-server</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/homebrew/bin/llama-server</string>
+		<string>-m</string>
+		<string>/path/to/model.gguf</string>
+		<string>--jinja</string>
+		<string>-c</string>
+		<string>8192</string>
+		<string>--port</string>
+		<string>8080</string>
+		<string>--host</string>
+		<string>127.0.0.1</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>StandardOutPath</key>
+	<string>/tmp/llama-server.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/llama-server.log</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>
+```
+
+登録・停止・再開:
+
+```bash
+# 登録 (即起動)
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.llama-server.plist
+# 疎通確認
+curl -s http://127.0.0.1:8080/health
+# 一時停止 (メモリを空けたいとき)
+launchctl bootout gui/$(id -u)/local.llama-server
+# 再開
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.llama-server.plist
+```
+
+登録後は手動で llama-server を起動しないでください (ポートが衝突します)。
+
 ## トークンとコストの集計
 
 `providers.<name>.pricing` を設定すると、LLM呼び出しごとの入出力トークン数からJPYコストを算出し、セッション単位と日次単位で集計します。集計結果は `storage.sessions_dir/billing.jsonl` に追記され、`agent.Event` の `Usage` と `Cost` フィールド経由でリアルタイムに観測できます。
