@@ -67,7 +67,7 @@ func (r *REPL) Run(ctx context.Context) error {
 		fmt.Fprint(r.out, ">> ")
 		line, err := pump.readLine()
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) || errors.Is(err, errCtrlC) {
 				return nil
 			}
 			return err

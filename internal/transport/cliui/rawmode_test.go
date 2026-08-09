@@ -78,6 +78,24 @@ func TestBytePumpPushbackWithNewline(t *testing.T) {
 	}
 }
 
+func TestBytePumpReadLineCtrlC(t *testing.T) {
+	// ターン終了直後に届いた Ctrl-C は行データではなく終了要求として扱う
+	_, err := newBytePump(strings.NewReader("ab\x03")).readLine()
+	if !errors.Is(err, errCtrlC) {
+		t.Fatalf("want errCtrlC, got %v", err)
+	}
+}
+
+func TestBytePumpReadLineCtrlCInPending(t *testing.T) {
+	p := newBytePump(strings.NewReader(""))
+	p.pushback('a')
+	p.pushback(0x03)
+	_, err := p.readLine()
+	if !errors.Is(err, errCtrlC) {
+		t.Fatalf("want errCtrlC, got %v", err)
+	}
+}
+
 func TestCRLFWriterTranslatesLoneLF(t *testing.T) {
 	var buf bytes.Buffer
 	w := newCRLFWriter(&buf)

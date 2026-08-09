@@ -1,11 +1,17 @@
 package cliui
 
 import (
+	"errors"
 	"io"
 	"os"
 
 	"golang.org/x/term"
 )
+
+// errCtrlC は行読み中に Ctrl-C (0x03) を検出したことを示す。
+// ターン終了と入力バイト到着の競合で Ctrl-C が生成中の監視をすり抜けても、
+// 次の readLine がこのエラーを返すため終了要求は失われない。
+var errCtrlC = errors.New("ctrl-c received")
 
 // bytePump は入力を 1 本の goroutine で読み続け、バイト列をチャネルへ流す。
 // 行読み (cooked) と生成中の ESC 監視が同じチャネルを時分割で消費するため、
@@ -49,18 +55,25 @@ func (p *bytePump) pushback(b byte) {
 func (p *bytePump) readLine() (string, error) {
 	var sb []byte
 	for _, b := range p.pending {
-		if b == '\n' {
+		switch b {
+		case '\n':
 			rest := p.pending[len(sb)+1:]
 			line := trimTrailingCR(sb)
 			p.pending = append([]byte{}, rest...)
 			return line, nil
+		case 0x03:
+			p.pending = nil
+			return "", errCtrlC
 		}
 		sb = append(sb, b)
 	}
 	p.pending = nil
 	for b := range p.ch {
-		if b == '\n' {
+		switch b {
+		case '\n':
 			return trimTrailingCR(sb), nil
+		case 0x03:
+			return "", errCtrlC
 		}
 		sb = append(sb, b)
 	}
