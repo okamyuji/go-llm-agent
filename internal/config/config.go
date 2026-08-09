@@ -98,7 +98,11 @@ type ProviderConfig struct {
 	Retry                 RetryConfig   `yaml:"retry"`
 	FallbackTo            string        `yaml:"fallback_to"`
 	Temperature           *float64      `yaml:"temperature"`
-	Think                 *bool         `yaml:"think"`
+	// MaxTokens は 1 応答の生成上限トークン数 (llamacpp)。暴走・長時間化の抑制に使う。
+	MaxTokens *int `yaml:"max_tokens"`
+	// RepeatPenalty は繰り返し抑制係数 (llamacpp)。量子化モデルの繰り返し暴走対策。
+	RepeatPenalty *float64 `yaml:"repeat_penalty"`
+	Think         *bool    `yaml:"think"`
 	// ToolCallIDFormat はツール呼び出し ID の正規化方式。llamacpp プロバイダーでのみ参照する。
 	// "alnum9" 指定時、tool_call_id を 9 文字英数字へ書き換える (Mistral-Nemo 系テンプレートが
 	// 「9 文字英数字」を強制し、llama-server 生成の 32 文字 ID を 2 ターン目で 400 拒否する問題への対策)。
