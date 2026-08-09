@@ -1,7 +1,6 @@
 package cliui
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -51,65 +50,23 @@ func NewREPL(svc agent.Service, opt Options) *REPL {
 }
 
 // Run REPL ループを実行する。/quit・Ctrl-C・EOF で終了。
-// 端末では raw モードにし、日本語を桁ずれなく描画・↑↓履歴・生成中 ESC 中断を扱う。
+// 入力は cooked モードのまま端末と IME に任せ（日本語変換・折り返しを壊さない）、
+// 生成中だけ raw 化して ESC / Ctrl-C を監視する。
 func (r *REPL) Run(ctx context.Context) error {
-	restore, raw := enableRawMode(r.in)
-	defer restore()
-
-	// raw モードでは出力後処理が無効なので、単独 \n を \r\n へ変換する
-	effOut := r.out
-	if raw {
-		effOut = newCRLFWriter(r.out)
-	}
-
-	// スピナー: 注入があればそれを、無ければ TTY/raw のとき有効化して生成する
+	// スピナー: 注入があればそれを、無ければ TTY のとき有効化して生成する
 	if r.sp == nil && !r.opt.DisableSpinner {
-		enabled := raw || isTTY(r.out)
-		r.sp = NewSpinner(SpinnerOptions{Out: effOut, Model: r.opt.Model, Enabled: &enabled})
+		enabled := isTTY(r.out)
+		r.sp = NewSpinner(SpinnerOptions{Out: r.out, Model: r.opt.Model, Enabled: &enabled})
 	}
-
-	// 入力は 1 本の goroutine で読み、keyCh へ流す。行編集と生成中 ESC 監視が時分割で消費する。
-	// raw 端末では、ESC 単独と矢印を区別するためタイムアウト付きバイトチャネル経由で解読する
-	// (同期 ReadByte だと ESC の次バイトを待ってブロックし、単独 ESC が届かない)。
-	var kr *keyReader
-	if raw {
-		byteCh := make(chan byte, 256)
-		go func() {
-			br := bufio.NewReader(r.in)
-			for {
-				b, err := br.ReadByte()
-				if err != nil {
-					close(byteCh)
-					return
-				}
-				byteCh <- b
-			}
-		}()
-		kr = newKeyReaderFromBytes(byteCh)
-	} else {
-		kr = newKeyReader(r.in)
-	}
-	keyCh := make(chan keyEvent, 64)
-	go func() {
-		for {
-			ev, err := kr.readKey()
-			if err != nil {
-				close(keyCh)
-				return
-			}
-			keyCh <- ev
-		}
-	}()
-	src := &bufKeySource{ch: keyCh}
-	editor := newLineEditorFromSource(src, effOut, ">> ")
 
 	history := []llm.Message{}
-	newline(effOut, "go-llm-agent REPL  /quit で終了")
+	fmt.Fprintln(r.out, "go-llm-agent REPL  /quit で終了（生成中は ESC で中断）")
 
 	for {
-		line, err := editor.readLine()
+		fmt.Fprint(r.out, ">> ")
+		line, err := readInputLine(r.in)
 		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, errInterrupted) {
+			if errors.Is(err, io.EOF) {
 				return nil
 			}
 			return err
@@ -123,7 +80,7 @@ func (r *REPL) Run(ctx context.Context) error {
 		}
 		history = append(history, llm.Message{Role: llm.RoleUser, Content: line})
 
-		assistant, quit := r.runTurn(ctx, effOut, keyCh, src, append([]llm.Message{}, history...))
+		assistant, quit := r.runTurn(ctx, append([]llm.Message{}, history...))
 		history = append(history, assistant)
 		if quit {
 			return nil
@@ -131,12 +88,33 @@ func (r *REPL) Run(ctx context.Context) error {
 	}
 }
 
-// runTurn は 1 ターンを実行する。生成中の keyCh を監視し、ESC でそのターンだけ中断する。
-// 非 ESC キーは src へ退避し次の行編集へ引き継ぐ。返り値は履歴に積む assistant メッセージ。
-func (r *REPL) runTurn(ctx context.Context, out io.Writer, keyCh <-chan keyEvent, src *bufKeySource, hist []llm.Message) (llm.Message, bool) {
+// runTurn は 1 ターンを実行する。入力が端末なら raw 化して ESC / Ctrl-C を監視し、
+// ESC はそのターンだけ中断、Ctrl-C は中断してセッションを終了する。
+// 返り値は履歴に積む assistant メッセージと終了フラグ。
+func (r *REPL) runTurn(ctx context.Context, hist []llm.Message) (llm.Message, bool) {
 	turnCtx, cancelTurn := context.WithCancel(ctx)
 	defer cancelTurn()
-	quit := false
+
+	// cancelKind は監視 goroutine からの通知。バッファ 1 で取りこぼしなし。
+	type cancelEvent struct{ quit bool }
+	cancelCh := make(chan cancelEvent, 1)
+	notify := func(quit bool) {
+		select {
+		case cancelCh <- cancelEvent{quit: quit}:
+		default:
+		}
+		cancelTurn()
+	}
+
+	out := r.out
+	var rt *rawTurn
+	if f, ok := r.in.(*os.File); ok {
+		if t, started := beginRawTurn(f, func() { notify(false) }, func() { notify(true) }); started {
+			rt = t
+			// raw 中は出力後処理が無効なので単独 \n を \r\n に変換する
+			out = newCRLFWriter(r.out)
+		}
+	}
 
 	ch := make(chan agent.Event, 16)
 	go func() {
@@ -155,7 +133,7 @@ func (r *REPL) runTurn(ctx context.Context, out io.Writer, keyCh <-chan keyEvent
 	var toolCount, usageIn, usageOut int
 	var finalContent strings.Builder
 	interrupted := false
-	kc := keyCh // close 検知後に nil 化して以降の select を無効化する
+	quit := false
 	r.startSpinner(PhaseThinking, "")
 
 	for ch != nil {
@@ -197,55 +175,39 @@ func (r *REPL) runTurn(ctx context.Context, out io.Writer, keyCh <-chan keyEvent
 				fmt.Fprintln(out)
 			case agent.EventError:
 				r.stopSpinner()
-				// ESC 中断による context キャンセルはユーザー操作なのでエラー表示しない
+				// ESC / Ctrl-C 中断による context キャンセルはユーザー操作なのでエラー表示しない
 				if interrupted && errors.Is(ev.Err, context.Canceled) {
 					continue
 				}
 				fmt.Fprintf(out, "\n[error] %v\n", ev.Err)
 			}
-		case k, ok := <-kc:
-			if !ok {
-				kc = nil // 入力ストリーム終端。以降この case は選択されない
-				continue
-			}
-			switch k.kind {
-			case keyEsc:
-				if !interrupted {
-					interrupted = true
-					cancelTurn()
-					r.stopSpinner()
+		case c := <-cancelCh:
+			if !interrupted {
+				interrupted = true
+				r.stopSpinner()
+				if !c.quit {
 					fmt.Fprint(out, "\n[中断しました]\n")
 				}
-			case keyCtrlC:
-				// raw モードでは ISIG 無効のため Ctrl-C は SIGINT にならずキーとして届く。
-				// 生成を中断してセッションごと終了する (端末の慣習に合わせる)。
-				if !interrupted {
-					interrupted = true
-					cancelTurn()
-					r.stopSpinner()
-				}
+			}
+			if c.quit {
 				quit = true
-			default:
-				// 生成中の非 ESC キーは次の行編集へ引き継ぐ
-				src.pushback(k)
 			}
 		}
 	}
 	r.stopSpinner()
+	if rt != nil {
+		rt.end() // cooked へ復帰。以降の出力は通常の \n でよい
+	}
 	// 中断時は「[中断しました]」を既に出しているため done サマリは抑制する
 	if !r.opt.DisableSpinner && !interrupted {
-		fmt.Fprintf(out, "↳ done in %.1fs · %d tool · in %d / out %d tok\n",
+		fmt.Fprintf(r.out, "↳ done in %.1fs · %d tool · in %d / out %d tok\n",
 			time.Since(turnStart).Seconds(), toolCount, usageIn, usageOut)
 	}
 	return llm.Message{Role: llm.RoleAssistant, Content: finalContent.String()}, quit
 }
 
-// newline は raw モードでも桁が戻るよう本文の後に改行を出力する。
-func newline(out io.Writer, s string) {
-	fmt.Fprint(out, s+"\n")
-}
-
-// startSpinner sp が nil でなければスピナー描画を開始する
+// startSpinner sp が nil でなければスピナー描画を開始する。
+// スピナーは \r と \x1b[K しか出さないため raw モード中も出力先の差し替えは不要。
 func (r *REPL) startSpinner(phase Phase, label string) {
 	if r.sp == nil {
 		return
