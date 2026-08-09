@@ -3,33 +3,74 @@ package cliui
 import (
 	"io"
 	"os"
-	"time"
 
 	"golang.org/x/term"
 )
 
-// readInputLine は io.Reader から 1 行 (改行まで) を 1 バイトずつ読む。bufio を使わないので
-// 端末が cooked モードのままでも読み過ぎ (type-ahead の取りこぼし) が起きず、生成中の
-// 直接読み取りと共存できる。cooked モードでは端末と IME が描画・編集・折り返しを担う。
-func readInputLine(r io.Reader) (string, error) {
+// bytePump は入力を 1 本の goroutine で読み続け、バイト列をチャネルへ流す。
+// 行読み (cooked) と生成中の ESC 監視が同じチャネルを時分割で消費するため、
+// ブロック中の Read を途中で解除する必要がない。File.Fd() を取得すると
+// SetReadDeadline が無効になる (Go の poller から外れる) ので、deadline に
+// 頼る停止方式はここでは使えない。
+type bytePump struct {
+	ch      chan byte
+	pending []byte // 生成中に届いた非制御バイトを次の行読みへ引き継ぐ
+	err     error  // ch close 後にのみ読む (close が happens-before を与える)
+}
+
+// newBytePump は r を読み続ける goroutine を開始する。r が尽きたら ch を閉じる。
+func newBytePump(r io.Reader) *bytePump {
+	p := &bytePump{ch: make(chan byte, 256)}
+	go func() {
+		defer close(p.ch)
+		buf := make([]byte, 1)
+		for {
+			n, err := r.Read(buf)
+			if n > 0 {
+				p.ch <- buf[0]
+			}
+			if err != nil {
+				p.err = err
+				return
+			}
+		}
+	}()
+	return p
+}
+
+// pushback は生成中に消費したバイトを次の readLine の先頭へ戻す。
+// runTurn と readLine は同一 goroutine で逐次実行されるため排他は不要。
+func (p *bytePump) pushback(b byte) {
+	p.pending = append(p.pending, b)
+}
+
+// readLine は改行までを 1 行として返す。pushback されたバイトを先に消費する。
+// 入力が尽きたら残りを行として返し、空なら読み取りエラー (通常 io.EOF) を返す。
+func (p *bytePump) readLine() (string, error) {
 	var sb []byte
-	buf := make([]byte, 1)
-	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			c := buf[0]
-			if c == '\n' {
-				return trimTrailingCR(sb), nil
-			}
-			sb = append(sb, c)
+	for _, b := range p.pending {
+		if b == '\n' {
+			rest := p.pending[len(sb)+1:]
+			line := trimTrailingCR(sb)
+			p.pending = append([]byte{}, rest...)
+			return line, nil
 		}
-		if err != nil {
-			if len(sb) > 0 {
-				return trimTrailingCR(sb), nil
-			}
-			return "", err
-		}
+		sb = append(sb, b)
 	}
+	p.pending = nil
+	for b := range p.ch {
+		if b == '\n' {
+			return trimTrailingCR(sb), nil
+		}
+		sb = append(sb, b)
+	}
+	if len(sb) > 0 {
+		return trimTrailingCR(sb), nil
+	}
+	if p.err != nil {
+		return "", p.err
+	}
+	return "", io.EOF
 }
 
 func trimTrailingCR(b []byte) string {
@@ -39,81 +80,18 @@ func trimTrailingCR(b []byte) string {
 	return string(b)
 }
 
-// handleCancelByte は生成中に受け取った 1 バイトを判定する。ESC は中断、Ctrl-C は終了。
-func handleCancelByte(b byte, onEsc, onCtrlC func()) {
-	switch b {
-	case 0x1b:
-		onEsc()
-	case 0x03:
-		onCtrlC()
-	}
-}
-
-// scanForCancel は r からバイトを読み、ESC / Ctrl-C を検出してコールバックを呼ぶ。
-// io.Reader なので pipe でユニットテストできる。r が尽きたら戻る。
-func scanForCancel(r io.Reader, onEsc, onCtrlC func()) {
-	buf := make([]byte, 64)
-	for {
-		n, err := r.Read(buf)
-		for i := 0; i < n; i++ {
-			handleCancelByte(buf[i], onEsc, onCtrlC)
-		}
-		if err != nil {
-			return
-		}
-	}
-}
-
-// rawTurn は 1 ターンのあいだ端末を raw にし、ESC / Ctrl-C を監視する。
-// 入力行は cooked のまま (IME を壊さない) で、生成中だけ raw 化するのが狙い。
-type rawTurn struct {
-	f        *os.File
-	oldState *term.State
-	stop     chan struct{}
-	done     chan struct{}
-}
-
-// beginRawTurn は端末を raw にし、ESC / Ctrl-C 監視 goroutine を開始する。
-// 端末でなければ (nil,false)。SetReadDeadline で定期的に読みを解除し、end で確実に止める。
-func beginRawTurn(f *os.File, onEsc, onCtrlC func()) (*rawTurn, bool) {
+// beginRaw は端末を raw にし、cooked へ戻す関数を返す。端末でなければ no-op。
+// バイトの読み取り自体は bytePump が担うため、ここではモード切替だけを行う。
+func beginRaw(f *os.File) (restore func(), ok bool) {
 	fd := int(f.Fd())
 	if !term.IsTerminal(fd) {
-		return nil, false
+		return func() {}, false
 	}
 	st, err := term.MakeRaw(fd)
 	if err != nil {
-		return nil, false
+		return func() {}, false
 	}
-	rt := &rawTurn{f: f, oldState: st, stop: make(chan struct{}), done: make(chan struct{})}
-	go func() {
-		defer close(rt.done)
-		buf := make([]byte, 64)
-		for {
-			select {
-			case <-rt.stop:
-				return
-			default:
-			}
-			_ = f.SetReadDeadline(time.Now().Add(80 * time.Millisecond))
-			n, err := f.Read(buf)
-			for i := 0; i < n; i++ {
-				handleCancelByte(buf[i], onEsc, onCtrlC)
-			}
-			if err != nil && !os.IsTimeout(err) {
-				return
-			}
-		}
-	}()
-	return rt, true
-}
-
-// end は監視を止め、read deadline を解除して端末を cooked に戻す。
-func (rt *rawTurn) end() {
-	close(rt.stop)
-	_ = rt.f.SetReadDeadline(time.Now()) // 保留中の Read を解除
-	<-rt.done
-	_ = rt.f.SetReadDeadline(time.Time{}) // deadline 解除
-	_ = term.Restore(int(rt.f.Fd()), rt.oldState)
+	return func() { _ = term.Restore(fd, st) }, true
 }
 
 // crlfWriter は raw 生成中に単独の \n を \r\n へ変換する。cooked 復帰後は使わない。

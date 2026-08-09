@@ -59,12 +59,13 @@ func (r *REPL) Run(ctx context.Context) error {
 		r.sp = NewSpinner(SpinnerOptions{Out: r.out, Model: r.opt.Model, Enabled: &enabled})
 	}
 
+	pump := newBytePump(r.in)
 	history := []llm.Message{}
 	fmt.Fprintln(r.out, "go-llm-agent REPL  /quit で終了（生成中は ESC で中断）")
 
 	for {
 		fmt.Fprint(r.out, ">> ")
-		line, err := readInputLine(r.in)
+		line, err := pump.readLine()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -80,7 +81,7 @@ func (r *REPL) Run(ctx context.Context) error {
 		}
 		history = append(history, llm.Message{Role: llm.RoleUser, Content: line})
 
-		assistant, quit := r.runTurn(ctx, append([]llm.Message{}, history...))
+		assistant, quit := r.runTurn(ctx, pump, append([]llm.Message{}, history...))
 		history = append(history, assistant)
 		if quit {
 			return nil
@@ -88,31 +89,22 @@ func (r *REPL) Run(ctx context.Context) error {
 	}
 }
 
-// runTurn は 1 ターンを実行する。入力が端末なら raw 化して ESC / Ctrl-C を監視し、
-// ESC はそのターンだけ中断、Ctrl-C は中断してセッションを終了する。
-// 返り値は履歴に積む assistant メッセージと終了フラグ。
-func (r *REPL) runTurn(ctx context.Context, hist []llm.Message) (llm.Message, bool) {
+// runTurn は 1 ターンを実行する。入力が端末なら raw 化し、pump 経由で届くバイトから
+// ESC（ターン中断）/ Ctrl-C（中断して終了）を検出する。その他のバイトは次の行編集へ
+// 引き継ぐ。返り値は履歴に積む assistant メッセージと終了フラグ。
+func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message) (llm.Message, bool) {
 	turnCtx, cancelTurn := context.WithCancel(ctx)
 	defer cancelTurn()
 
-	// cancelKind は監視 goroutine からの通知。バッファ 1 で取りこぼしなし。
-	type cancelEvent struct{ quit bool }
-	cancelCh := make(chan cancelEvent, 1)
-	notify := func(quit bool) {
-		select {
-		case cancelCh <- cancelEvent{quit: quit}:
-		default:
-		}
-		cancelTurn()
-	}
-
 	out := r.out
-	var rt *rawTurn
+	restoreRaw := func() {}
 	if f, ok := r.in.(*os.File); ok {
-		if t, started := beginRawTurn(f, func() { notify(false) }, func() { notify(true) }); started {
-			rt = t
-			// raw 中は出力後処理が無効なので単独 \n を \r\n に変換する
-			out = newCRLFWriter(r.out)
+		if restore, started := beginRaw(f); started {
+			restoreRaw = restore
+			// raw 中は出力後処理が無効なので、TTY 出力に限り単独 \n を \r\n に変換する
+			if isTTY(r.out) {
+				out = newCRLFWriter(r.out)
+			}
 		}
 	}
 
@@ -134,6 +126,7 @@ func (r *REPL) runTurn(ctx context.Context, hist []llm.Message) (llm.Message, bo
 	var finalContent strings.Builder
 	interrupted := false
 	quit := false
+	keyCh := pump.ch // 入力終端 (close) 検知後は nil 化して select から外す
 	r.startSpinner(PhaseThinking, "")
 
 	for ch != nil {
@@ -181,23 +174,34 @@ func (r *REPL) runTurn(ctx context.Context, hist []llm.Message) (llm.Message, bo
 				}
 				fmt.Fprintf(out, "\n[error] %v\n", ev.Err)
 			}
-		case c := <-cancelCh:
-			if !interrupted {
-				interrupted = true
-				r.stopSpinner()
-				if !c.quit {
+		case b, ok := <-keyCh:
+			if !ok {
+				keyCh = nil
+				continue
+			}
+			switch b {
+			case 0x1b: // ESC: このターンだけ中断
+				if !interrupted {
+					interrupted = true
+					cancelTurn()
+					r.stopSpinner()
 					fmt.Fprint(out, "\n[中断しました]\n")
 				}
-			}
-			if c.quit {
+			case 0x03: // Ctrl-C: 中断してセッション終了 (raw では SIGINT にならずキーとして届く)
+				if !interrupted {
+					interrupted = true
+					cancelTurn()
+					r.stopSpinner()
+				}
 				quit = true
+			default:
+				// 生成中に打たれたバイトは次の行読みへ引き継ぐ
+				pump.pushback(b)
 			}
 		}
 	}
 	r.stopSpinner()
-	if rt != nil {
-		rt.end() // cooked へ復帰。以降の出力は通常の \n でよい
-	}
+	restoreRaw() // cooked へ復帰。以降の出力は通常の \n でよい
 	// 中断時は「[中断しました]」を既に出しているため done サマリは抑制する
 	if !r.opt.DisableSpinner && !interrupted {
 		fmt.Fprintf(r.out, "↳ done in %.1fs · %d tool · in %d / out %d tok\n",

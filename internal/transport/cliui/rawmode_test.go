@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestReadInputLine(t *testing.T) {
+func TestBytePumpReadLine(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -21,7 +21,7 @@ func TestReadInputLine(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := readInputLine(strings.NewReader(tt.input))
+			got, err := newBytePump(strings.NewReader(tt.input)).readLine()
 			if err != nil {
 				t.Fatalf("err=%v", err)
 			}
@@ -32,36 +32,49 @@ func TestReadInputLine(t *testing.T) {
 	}
 }
 
-func TestReadInputLineEOFOnEmpty(t *testing.T) {
-	_, err := readInputLine(strings.NewReader(""))
+func TestBytePumpReadLineEOFOnEmpty(t *testing.T) {
+	_, err := newBytePump(strings.NewReader("")).readLine()
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("want io.EOF, got %v", err)
 	}
 }
 
-func TestReadInputLineReadsExactlyOneLine(t *testing.T) {
-	// bufio と違い先読みしないので、次行は Reader に残る
-	r := strings.NewReader("first\nsecond\n")
-	got, err := readInputLine(r)
+func TestBytePumpReadsMultipleLines(t *testing.T) {
+	p := newBytePump(strings.NewReader("first\nsecond\n"))
+	got, err := p.readLine()
 	if err != nil || got != "first" {
 		t.Fatalf("got %q err=%v", got, err)
 	}
-	got, err = readInputLine(r)
+	got, err = p.readLine()
 	if err != nil || got != "second" {
 		t.Fatalf("got %q err=%v", got, err)
 	}
 }
 
-func TestScanForCancel(t *testing.T) {
-	var esc, ctrlC int
-	// 通常文字は無視され、ESC と Ctrl-C だけ検出される
-	scanForCancel(strings.NewReader("ab\x1bcd\x03\x1b"),
-		func() { esc++ }, func() { ctrlC++ })
-	if esc != 2 {
-		t.Errorf("esc=%d, want 2", esc)
+func TestBytePumpPushback(t *testing.T) {
+	// 生成中に消費されたバイトが次の readLine の先頭へ戻る
+	p := newBytePump(strings.NewReader("cd\n"))
+	p.pushback('a')
+	p.pushback('b')
+	got, err := p.readLine()
+	if err != nil || got != "abcd" {
+		t.Fatalf("got %q err=%v, want abcd", got, err)
 	}
-	if ctrlC != 1 {
-		t.Errorf("ctrlC=%d, want 1", ctrlC)
+}
+
+func TestBytePumpPushbackWithNewline(t *testing.T) {
+	// pushback だけで行が完結する場合、チャネルを読まずに返り、残りは次行へ持ち越す
+	p := newBytePump(strings.NewReader("")) // 入力なし
+	for _, b := range []byte("one\ntwo\n") {
+		p.pushback(b)
+	}
+	got, err := p.readLine()
+	if err != nil || got != "one" {
+		t.Fatalf("got %q err=%v, want one", got, err)
+	}
+	got, err = p.readLine()
+	if err != nil || got != "two" {
+		t.Fatalf("got %q err=%v, want two", got, err)
 	}
 }
 
