@@ -81,8 +81,8 @@ func (r *REPL) Run(ctx context.Context) error {
 		}
 		history = append(history, llm.Message{Role: llm.RoleUser, Content: line})
 
-		assistant, quit := r.runTurn(ctx, pump, append([]llm.Message{}, history...))
-		history = append(history, assistant)
+		turnMessages, quit := r.runTurn(ctx, pump, append([]llm.Message{}, history...))
+		history = append(history, turnMessages...)
 		if quit {
 			return nil
 		}
@@ -92,7 +92,7 @@ func (r *REPL) Run(ctx context.Context) error {
 // runTurn は 1 ターンを実行する。入力が端末なら raw 化し、pump 経由で届くバイトから
 // ESC（ターン中断）/ Ctrl-C（中断して終了）を検出する。その他のバイトは次の行編集へ
 // 引き継ぐ。返り値は履歴に積む assistant メッセージと終了フラグ。
-func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message) (llm.Message, bool) {
+func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message) ([]llm.Message, bool) {
 	turnCtx, cancelTurn := context.WithCancel(ctx)
 	defer cancelTurn()
 
@@ -124,6 +124,7 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message) 
 	turnStart := time.Now()
 	var toolCount, usageIn, usageOut int
 	var finalContent strings.Builder
+	var turnMessages []llm.Message
 	interrupted := false
 	quit := false
 	keyCh := pump.ch // 入力終端 (close) 検知後は nil 化して select から外す
@@ -165,6 +166,9 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message) 
 				}
 			case agent.EventFinal:
 				r.stopSpinner()
+				if len(ev.TurnMessages) > 0 {
+					turnMessages = append([]llm.Message(nil), ev.TurnMessages...)
+				}
 				fmt.Fprintln(out)
 			case agent.EventError:
 				r.stopSpinner()
@@ -207,7 +211,10 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message) 
 		fmt.Fprintf(r.out, "↳ done in %.1fs · %d tool · in %d / out %d tok\n",
 			time.Since(turnStart).Seconds(), toolCount, usageIn, usageOut)
 	}
-	return llm.Message{Role: llm.RoleAssistant, Content: finalContent.String()}, quit
+	if len(turnMessages) == 0 {
+		turnMessages = []llm.Message{{Role: llm.RoleAssistant, Content: finalContent.String()}}
+	}
+	return turnMessages, quit
 }
 
 // startSpinner sp が nil でなければスピナー描画を開始する。

@@ -35,5 +35,9 @@ if ! grep -q 'fetch_ok=true' "$WORK/out.log"; then
   printf "${RED}FAIL: web_fetch did not return markdown with paging guidance${NC}\n"
   exit 1
 fi
+if ! grep -q 'agent_web_flow_ok=true' "$WORK/out.log"; then
+  printf "${RED}FAIL: agent did not execute web_search then web_fetch before its first LLM request${NC}\n"
+  exit 1
+fi
 
 printf "${GREEN}OK: web_search and web_fetch tools work without real network${NC}\n"

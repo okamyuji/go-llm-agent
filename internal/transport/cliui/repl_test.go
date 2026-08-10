@@ -40,6 +40,28 @@ func (s scriptedSvc) Run(_ context.Context, _ agent.Input, out chan<- agent.Even
 	return nil
 }
 
+type historyCapturingSvc struct {
+	inputs []agent.Input
+}
+
+func (s *historyCapturingSvc) Run(_ context.Context, in agent.Input, out chan<- agent.Event) error {
+	s.inputs = append(s.inputs, in)
+	if len(s.inputs) == 1 {
+		turnMessages := []llm.Message{
+			{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "search1", Name: "web_search"}}},
+			{Role: llm.RoleTool, Name: "web_search", ToolCallID: "search1", Content: "search result"},
+			{Role: llm.RoleAssistant, Content: "first answer"},
+		}
+		out <- agent.Event{Kind: agent.EventDelta, Delta: "first answer"}
+		out <- agent.Event{Kind: agent.EventFinal, Final: &turnMessages[2], TurnMessages: turnMessages}
+		return nil
+	}
+	final := llm.Message{Role: llm.RoleAssistant, Content: "more detail"}
+	out <- agent.Event{Kind: agent.EventDelta, Delta: final.Content}
+	out <- agent.Event{Kind: agent.EventFinal, Final: &final, TurnMessages: []llm.Message{final}}
+	return nil
+}
+
 func TestRepl_OneTurn(t *testing.T) {
 	in := strings.NewReader("hi\n/quit\n")
 	var out bytes.Buffer
@@ -49,6 +71,35 @@ func TestRepl_OneTurn(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "hello") {
 		t.Fatalf("stream 表示なし: %q", out.String())
+	}
+}
+
+func TestRepl_PreservesToolMessagesForFollowUp(t *testing.T) {
+	svc := &historyCapturingSvc{}
+	in := strings.NewReader("最新情報を調べて\nもう少し詳しく\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	if len(svc.inputs) != 2 {
+		t.Fatalf("inputs=%d, want 2", len(svc.inputs))
+	}
+	got := svc.inputs[1].Messages
+	if len(got) != 5 {
+		t.Fatalf("second turn messages=%d, want 5: %+v", len(got), got)
+	}
+	if got[1].Role != llm.RoleAssistant || len(got[1].ToolCalls) != 1 {
+		t.Errorf("messages[1]=%+v, want assistant tool call", got[1])
+	}
+	if got[2].Role != llm.RoleTool || got[2].Content != "search result" {
+		t.Errorf("messages[2]=%+v, want tool result", got[2])
+	}
+	if got[3].Role != llm.RoleAssistant || got[3].Content != "first answer" {
+		t.Errorf("messages[3]=%+v, want first final answer", got[3])
+	}
+	if got[4].Role != llm.RoleUser || got[4].Content != "もう少し詳しく" {
+		t.Errorf("messages[4]=%+v, want follow-up user message", got[4])
 	}
 }
 

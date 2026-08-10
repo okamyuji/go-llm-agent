@@ -10,11 +10,14 @@ description = """\
 .env.example はマスク済みのサンプルなので allowlist。
 .env / config.yaml はローカル専用かつ /.gitignore で git 保護されており、
 git に混入する経路はないため作業ツリーの no-git scan からは除外する。
+models/ はコミットしないローカル GGUF の保存先であり、巨大なバイナリを
+シークレット検査しても有効な結果が得られないため除外する。
 """
 paths = [
   '''\.env\.example''',
   '''^\.env$''',
   '''^config\.yaml$''',
+  '''^models/''',
 ]
 regexes = [
   '''sk-\*\*\*''',

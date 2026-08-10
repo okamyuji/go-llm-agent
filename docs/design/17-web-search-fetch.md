@@ -157,13 +157,13 @@ agent:
 - websearch: `httptest.Server` を config の `endpoint` に指定し、DDG HTML フィクスチャで抽出・広告除外・`uddg` デコード・非 http スキーム破棄・0 件エラー・202 エラー分類・max_results クランプ・2MB 上限を検証します。
 - webfetch: `webgrab_path` にスタブスクリプト (固定 JSON を echo / 指定 exit code で終了 / スリープ) を指定し、正常系・各終了状態のマップ・タイムアウト・stdout 打ち切り・allow_domains 拒否・スキーム拒否・`--` の付与・バイナリ未検出を検証します。
 
-E2E (`tests/e2e/17-web-tools.sh`): fixtures/web_exercise は rag_exercise と同じツール直接呼び出し方式とし、ローカル `httptest` サーバ (web_search 用) とスタブ webgrab (web_fetch 用) で search → fetch の結果整形までを検証します。agent ループ経由の 2 段呼び出しは要求しません (LLM の挙動に依存するため)。CI で実インターネットへは出ません。
+E2E (`tests/e2e/17-web-tools.sh`): fixtures/web_exercise はローカル `httptest` サーバ (web_search 用) とスタブ webgrab (web_fetch 用) で各ツールの結果整形を検証します。さらにfake providerを使い、外部の最新情報を求める入力ではagentが最初のLLM呼び出し前に `web_search` → `web_fetch` を実行し、両方のtool結果をLLMメッセージへ追加することを検証します。CI で実インターネットへは出ません。
 
 実機確認 (手動、マージ前):
 
 1. 実 DDG に対し `web_search` を実行し、結果が返ること (UA 設定の有効性) を確認します。
 2. 実 webgrab で実ページを `web_fetch` し、本文とページング案内を確認します。
-3. Shisa (ctx 8192) 構成で「<最近の話題> について調べて」を投げ、search → fetch → 回答の連鎖が完走することを確認します。
+3. Shisa構成で「<最近の話題> について調べて」を投げ、agentによるsearch → fetchとモデルによる回答が1回の入力で完走することを確認します。続けて「もう少し詳しく」と入力し、前回答の再掲ではなく追加説明が返ることを確認します。
 
 ## 10. ドキュメント更新
 
