@@ -50,3 +50,25 @@ func TestSearch_MaxResultsTruncates(t *testing.T) {
 		t.Fatal("truncated true 期待")
 	}
 }
+
+func TestSearch_SkipsSensitiveFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=match\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "safe.txt"), []byte("match\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sb := tool.NewSandbox([]string{dir})
+	s := tool.NewSearchFiles(sb, config.SearchFilesConfig{MaxResults: 10})
+	res, _ := s.Execute(context.Background(), json.RawMessage(`{"root":"`+dir+`","pattern":"match"}`))
+	if res.IsError {
+		t.Fatalf("err: %s", res.Content)
+	}
+	if strings.Contains(res.Content, ".env") {
+		t.Fatalf("強制deny対象を検索してはならない: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, "safe.txt") {
+		t.Fatalf("通常ファイルは検索対象: %s", res.Content)
+	}
+}

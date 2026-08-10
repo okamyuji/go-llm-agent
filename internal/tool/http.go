@@ -9,11 +9,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/config"
 )
+
+var httpURLPattern = regexp.MustCompile(`(?i)^https?://`)
 
 // HTTPFetchTool http_fetch ツールの実装
 type HTTPFetchTool struct {
@@ -36,12 +39,6 @@ func NewHTTPFetchWithLogger(cfg config.HTTPFetchToolConfig, logger *slog.Logger)
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = 2 << 20
 	}
-	transport := &http.Transport{
-		DialContext: (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
-	}
-	if cfg.DenyPrivateNetworks {
-		transport.DialContext = privateDenyDialer(10 * time.Second)
-	}
 	doms := make([]string, 0, len(cfg.AllowDomains))
 	for _, d := range cfg.AllowDomains {
 		d = strings.ToLower(strings.TrimSpace(d))
@@ -49,7 +46,13 @@ func NewHTTPFetchWithLogger(cfg config.HTTPFetchToolConfig, logger *slog.Logger)
 			doms = append(doms, d)
 		}
 	}
-	return &HTTPFetchTool{
+	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: 10 * time.Second}).DialContext}
+	// private/local接続は、拒否を明示的に無効化し、かつ接続先をallow_domainsに
+	// 明示した場合だけ許可する。空のallow_domainsはpublic IPへの任意接続を表す。
+	if cfg.DenyPrivateNetworks || len(doms) == 0 {
+		transport.DialContext = privateDenyDialer(10 * time.Second)
+	}
+	tool := &HTTPFetchTool{
 		cfg: cfg,
 		http: &http.Client{
 			Timeout:   time.Duration(cfg.TimeoutSeconds) * time.Second,
@@ -58,6 +61,8 @@ func NewHTTPFetchWithLogger(cfg config.HTTPFetchToolConfig, logger *slog.Logger)
 		logger:       logger,
 		allowDomains: doms,
 	}
+	tool.http.CheckRedirect = tool.checkRedirect
+	return tool
 }
 
 // Spec ツール定義を返す
@@ -86,16 +91,19 @@ func (t *HTTPFetchTool) Execute(ctx context.Context, raw json.RawMessage) (Resul
 	if a.URL == "" {
 		return Result{IsError: true, Content: "url is required"}, nil
 	}
-	u, err := url.Parse(a.URL)
-	if err != nil || !strings.HasPrefix(strings.ToLower(u.Scheme), "http") {
+	if !httpURLPattern.MatchString(a.URL) {
 		return Result{IsError: true, Content: "url must be http(s)"}, nil
 	}
-	host := strings.ToLower(u.Hostname())
-	if !t.hostAllowed(host) {
-		t.audit(ctx, a.URL, host, 0, 0, false, "denied_domain")
-		return Result{IsError: true, Content: fmt.Sprintf("http_fetch: host %q は allow_domains に含まれていません", host)}, nil
+	u, err := url.Parse(a.URL)
+	if err != nil {
+		return Result{IsError: true, Content: "url must be http(s)"}, nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
+	host, err := t.validateDestination(u)
+	if err != nil {
+		t.audit(ctx, a.URL, host, 0, 0, false, "denied_domain")
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -133,6 +141,29 @@ func (t *HTTPFetchTool) hostAllowed(host string) bool {
 	return false
 }
 
+func (t *HTTPFetchTool) validateDestination(u *url.URL) (string, error) {
+	scheme := strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	if (scheme != "http" && scheme != "https") || host == "" || u.Opaque != "" {
+		return host, fmt.Errorf("url must be http(s) with a host")
+	}
+	if u.User != nil {
+		return host, fmt.Errorf("http_fetch: URL userinfo is not allowed")
+	}
+	if !t.hostAllowed(host) {
+		return host, fmt.Errorf("http_fetch: host %q は allow_domains に含まれていません", host)
+	}
+	return host, nil
+}
+
+func (t *HTTPFetchTool) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("http_fetch: stopped after 10 redirects")
+	}
+	_, err := t.validateDestination(req.URL)
+	return err
+}
+
 func wrapUntrusted(status int, source, body string) string {
 	return fmt.Sprintf(
 		"[HTTP %d] [untrusted external content from %s]\n%s\n[end untrusted content]",
@@ -166,7 +197,7 @@ func privateDenyDialer(timeout time.Duration) func(ctx context.Context, network,
 	d := &net.Dialer{Timeout: timeout}
 	resolver := net.DefaultResolver
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
+		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, err
 		}
@@ -180,7 +211,14 @@ func privateDenyDialer(timeout time.Duration) func(ctx context.Context, network,
 				return nil, fmt.Errorf("http_fetch: private or loopback IP rejected: %s", ip.IP)
 			}
 		}
-		return d.DialContext(ctx, network, addr)
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("http_fetch: host resolved to no IP addresses")
+		}
+		ip := ips[0].IP.String()
+		if ips[0].Zone != "" {
+			ip += "%" + ips[0].Zone
+		}
+		return d.DialContext(ctx, network, net.JoinHostPort(ip, port))
 	}
 }
 

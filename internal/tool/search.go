@@ -63,18 +63,30 @@ func (t *SearchFilesTool) Execute(ctx context.Context, raw json.RawMessage) (Res
 	if a.Root == "" || a.Pattern == "" {
 		return Result{IsError: true, Content: "root and pattern are required"}, nil
 	}
-	if err := t.sb.CheckPath(a.Root); err != nil {
+	allowedRoot, relativeRoot, err := t.sb.openRootForPath(a.Root)
+	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+	defer func() { _ = allowedRoot.Close() }()
+	if info, lerr := allowedRoot.Lstat(relativeRoot); lerr != nil {
+		return Result{IsError: true, Content: lerr.Error()}, nil
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		return Result{IsError: true, Content: fmt.Sprintf("sandbox: symlink 経由の検索は拒否 %q", a.Root)}, nil
+	}
+	searchRoot, err := allowedRoot.OpenRoot(relativeRoot)
+	if err != nil {
+		return Result{IsError: true, Content: err.Error()}, nil
+	}
+	defer func() { _ = searchRoot.Close() }()
 	re, err := regexp.Compile(a.Pattern)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	gitIgnore := loadGitIgnore(a.Root)
+	gitIgnore := loadGitIgnore(searchRoot)
 
 	var out []string
 	truncated := false
-	walkErr := filepath.WalkDir(a.Root, func(path string, d fs.DirEntry, walkErr error) error {
+	walkErr := fs.WalkDir(searchRoot.FS(), ".", func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
 		}
@@ -86,12 +98,22 @@ func (t *SearchFilesTool) Execute(ctx context.Context, raw json.RawMessage) (Res
 			if name == ".git" || name == "node_modules" {
 				return filepath.SkipDir
 			}
-			if gitIgnore.match(path, a.Root, true) {
+			if path != "." {
+				fullPath := filepath.Join(searchRoot.Name(), filepath.FromSlash(path))
+				if err := t.sb.CheckPath(fullPath); err != nil {
+					return filepath.SkipDir
+				}
+			}
+			if gitIgnore.match(path) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if gitIgnore.match(path, a.Root, false) {
+		fullPath := filepath.Join(searchRoot.Name(), filepath.FromSlash(path))
+		if err := t.sb.CheckPath(fullPath); err != nil {
+			return nil
+		}
+		if gitIgnore.match(path) {
 			return nil
 		}
 		if len(a.Globs) > 0 {
@@ -107,7 +129,7 @@ func (t *SearchFilesTool) Execute(ctx context.Context, raw json.RawMessage) (Res
 				return nil
 			}
 		}
-		f, err := os.Open(path)
+		f, err := searchRoot.Open(filepath.FromSlash(path))
 		if err != nil {
 			return nil
 		}
@@ -123,7 +145,7 @@ func (t *SearchFilesTool) Execute(ctx context.Context, raw json.RawMessage) (Res
 					truncated = true
 					return errSearchMaxResults
 				}
-				out = append(out, fmt.Sprintf("%s:%d:%s", path, ln, line))
+				out = append(out, fmt.Sprintf("%s:%d:%s", fullPath, ln, line))
 			}
 		}
 		_ = sc.Err()
@@ -139,8 +161,8 @@ type gitIgnoreSet struct {
 	patterns []string
 }
 
-func loadGitIgnore(root string) gitIgnoreSet {
-	b, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+func loadGitIgnore(root *os.Root) gitIgnoreSet {
+	b, err := root.ReadFile(".gitignore")
 	if err != nil {
 		return gitIgnoreSet{}
 	}
@@ -156,12 +178,8 @@ func loadGitIgnore(root string) gitIgnoreSet {
 	return gitIgnoreSet{patterns: pats}
 }
 
-func (g gitIgnoreSet) match(path, root string, _ bool) bool {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	rel = filepath.ToSlash(rel)
+func (g gitIgnoreSet) match(path string) bool {
+	rel := filepath.ToSlash(path)
 	base := filepath.Base(rel)
 	for _, p := range g.patterns {
 		if ok, _ := filepath.Match(p, rel); ok {

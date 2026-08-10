@@ -21,7 +21,7 @@ func TestHTTPFetch_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 	// プライベートネットワーク拒否はオフで動作確認
-	ht := tool.NewHTTPFetch(config.HTTPFetchToolConfig{DenyPrivateNetworks: false, TimeoutSeconds: 5, MaxBodyBytes: 1024})
+	ht := tool.NewHTTPFetch(localHTTPConfig(t, srv))
 	res, _ := ht.Execute(context.Background(), json.RawMessage(`{"url":"`+srv.URL+`"}`))
 	if res.IsError {
 		t.Fatalf("error result: %s", res.Content)
@@ -39,6 +39,22 @@ func TestHTTPFetch_RejectsNonHTTP(t *testing.T) {
 	}
 }
 
+func TestHTTPFetch_RejectsHTTPPrefixScheme(t *testing.T) {
+	ht := tool.NewHTTPFetch(config.HTTPFetchToolConfig{})
+	res, _ := ht.Execute(context.Background(), json.RawMessage(`{"url":"httpx://example.com/"}`))
+	if !res.IsError {
+		t.Fatal("http/https 以外のスキームは IsError")
+	}
+}
+
+func TestHTTPFetch_RejectsUserinfo(t *testing.T) {
+	ht := tool.NewHTTPFetch(config.HTTPFetchToolConfig{})
+	res, _ := ht.Execute(context.Background(), json.RawMessage(`{"url":"https://user:pass@example.com/"}`))
+	if !res.IsError {
+		t.Fatal("userinfo を含む URL は IsError")
+	}
+}
+
 func TestHTTPFetch_RejectsPrivate(t *testing.T) {
 	ht := tool.NewHTTPFetch(config.HTTPFetchToolConfig{DenyPrivateNetworks: true, TimeoutSeconds: 5})
 	res, _ := ht.Execute(context.Background(), json.RawMessage(`{"url":"http://127.0.0.1:1/"}`))
@@ -52,7 +68,7 @@ func TestHTTPFetch_UntrustedWrapping(t *testing.T) {
 		_, _ = w.Write([]byte("payload"))
 	}))
 	defer srv.Close()
-	ht := tool.NewHTTPFetch(config.HTTPFetchToolConfig{DenyPrivateNetworks: false, TimeoutSeconds: 5, MaxBodyBytes: 1024})
+	ht := tool.NewHTTPFetch(localHTTPConfig(t, srv))
 	res, _ := ht.Execute(context.Background(), json.RawMessage(`{"url":"`+srv.URL+`"}`))
 	if res.IsError {
 		t.Fatalf("err: %s", res.Content)
@@ -65,6 +81,40 @@ func TestHTTPFetch_UntrustedWrapping(t *testing.T) {
 	}
 	if !strings.Contains(res.Content, "payload") {
 		t.Fatalf("payload を含むこと: %s", res.Content)
+	}
+}
+
+func TestHTTPFetch_PrivateAccessRequiresExplicitDomain(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("should not be reached"))
+	}))
+	defer srv.Close()
+	ht := tool.NewHTTPFetch(config.HTTPFetchToolConfig{
+		DenyPrivateNetworks: false,
+		TimeoutSeconds:      5,
+		MaxBodyBytes:        1024,
+	})
+	res, _ := ht.Execute(context.Background(), json.RawMessage(`{"url":"`+srv.URL+`"}`))
+	if !res.IsError || !strings.Contains(res.Content, "private or loopback") {
+		t.Fatalf("private network 無効化には明示ドメインが必要: %+v", res)
+	}
+}
+
+func TestHTTPFetch_RedirectRevalidatesDomain(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("target"))
+	}))
+	defer target.Close()
+	targetURL := strings.Replace(target.URL, "127.0.0.1", "localhost", 1)
+	start := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, targetURL, http.StatusFound)
+	}))
+	defer start.Close()
+
+	ht := tool.NewHTTPFetch(localHTTPConfig(t, start))
+	res, _ := ht.Execute(context.Background(), json.RawMessage(`{"url":"`+start.URL+`"}`))
+	if !res.IsError || !strings.Contains(res.Content, "allow_domains") {
+		t.Fatalf("redirect先にもallow_domainsを適用する必要がある: %+v", res)
 	}
 }
 
@@ -114,13 +164,20 @@ func TestHTTPFetch_AuditLog(t *testing.T) {
 	defer srv.Close()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	ht := tool.NewHTTPFetchWithLogger(config.HTTPFetchToolConfig{
-		DenyPrivateNetworks: false,
-		TimeoutSeconds:      5,
-		MaxBodyBytes:        1024,
-	}, logger)
+	ht := tool.NewHTTPFetchWithLogger(localHTTPConfig(t, srv), logger)
 	_, _ = ht.Execute(context.Background(), json.RawMessage(`{"url":"`+srv.URL+`"}`))
 	if !strings.Contains(buf.String(), `tool=http_fetch`) {
 		t.Fatalf("audit ログ: %s", buf.String())
+	}
+}
+
+func localHTTPConfig(t *testing.T, srv *httptest.Server) config.HTTPFetchToolConfig {
+	t.Helper()
+	host := srv.Listener.Addr().(*net.TCPAddr).IP.String()
+	return config.HTTPFetchToolConfig{
+		DenyPrivateNetworks: false,
+		TimeoutSeconds:      5,
+		MaxBodyBytes:        1024,
+		AllowDomains:        []string{host},
 	}
 }

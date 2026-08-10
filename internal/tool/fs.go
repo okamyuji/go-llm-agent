@@ -58,18 +58,21 @@ func (t *FSRead) Execute(ctx context.Context, raw json.RawMessage) (Result, erro
 	if a.Path == "" {
 		return Result{IsError: true, Content: "path is required"}, nil
 	}
-	if err := t.sb.CheckPath(a.Path); err != nil {
+	root, relative, err := t.sb.openRootForPath(a.Path)
+	if err != nil {
 		auditFS(ctx, t.logger, "fs_read", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	// TOCTOU 緩和: 終端パスが symlink の場合、CheckPath で確認した実体と異なる可能性があるため拒否
-	// （完全な TOCTOU 防御には openat2/O_NOFOLLOW が必要だが、ポータビリティのため Lstat ベース）
-	if info, lerr := os.Lstat(a.Path); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+	defer func() { _ = root.Close() }()
+	if info, lerr := root.Lstat(relative); lerr != nil {
+		auditFS(ctx, t.logger, "fs_read", a.Path, 0, false, lerr.Error())
+		return Result{IsError: true, Content: lerr.Error()}, nil
+	} else if info.Mode()&os.ModeSymlink != 0 {
 		msg := fmt.Sprintf("sandbox: symlink 経由のアクセスは拒否 %q", a.Path)
 		auditFS(ctx, t.logger, "fs_read", a.Path, 0, false, msg)
 		return Result{IsError: true, Content: msg}, nil
 	}
-	f, err := os.Open(a.Path)
+	f, err := root.Open(relative)
 	if err != nil {
 		auditFS(ctx, t.logger, "fs_read", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
@@ -136,22 +139,25 @@ func (t *FSWrite) Execute(ctx context.Context, raw json.RawMessage) (Result, err
 	if a.Path == "" {
 		return Result{IsError: true, Content: "path is required"}, nil
 	}
-	if err := t.sb.CheckPath(a.Path); err != nil {
+	root, relative, err := t.sb.openRootForPath(a.Path)
+	if err != nil {
 		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	// TOCTOU 緩和: 既存ファイルが symlink の場合は上書き先がリンク先となるため拒否
-	if info, lerr := os.Lstat(a.Path); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
+	defer func() { _ = root.Close() }()
+	if info, lerr := root.Lstat(relative); lerr == nil && info.Mode()&os.ModeSymlink != 0 {
 		msg := fmt.Sprintf("sandbox: 既存パスが symlink のため拒否 %q", a.Path)
 		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, msg)
 		return Result{IsError: true, Content: msg}, nil
+	} else if lerr != nil && !os.IsNotExist(lerr) {
+		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, lerr.Error())
+		return Result{IsError: true, Content: lerr.Error()}, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(a.Path), 0o755); err != nil {
+	if err := root.MkdirAll(filepath.Dir(relative), 0o755); err != nil {
 		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	// O_CREATE|O_TRUNC で書き込み。symlink 経由の置換攻撃に対する完全防御には openat2 が必要
-	if err := os.WriteFile(a.Path, []byte(a.Content), 0o600); err != nil {
+	if err := root.WriteFile(relative, []byte(a.Content), 0o600); err != nil {
 		auditFS(ctx, t.logger, "fs_write", a.Path, 0, false, err.Error())
 		return Result{IsError: true, Content: err.Error()}, nil
 	}

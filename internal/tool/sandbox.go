@@ -41,6 +41,11 @@ type Sandbox struct {
 	denyPatterns []string
 }
 
+type sandboxPath struct {
+	root     string
+	relative string
+}
+
 // NewSandbox 許可ルート群から Sandbox を生成する。deny パターンは未指定とする
 func NewSandbox(roots []string) *Sandbox {
 	return NewSandboxWithDeny(roots, nil)
@@ -68,47 +73,71 @@ func NewSandboxWithDeny(roots, deny []string) *Sandbox {
 
 // CheckPath path が許可ルート配下かつ deny パターンに該当しないかを確認する
 func (s *Sandbox) CheckPath(path string) error {
+	_, err := s.resolvePath(path)
+	return err
+}
+
+// openRootForPath は path を検証し、許可ルートに固定したファイル操作ハンドルと相対名を返す。
+// 呼び出し側は返された Root を Close すること。
+func (s *Sandbox) openRootForPath(path string) (*os.Root, string, error) {
+	resolved, err := s.resolvePath(path)
+	if err != nil {
+		return nil, "", err
+	}
+	if !filepath.IsLocal(resolved.relative) {
+		return nil, "", fmt.Errorf("sandbox: ルート相対パスがローカルではありません %q", resolved.relative)
+	}
+	root, err := os.OpenRoot(resolved.root)
+	if err != nil {
+		return nil, "", fmt.Errorf("sandbox: 許可ルートを開けません: %w", err)
+	}
+	return root, resolved.relative, nil
+}
+
+func (s *Sandbox) resolvePath(path string) (sandboxPath, error) {
 	if path == "" {
-		return fmt.Errorf("sandbox: パスが空です")
+		return sandboxPath{}, fmt.Errorf("sandbox: パスが空です")
 	}
 	// 正規化前の入力に .. セグメントがある場合は早期拒否
 	// filepath.Clean が .. を消す前に検出することで意図を明確化する
 	expanded := expandTilde(path)
 	if hasDotDotSegment(expanded) {
-		return fmt.Errorf("sandbox: パスに上位ディレクトリ参照が含まれています %q", path)
+		return sandboxPath{}, fmt.Errorf("sandbox: パスに上位ディレクトリ参照が含まれています %q", path)
 	}
 	abs, err := filepath.Abs(expanded)
 	if err != nil {
-		return fmt.Errorf("sandbox: 絶対パス変換失敗: %w", err)
+		return sandboxPath{}, fmt.Errorf("sandbox: 絶対パス変換失敗: %w", err)
 	}
 	clean := filepath.Clean(abs)
 	// Clean 後に .. が残るケース（許可ルート外への遡上）も二段で拒否
 	if hasDotDotSegment(clean) {
-		return fmt.Errorf("sandbox: パスに上位ディレクトリ参照が含まれています %q", path)
+		return sandboxPath{}, fmt.Errorf("sandbox: パスに上位ディレクトリ参照が含まれています %q", path)
 	}
 	// canonical 確定（存在しないパスは祖先まで遡って解決）
 	canonical := canonicalize(clean)
 	// allow ルート判定
-	allowed := false
-	for _, r := range s.allowedRoots {
-		if canonical == r || strings.HasPrefix(canonical, r+string(filepath.Separator)) {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		return fmt.Errorf("sandbox: パス %q は許可ルート外", canonical)
-	}
-	// deny 判定（許可ルート相対のサブパスのいずれかのセグメントが deny にマッチする場合拒否）
 	for _, r := range s.allowedRoots {
 		if rel, ok := relIfDescendant(r, canonical); ok {
 			if matchesDenySegments(rel, s.denyPatterns) {
-				return fmt.Errorf("sandbox: パス %q はセンシティブなパターンに一致 (%s)", canonical, denyMatch(rel, s.denyPatterns))
+				return sandboxPath{}, fmt.Errorf("sandbox: パス %q はセンシティブなパターンに一致 (%s)", canonical, denyMatch(rel, s.denyPatterns))
 			}
-			break
+
+			// 親だけを解決して終端名を残し、Root.Lstat で終端symlinkを検出できるようにする。
+			operationPath := canonical
+			if canonical != r {
+				candidate := filepath.Join(canonicalize(filepath.Dir(clean)), filepath.Base(clean))
+				if candidateRel, inside := relIfDescendant(r, candidate); inside {
+					if matchesDenySegments(candidateRel, s.denyPatterns) {
+						return sandboxPath{}, fmt.Errorf("sandbox: パス %q はセンシティブなパターンに一致 (%s)", candidate, denyMatch(candidateRel, s.denyPatterns))
+					}
+					operationPath = candidate
+				}
+			}
+			operationRel, _ := relIfDescendant(r, operationPath)
+			return sandboxPath{root: r, relative: operationRel}, nil
 		}
 	}
-	return nil
+	return sandboxPath{}, fmt.Errorf("sandbox: パス %q は許可ルート外", canonical)
 }
 
 // canonicalize 存在しないパスでも EvalSymlinks できるように、存在する祖先まで遡る
