@@ -141,10 +141,14 @@ E2Eスクリプトは `tests/e2e/11-rag-mvp.sh` で、fixtures/rag_exerciseが2�
 
 ## Web 検索と本文取得 (web_search / web_fetch)
 
-LLM が「検索 → URL 選択 → 本文取得 → 回答」を tool calling で自律的に行うための 2 ツールです。どちらも `agent.enabled_tools` に明示した場合のみ有効になります。
+外部の最新情報を「検索 → URL 選択 → 本文取得 → 回答」の順で扱うための2ツールです。どちらも `agent.enabled_tools` に明示した場合のみ有効になります。
 
 - `web_search`: DuckDuckGo HTML から検索結果 (タイトル・URL・抜粋) を上位 N 件抽出して JSON で返します。広告ブロックは除外します。
 - `web_fetch`: URL の本文をボイラープレート除去済み Markdown で返します。長い本文は `start_index` でページングできます。
+
+最新・現在・今日・時点・ニュース・天気、またはWeb・ネットでの検索を明示する入力では、agentが最初のLLM呼び出し前に `web_search` を1回実行し、成功時は検索結果の1件を `web_fetch` で1回取得します。モデルのtool choice対応に依存しないため、1回の入力で本文を根拠に回答できます。「公式」または `official` を含む入力では、入力中の英数字語とhost名が一致するURLを優先します。`agent.tool_choice.mode: none` はこの自動実行も無効にします。ローカルファイル検索との混同を避けるため、`検索して` や `バージョン` だけでは自動実行しません。
+
+REPLは各ターンのassistant tool callとtool結果を次のターンへ引き継ぎます。標準の `prompts/coding-accuracy.md` は、「もう少し詳しく」などの追質問に対して保存済み本文を使い、既出回答以外の背景・変更点・注意点・理由・具体例を2項目以上答える方針を定義します。agentは追質問の生成候補を画面へ送る前に検査し、既出内容、導入句だけの応答、prompt断片、Web本文に対応しない内容を除外します。本文を伴う2項目を満たさない場合は最大3回生成し直します。
 
 `web_fetch` は外部 CLI webgrab に本文抽出を委譲します。webgrab は本文抽出 (Readability)、全リダイレクトホップでの SSRF 防止、出力インジェクション無害化を実装済みです。crates.io には未公開のため、webgrab のソースツリー (リポジトリ名 llm-web-fetch) を取得してソースからインストールします:
 
@@ -168,7 +172,7 @@ agent:
 
 取得内容は未検証の外部データとして `[UNTRUSTED INPUT]` 標識付きで LLM に渡ります。Web 由来の本文はプロンプトインジェクションのベクタになるため、`fs_write` や `shell` と併用する場合は `agent.approval.required_tools` に書き込み系ツールを列挙して HITL 承認を必ず挟んでください。取得結果を保存したい場合は LLM に `note_add` を使わせると RAG (ローカルノート) に蓄積されます。
 
-E2Eスクリプトは `tests/e2e/17-web-tools.sh` で、実ネットワークに出ずに httptest とスタブ webgrab で検証します。設計の詳細は `docs/design/17-web-search-fetch.md` を参照してください。
+E2Eスクリプトは `tests/e2e/17-web-tools.sh` で、実ネットワークに出ずにhttptestとスタブwebgrabを使い、各ツールとagentの検索→本文取得を検証します。設計の詳細は `docs/design/17-web-search-fetch.md` を参照してください。
 
 ## コンテキスト拡充 (enricher)
 
@@ -556,7 +560,7 @@ make build-all           # 6 バイナリへクロスコンパイル
 
 `scripts/quality-gate.sh` は **pre-commit と CI で同一コマンド** を実行する単一エントリです。gofmt / go vet / staticcheck / golangci-lint / govulncheck / `go test
 --count=1 --shuffle=on -race -cover` / `gitleaks detect --no-git --source .` を順に走らせます。
-gitleaks は作業ツリーを直接スキャンする方式に統一しており、pre-commit でもステージ済み・未ステージ含む全ファイルを検査します。
+gitleaks は作業ツリーを直接スキャンする方式に統一しており、pre-commit でもステージ済み・未ステージのファイルを検査します。`.gitleaks.toml` で明示したローカル専用ファイルと、コミット対象外のGGUF保存先 `models/` は検査から除外します。
 
 ## ライセンス
 

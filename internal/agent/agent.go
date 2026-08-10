@@ -50,9 +50,12 @@ type Event struct {
 	ToolCall   *llm.ToolCall
 	ToolResult *ToolResult
 	Final      *llm.Message
-	Err        error
-	Usage      *llm.Usage
-	Cost       *billing.Snapshot
+	// TurnMessages は1回のRunで入力履歴の後へ追加したメッセージ列。
+	// 対話クライアントがtool callとtool結果を次ターンへ引き継ぐために使う。
+	TurnMessages []llm.Message
+	Err          error
+	Usage        *llm.Usage
+	Cost         *billing.Snapshot
 }
 
 // Service エージェント実行サービス
