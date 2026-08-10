@@ -135,7 +135,13 @@ func run() error {
 		return fmt.Errorf("LLM requests = %d, want 1", len(provider.requests))
 	}
 	messages := provider.requests[0].Messages
-	if len(messages) != 5 || messages[2].Role != llm.RoleTool || messages[2].Name != "web_search" || messages[4].Role != llm.RoleTool || messages[4].Name != "web_fetch" {
+	if len(messages) != 5 ||
+		messages[1].Role != llm.RoleAssistant || len(messages[1].ToolCalls) != 1 || messages[1].ToolCalls[0].Name != "web_search" ||
+		messages[2].Role != llm.RoleTool || messages[2].Name != "web_search" || messages[2].ToolCallID != messages[1].ToolCalls[0].ID ||
+		!strings.Contains(messages[2].Content, "https://example.com/doc") ||
+		messages[3].Role != llm.RoleAssistant || len(messages[3].ToolCalls) != 1 || messages[3].ToolCalls[0].Name != "web_fetch" ||
+		messages[4].Role != llm.RoleTool || messages[4].Name != "web_fetch" || messages[4].ToolCallID != messages[3].ToolCalls[0].ID ||
+		!strings.Contains(messages[4].Content, "# Example Doc") {
 		return fmt.Errorf("LLM messages do not contain search and fetch results: %+v", messages)
 	}
 	fmt.Println("agent_web_flow_ok=true")

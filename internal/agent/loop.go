@@ -21,8 +21,9 @@ import (
 const defaultApprovalTimeout = 5 * time.Minute
 
 const (
-	maxExpansionRetries   = 3
+	maxResponseRetries    = 3
 	expansionAnswerPrefix = "直前の回答に含まれていない追加情報です。"
+	untrustedInputSuffix  = "\n[END UNTRUSTED]"
 )
 
 // Run Strategy に処理を委譲する。Strategy 未設定なら ReAct で動く
@@ -117,8 +118,7 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 
 			if !searchOutcome.IsError {
 				if _, ok := s.tools.Lookup("web_fetch"); ok {
-					searchContent := strings.TrimPrefix(searchOutcome.Content, "[UNTRUSTED INPUT: tool=web_search]\n")
-					searchContent = strings.TrimSuffix(searchContent, "\n[END UNTRUSTED]")
+					searchContent := unwrapUntrusted(searchOutcome.Content, "web_search")
 					if fetchURL := selectWebFetchURL(searchContent, prompt); fetchURL != "" {
 						fetchArgs, fetchMarshalErr := json.Marshal(map[string]string{"url": fetchURL})
 						if fetchMarshalErr != nil {
@@ -139,13 +139,23 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 		}
 	}
 	if automaticWebToolsExecuted {
-		tools = nil
 		tc = nil
 	}
 	expansionRetries := 0
+	answerRetries := 0
 	for hop := 0; hop <= in.MaxToolHops; hop++ {
+		requestTools := tools
+		if automaticWebToolsExecuted && hop == 0 {
+			requestTools = nil
+		}
 		llmCtx, llmSpan := obs.StartLLMSpan(ctx, prov.Name(), model)
-		stream, err := prov.Stream(llmCtx, llm.ChatRequest{Model: model, Messages: msgs, Tools: tools, ToolChoice: tc})
+		stream, err := prov.Stream(llmCtx, llm.ChatRequest{
+			Model:       model,
+			Messages:    msgs,
+			Tools:       requestTools,
+			ToolChoice:  tc,
+			Temperature: generationRetryTemperature(max(expansionRetries, answerRetries)),
+		})
 		if err != nil {
 			llmSpan.End()
 			out <- Event{Kind: EventError, Err: err}
@@ -174,7 +184,7 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 					delta = s.redactor.Redact(delta)
 				}
 				contentBuilder.WriteString(delta)
-				if !expansionRequested {
+				if !expansionRequested && !automaticWebToolsExecuted {
 					out <- Event{Kind: EventDelta, Delta: delta}
 				}
 			}
@@ -215,9 +225,21 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 		}
 		llmSpan.End()
 
+		if pendingCall == nil && automaticWebToolsExecuted {
+			if !answerContentSufficient(assistantContent) && answerRetries < maxResponseRetries {
+				answerRetries++
+				hop-- // 回答の再生成はtool hopとして数えない。
+				continue
+			}
+			if !answerContentSufficient(assistantContent) {
+				assistantContent = "Web取得結果から完全な回答を生成できませんでした。質問を具体化して再実行してください。"
+			}
+			out <- Event{Kind: EventDelta, Delta: assistantContent}
+		}
+
 		if pendingCall == nil && expansionRequested {
 			expandedContent := expandedAnswerContent(priorAssistantContent, expansionGroundingContent, assistantContent)
-			if !expansionAnswerSufficient(expandedContent) && expansionRetries < maxExpansionRetries {
+			if !expansionAnswerSufficient(expandedContent) && expansionRetries < maxResponseRetries {
 				expansionRetries++
 				hop-- // 追加説明の再生成はtool hopとして数えない。
 				continue
@@ -313,7 +335,7 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 		// 06 番設計書 全ツール出力に untrusted マーカーを無条件付与する
 		// 旧実装は "[UNTRUSTED INPUT" 接頭辞ありで skip していたが、ツールが攻撃的に
 		// 自前マーカーを偽装した場合に外周のラップを回避できる穴があったため常に付与する
-		content = "[UNTRUSTED INPUT: tool=" + pendingCall.Name + "]\n" + content + "\n[END UNTRUSTED]"
+		content = wrapUntrusted(content, pendingCall.Name)
 		if s.redactor != nil {
 			content = s.redactor.Redact(content)
 		}
@@ -338,7 +360,7 @@ func requiresWebSearch(msgs []llm.Message) bool {
 		return false
 	}
 	for _, term := range []string{
-		"最新", "現在", "今日", "時点", "ニュース", "天気",
+		"最新", "ニュース", "天気",
 		"search the web", "look up",
 	} {
 		if strings.Contains(prompt, term) {
@@ -402,13 +424,16 @@ func expandedAnswerContent(prior, grounding, candidate string) string {
 	priorNormalized := normalizeExpansionText(prior)
 	priorDigits := digitSequence(prior)
 	groundingNormalized := normalizeExpansionText(grounding)
+	requireJapanese := containsJapaneseKana(prior)
 	var novel []string
-	for _, segment := range strings.FieldsFunc(candidate, func(r rune) bool {
-		return r == '\n' || r == '。' || r == '！' || r == '？' || r == '!' || r == '?'
-	}) {
-		segment = strings.TrimSpace(strings.TrimLeft(segment, "#*-_>• \t"))
+	for _, segment := range splitExpansionSegments(candidate) {
+		segment = strings.TrimSpace(strings.TrimLeft(segment, "#*+-_>• \t"))
 		normalized := normalizeExpansionText(segment)
-		if len([]rune(normalized)) < 4 || expansionFiller(normalized) || expansionTemplateArtifact(segment) || expansionCoveredByPrior(priorNormalized, normalized) {
+		if len([]rune(normalized)) < 4 ||
+			(requireJapanese && !containsJapaneseKana(segment)) ||
+			expansionFiller(normalized) ||
+			expansionTemplateArtifact(segment) ||
+			expansionCoveredByPrior(priorNormalized, normalized) {
 			continue
 		}
 		if digits := digitSequence(segment); len(digits) >= 2 && strings.Contains(priorDigits, digits) {
@@ -426,6 +451,74 @@ func expandedAnswerContent(prior, grounding, candidate string) string {
 		return ""
 	}
 	return expansionAnswerPrefix + "\n\n- " + strings.Join(novel, "\n- ")
+}
+
+// containsJapaneseKana は日本語回答に通常含まれるひらがな・カタカナの有無を返す。
+func containsJapaneseKana(content string) bool {
+	for _, r := range content {
+		if (r >= '\u3040' && r <= '\u30ff') || (r >= '\uff66' && r <= '\uff9f') {
+			return true
+		}
+	}
+	return false
+}
+
+// splitExpansionSegments は改行で候補を分割しつつ、文末記号を各文に残す。
+func splitExpansionSegments(candidate string) []string {
+	var segments []string
+	var current strings.Builder
+	for _, r := range candidate {
+		if r == '\n' {
+			if current.Len() > 0 {
+				segments = append(segments, current.String())
+				current.Reset()
+			}
+			continue
+		}
+		current.WriteRune(r)
+		if r == '。' || r == '！' || r == '？' || r == '!' || r == '?' {
+			segments = append(segments, current.String())
+			current.Reset()
+		}
+	}
+	if current.Len() > 0 {
+		segments = append(segments, current.String())
+	}
+	return segments
+}
+
+// generationRetryTemperature は再試行ごとに生成条件を変え、同一要求の反復を避ける。
+func generationRetryTemperature(retry int) *float64 {
+	if retry <= 0 {
+		return nil
+	}
+	temperature := min(float64(retry*3)/10, 0.9)
+	return &temperature
+}
+
+// answerContentSufficient は自動Web実行後の出力が空文・見出し・生のツール要求でないことを確認する。
+func answerContentSufficient(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || expansionFiller(normalizeExpansionText(trimmed)) {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "[tool_calls]") ||
+		(strings.Contains(lower, `"name"`) && strings.Contains(lower, `"arguments"`) && strings.Contains(lower, "web_")) {
+		return false
+	}
+	return true
+}
+
+// wrapUntrusted はツール出力をモデル向けの非信頼入力境界で囲む。
+func wrapUntrusted(content, toolName string) string {
+	return "[UNTRUSTED INPUT: tool=" + toolName + "]\n" + content + untrustedInputSuffix
+}
+
+// unwrapUntrusted は指定ツールの外側の非信頼入力境界だけを取り除く。
+func unwrapUntrusted(content, toolName string) string {
+	prefix := "[UNTRUSTED INPUT: tool=" + toolName + "]\n"
+	return strings.TrimSuffix(strings.TrimPrefix(content, prefix), untrustedInputSuffix)
 }
 
 func digitSequence(s string) string {

@@ -294,6 +294,92 @@ func TestRun_RequiresWebSearchThenFetchForCurrentInfo(t *testing.T) {
 	}
 }
 
+func TestRun_AutomaticWebFlowRetriesRawToolCallTextBeforeEmittingAnswer(t *testing.T) {
+	prov := &fakeProvider{streams: [][]llm.StreamEvent{
+		{{DeltaText: ` [TOOL_CALLS][{"name":"web_fetch","arguments":{"url":"https://example.com/other"}}] `}},
+		{{DeltaText: "Go 1.26.5です。公式URLは https://go.dev/ です。"}},
+	}}
+	tools := tool.NewRegistry([]tool.Tool{
+		namedTool{name: "web_search", content: `{"results":[{"url":"https://go.dev/"}]}`},
+		namedTool{name: "web_fetch", content: "Go 1.26.5 release information"},
+	}, []string{"web_search", "web_fetch"})
+	svc := agent.New(fakeReg{p: prov}, tools)
+
+	out := make(chan agent.Event, 16)
+	err := svc.Run(context.Background(), agent.Input{
+		Model:       "fake/m",
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: "Goの最新安定版をWeb検索して"}},
+		MaxToolHops: 3,
+	}, out)
+	close(out)
+	if err != nil {
+		t.Fatalf("run err=%v", err)
+	}
+	var deltas strings.Builder
+	var final *llm.Message
+	for event := range out {
+		if event.Kind == agent.EventDelta {
+			deltas.WriteString(event.Delta)
+		}
+		if event.Kind == agent.EventFinal {
+			final = event.Final
+		}
+	}
+	if len(prov.requests) != 2 {
+		t.Fatalf("requests=%d, want one retry", len(prov.requests))
+	}
+	if prov.requests[0].Temperature != nil || prov.requests[1].Temperature == nil || *prov.requests[1].Temperature != 0.3 {
+		t.Errorf("retry temperatures=(%v, %v), want (nil, 0.3)", prov.requests[0].Temperature, prov.requests[1].Temperature)
+	}
+	if final == nil {
+		t.Fatal("EventFinal not emitted")
+	}
+	if strings.Contains(deltas.String(), "TOOL_CALLS") || strings.Contains(final.Content, "TOOL_CALLS") {
+		t.Errorf("raw tool call text was emitted: deltas=%q final=%q", deltas.String(), final.Content)
+	}
+	if deltas.String() != final.Content || !strings.Contains(final.Content, "Go 1.26.5") {
+		t.Errorf("deltas=%q final=%q, want only complete answer", deltas.String(), final.Content)
+	}
+}
+
+func TestRun_AutomaticWebToolsAreWithheldOnlyFromFirstLLMRequest(t *testing.T) {
+	prov := &fakeProvider{streams: [][]llm.StreamEvent{
+		{{ToolCall: &llm.ToolCall{ID: "echo1", Name: "echo", Arguments: json.RawMessage(`{"value":"x"}`)}}},
+		{{DeltaText: "done"}},
+	}}
+	tools := tool.NewRegistry([]tool.Tool{
+		namedTool{name: "web_search", content: `{"results":[{"url":"https://example.com/"}]}`},
+		namedTool{name: "web_fetch", content: "body"},
+		echoTool{},
+	}, []string{"web_search", "web_fetch", "echo"})
+	svc := agent.New(fakeReg{p: prov}, tools)
+
+	out := make(chan agent.Event, 16)
+	err := svc.Run(context.Background(), agent.Input{
+		Model:       "fake/m",
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: "今日のニュースをWeb検索して"}},
+		MaxToolHops: 3,
+	}, out)
+	close(out)
+	for range out {
+	}
+	if err != nil {
+		t.Fatalf("run err=%v", err)
+	}
+	if len(prov.requests) != 2 {
+		t.Fatalf("requests=%d, want 2", len(prov.requests))
+	}
+	if len(prov.requests[0].Tools) != 0 {
+		t.Errorf("first request tools=%d, want 0 after automatic web execution", len(prov.requests[0].Tools))
+	}
+	if len(prov.requests[1].Tools) != 3 {
+		t.Errorf("second request tools=%d, want all 3 tools restored", len(prov.requests[1].Tools))
+	}
+	if prov.requests[1].ToolChoice != nil {
+		t.Errorf("second request ToolChoice=%+v, want nil to avoid forcing another web search", prov.requests[1].ToolChoice)
+	}
+}
+
 func TestRun_AutomaticWebToolCallIDsAreUniqueAcrossTurns(t *testing.T) {
 	prov := &fakeProvider{streams: [][]llm.StreamEvent{
 		{{DeltaText: "first answer"}},
@@ -438,6 +524,39 @@ func TestRun_LocalFileSearchDoesNotExecuteWebTools(t *testing.T) {
 	}
 }
 
+func TestRun_TimeWordsWithoutExternalContextDoNotExecuteWebTools(t *testing.T) {
+	for _, prompt := range []string{
+		"現在のコードのバグを教えて",
+		"今日追加した関数をリファクタリングして",
+		"この時点の変数をログ出力して",
+	} {
+		t.Run(prompt, func(t *testing.T) {
+			prov := &fakeProvider{streams: [][]llm.StreamEvent{{{DeltaText: "確認します"}}}}
+			var searchCalls int
+			tools := tool.NewRegistry([]tool.Tool{
+				namedTool{name: "web_search", calls: &searchCalls},
+			}, []string{"web_search"})
+			svc := agent.New(fakeReg{p: prov}, tools)
+
+			out := make(chan agent.Event, 16)
+			err := svc.Run(context.Background(), agent.Input{
+				Model:       "fake/m",
+				Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt}},
+				MaxToolHops: 1,
+			}, out)
+			close(out)
+			for range out {
+			}
+			if err != nil {
+				t.Fatalf("run err=%v", err)
+			}
+			if searchCalls != 0 {
+				t.Errorf("searchCalls=%d, want 0", searchCalls)
+			}
+		})
+	}
+}
+
 func TestRun_CurrentInfoWithoutWebSearchToolDoesNotExecuteWebTools(t *testing.T) {
 	prov := &fakeProvider{streams: [][]llm.StreamEvent{{{DeltaText: "利用可能な範囲で回答します"}}}}
 	svc := agent.New(fakeReg{p: prov}, tool.NewRegistry(nil, nil))
@@ -529,6 +648,9 @@ func TestRun_FollowUpDetailFiltersRepeatedContentAndRetries(t *testing.T) {
 	if !reflect.DeepEqual(prov.requests[0].Messages, prov.requests[1].Messages) {
 		t.Errorf("retry injected messages: first=%+v second=%+v", prov.requests[0].Messages, prov.requests[1].Messages)
 	}
+	if prov.requests[0].Temperature != nil || prov.requests[1].Temperature == nil || *prov.requests[1].Temperature != 0.3 {
+		t.Errorf("retry temperatures=(%v, %v), want (nil, 0.3)", prov.requests[0].Temperature, prov.requests[1].Temperature)
+	}
 	if final == nil {
 		t.Fatal("EventFinal not emitted")
 	}
@@ -539,6 +661,11 @@ func TestRun_FollowUpDetailFiltersRepeatedContentAndRetries(t *testing.T) {
 	}
 	if !strings.Contains(final.Content, "2026年7月7日") || deltas.String() != final.Content {
 		t.Errorf("final=%q deltas=%q, want only novel release detail", final.Content, deltas.String())
+	}
+	for _, punctuated := range []string{"リリースされました。", "修正を含みます。"} {
+		if !strings.Contains(final.Content, punctuated) {
+			t.Errorf("sentence delimiter missing from %q", final.Content)
+		}
 	}
 	for _, incompleteEnding := range []string{"で\n", "おり\n"} {
 		if strings.Contains(final.Content+"\n", incompleteEnding) {
@@ -593,6 +720,51 @@ func TestRun_FollowUpDetailRejectsPromptFragmentsNotGroundedInWebFetch(t *testin
 	}
 }
 
+func TestRun_FollowUpDetailRejectsNonJapaneseCandidateForJapaneseConversation(t *testing.T) {
+	prov := &fakeProvider{streams: [][]llm.StreamEvent{
+		{{DeltaText: "Compiler and runtime fixes are included. Security patches are also included."}},
+		{{DeltaText: "コンパイラとランタイムの修正を含みます。\n+ 暗号処理の安全性も改善されています。"}},
+	}}
+	svc := agent.New(fakeReg{p: prov}, tool.NewRegistry(nil, nil))
+	out := make(chan agent.Event, 16)
+	err := svc.Run(context.Background(), agent.Input{
+		Model: "fake/m",
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: "Goの特徴を教えて"},
+			{Role: llm.RoleAssistant, Content: "静的型付けです。"},
+			{Role: llm.RoleUser, Content: "もう少し詳しく。"},
+		},
+		MaxToolHops: 0,
+	}, out)
+	close(out)
+	if err != nil {
+		t.Fatalf("run err=%v", err)
+	}
+	var final *llm.Message
+	for event := range out {
+		if event.Kind == agent.EventFinal {
+			final = event.Final
+		}
+	}
+	if len(prov.requests) != 2 {
+		t.Fatalf("requests=%d, want one retry after non-Japanese candidate", len(prov.requests))
+	}
+	if final == nil {
+		t.Fatal("EventFinal not emitted")
+	}
+	if strings.Contains(final.Content, "Compiler") || strings.Contains(final.Content, "Security") {
+		t.Errorf("non-Japanese candidate was emitted: %q", final.Content)
+	}
+	if strings.Contains(final.Content, "\n- +") {
+		t.Errorf("nested list marker was emitted: %q", final.Content)
+	}
+	for _, detail := range []string{"コンパイラとランタイム", "暗号処理の安全性"} {
+		if !strings.Contains(final.Content, detail) {
+			t.Errorf("Japanese detail %q missing from %q", detail, final.Content)
+		}
+	}
+}
+
 func TestRun_FollowUpDetailRejectsIntroductionOnlyResponses(t *testing.T) {
 	prov := &fakeProvider{streams: [][]llm.StreamEvent{
 		{{DeltaText: "以下の通りです。\n詳しく説明します。\n最新のものはgo1.26.5で、.RELEASE=MONTH_DAY。"}},
@@ -626,6 +798,13 @@ func TestRun_FollowUpDetailRejectsIntroductionOnlyResponses(t *testing.T) {
 	}
 	if len(prov.requests) != 4 {
 		t.Fatalf("requests=%d, want initial request and three retries", len(prov.requests))
+	}
+	temperature := func(value float64) *float64 { return &value }
+	wantTemperatures := []*float64{nil, temperature(0.3), temperature(0.6), temperature(0.9)}
+	for i, request := range prov.requests {
+		if !reflect.DeepEqual(request.Temperature, wantTemperatures[i]) {
+			t.Errorf("request[%d].Temperature=%v, want %v", i, request.Temperature, wantTemperatures[i])
+		}
 	}
 	for _, introduction := range []string{"以下の通りです。", "詳しく説明します。", "参考情報です。", "追加情報です。", ".RELEASE=MONTH_DAY"} {
 		if strings.Trim(final.Content, "* \n") == introduction {

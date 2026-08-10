@@ -168,6 +168,8 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message) 
 				r.stopSpinner()
 				if len(ev.TurnMessages) > 0 {
 					turnMessages = append([]llm.Message(nil), ev.TurnMessages...)
+				} else if ev.Final != nil {
+					turnMessages = []llm.Message{*ev.Final}
 				}
 				fmt.Fprintln(out)
 			case agent.EventError:

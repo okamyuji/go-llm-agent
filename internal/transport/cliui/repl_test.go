@@ -62,6 +62,21 @@ func (s *historyCapturingSvc) Run(_ context.Context, in agent.Input, out chan<- 
 	return nil
 }
 
+type finalOnlyHistorySvc struct {
+	inputs []agent.Input
+}
+
+func (s *finalOnlyHistorySvc) Run(_ context.Context, in agent.Input, out chan<- agent.Event) error {
+	s.inputs = append(s.inputs, in)
+	content := "first answer"
+	if len(s.inputs) > 1 {
+		content = "second answer"
+	}
+	final := llm.Message{Role: llm.RoleAssistant, Content: content}
+	out <- agent.Event{Kind: agent.EventFinal, Final: &final}
+	return nil
+}
+
 func TestRepl_OneTurn(t *testing.T) {
 	in := strings.NewReader("hi\n/quit\n")
 	var out bytes.Buffer
@@ -100,6 +115,26 @@ func TestRepl_PreservesToolMessagesForFollowUp(t *testing.T) {
 	}
 	if got[4].Role != llm.RoleUser || got[4].Content != "もう少し詳しく" {
 		t.Errorf("messages[4]=%+v, want follow-up user message", got[4])
+	}
+}
+
+func TestRepl_PreservesFinalEventWithoutDeltaForFollowUp(t *testing.T) {
+	svc := &finalOnlyHistorySvc{}
+	in := strings.NewReader("first question\nfollow-up\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	if len(svc.inputs) != 2 {
+		t.Fatalf("inputs=%d, want 2", len(svc.inputs))
+	}
+	messages := svc.inputs[1].Messages
+	if len(messages) != 3 {
+		t.Fatalf("second turn messages=%d, want 3: %+v", len(messages), messages)
+	}
+	if messages[1].Role != llm.RoleAssistant || messages[1].Content != "first answer" {
+		t.Errorf("messages[1]=%+v, want EventFinal assistant payload", messages[1])
 	}
 }
 

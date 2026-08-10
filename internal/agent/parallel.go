@@ -128,7 +128,7 @@ func (s *service) executeOne(ctx context.Context, sessionID string, call llm.Too
 	}
 	// runReAct と同じく、untrusted ラッパは無条件付与する
 	// ツール側が自前マーカーを偽装してラップ回避するのを防ぐため接頭辞 check は外す
-	content = "[UNTRUSTED INPUT: tool=" + call.Name + "]\n" + content + "\n[END UNTRUSTED]"
+	content = wrapUntrusted(content, call.Name)
 	if s.redactor != nil {
 		content = s.redactor.Redact(content)
 	}
