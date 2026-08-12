@@ -816,6 +816,51 @@ func TestRun_FollowUpDetailRejectsIntroductionOnlyResponses(t *testing.T) {
 	}
 }
 
+func TestRun_NewTopicQuestionWithDetailWordIsNotTreatedAsFollowUp(t *testing.T) {
+	prov := &fakeProvider{streams: [][]llm.StreamEvent{
+		{{DeltaText: "Rustの所有権は値の解放責任を単一の変数に持たせる仕組みです。借用は参照による一時的なアクセスで、ライフタイムは参照の有効期間を表します。"}},
+	}}
+	svc := agent.New(fakeReg{p: prov}, tool.NewRegistry(nil, nil))
+	out := make(chan agent.Event, 16)
+	err := svc.Run(context.Background(), agent.Input{
+		Model: "fake/m",
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: "Goの最新版をWebで検索して教えて"},
+			{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "webf00001", Name: "web_fetch"}}},
+			{Role: llm.RoleTool, Name: "web_fetch", ToolCallID: "webf00001", Content: "[UNTRUSTED INPUT: tool=web_fetch]\n2026年7月7日にgo1.26.5がリリースされました。\n[END UNTRUSTED]"},
+			{Role: llm.RoleAssistant, Content: "最新の安定版リリースは go1.26.5 です。"},
+			{Role: llm.RoleUser, Content: "Rustの所有権システムとは何ですか。借用やライフタイムとの関係も含めて詳しく説明してください。"},
+		},
+		MaxToolHops: 0,
+	}, out)
+	close(out)
+	if err != nil {
+		t.Fatalf("run err=%v", err)
+	}
+	var deltas strings.Builder
+	var final *llm.Message
+	for event := range out {
+		if event.Kind == agent.EventDelta {
+			deltas.WriteString(event.Delta)
+		}
+		if event.Kind == agent.EventFinal {
+			final = event.Final
+		}
+	}
+	if len(prov.requests) != 1 {
+		t.Fatalf("requests=%d, want 1 (no expansion retries for a new topic question)", len(prov.requests))
+	}
+	if final == nil {
+		t.Fatal("EventFinal not emitted")
+	}
+	if !strings.Contains(final.Content, "所有権") || !strings.Contains(deltas.String(), "所有権") {
+		t.Errorf("answer to the new question was lost: final=%q deltas=%q", final.Content, deltas.String())
+	}
+	if strings.Contains(final.Content, "追加情報") || strings.Contains(final.Content, "go1.26.5") {
+		t.Errorf("final was hijacked by expansion mode: %q", final.Content)
+	}
+}
+
 func TestRun_InitialDetailedQuestionDoesNotAddFollowUpConstraint(t *testing.T) {
 	prov := &fakeProvider{streams: [][]llm.StreamEvent{{{DeltaText: "説明"}}}}
 	svc := agent.New(fakeReg{p: prov}, tool.NewRegistry(nil, nil))

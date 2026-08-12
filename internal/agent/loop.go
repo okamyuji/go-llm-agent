@@ -638,7 +638,14 @@ func nextAutomaticToolCallID(msgs []llm.Message, toolName, prefix string) string
 	return fmt.Sprintf("%s%05d", prefix, sequence)
 }
 
+// maxExpansionPromptRunes 追加説明依頼とみなす user メッセージの最大文字数。
+// 「もう少し詳しく。」のような照応的な依頼は短く、新規の質問は話題を含むため長くなる。
+// 誤って新規質問を追加説明扱いすると回答が前ターンの内容でフィルタされ失われるため、
+// 取りこぼし（通常経路で回答される）より誤爆を避ける側に倒して短めに取る。
+const maxExpansionPromptRunes = 20
+
 // requiresExpandedAnswer は前のassistant回答に対する追加説明の依頼か判定する。
+// 新しい話題を含む長文質問を誤判定しないよう、短い依頼だけを対象にする。
 func requiresExpandedAnswer(msgs []llm.Message) bool {
 	latestUser := -1
 	for i := len(msgs) - 1; i >= 0; i-- {
@@ -660,7 +667,10 @@ func requiresExpandedAnswer(msgs []llm.Message) bool {
 	if !hasPriorAssistant {
 		return false
 	}
-	prompt := strings.ToLower(msgs[latestUser].Content)
+	prompt := strings.ToLower(strings.TrimSpace(msgs[latestUser].Content))
+	if len([]rune(prompt)) > maxExpansionPromptRunes {
+		return false
+	}
 	for _, phrase := range []string{"もう少し詳しく", "詳しく", "詳細", "more detail"} {
 		if strings.Contains(prompt, phrase) {
 			return true
