@@ -13,6 +13,11 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 )
 
+// pasteCoalesceWindow ペースト行結合の時間窓。端末ペーストの行間は数 ms、rlwrap は
+// 一括書き込みのため 50ms で十分拾える。手入力で Enter 後 50ms 以内に次行を打ち終える
+// ことは現実的にないため、連続質問が誤って結合されることはない。
+const pasteCoalesceWindow = 50 * time.Millisecond
+
 // Options REPL 生成オプション
 type Options struct {
 	Model          string
@@ -63,9 +68,18 @@ func (r *REPL) Run(ctx context.Context) error {
 	history := []llm.Message{}
 	fmt.Fprintln(r.out, "go-llm-agent REPL  /quit で終了（生成中は ESC で中断）")
 
+	// 端末入力のときだけ、短時間に連続到着した行 (改行込みペースト) を 1 プロンプトへ結合する。
+	// パイプ入力は従来どおり 1 行 = 1 プロンプトを維持する。
+	coalesce := time.Duration(0)
+	if f, ok := r.in.(*os.File); ok {
+		if info, err := f.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+			coalesce = pasteCoalesceWindow
+		}
+	}
+
 	for {
 		fmt.Fprint(r.out, ">> ")
-		line, err := pump.readLine()
+		line, err := pump.readPrompt(coalesce)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, errCtrlC) {
 				return nil
@@ -82,7 +96,14 @@ func (r *REPL) Run(ctx context.Context) error {
 		history = append(history, llm.Message{Role: llm.RoleUser, Content: line})
 
 		turnMessages, quit := r.runTurn(ctx, pump, append([]llm.Message{}, history...))
-		history = append(history, turnMessages...)
+		if len(turnMessages) == 0 {
+			// 中断やエラーで何も生成されなかったターンは user 入力ごと巻き戻す。
+			// content 空の assistant や user 連続を履歴に残すと、以後の全リクエストが
+			// llama-server の履歴検証 (400) で失敗し続けるため。
+			history = history[:len(history)-1]
+		} else {
+			history = append(history, turnMessages...)
+		}
 		if quit {
 			return nil
 		}
@@ -213,7 +234,9 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message) 
 		fmt.Fprintf(r.out, "↳ done in %.1fs · %d tool · in %d / out %d tok\n",
 			time.Since(turnStart).Seconds(), toolCount, usageIn, usageOut)
 	}
-	if len(turnMessages) == 0 {
+	// EventFinal が届かないまま終わったターン (中断・エラー) は、部分生成テキストが
+	// あるときだけ assistant として残す。空のまま返すと呼び出し側がターンごと巻き戻す。
+	if len(turnMessages) == 0 && strings.TrimSpace(finalContent.String()) != "" {
 		turnMessages = []llm.Message{{Role: llm.RoleAssistant, Content: finalContent.String()}}
 	}
 	return turnMessages, quit

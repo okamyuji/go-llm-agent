@@ -59,6 +59,41 @@ func TestChatSendsCachePromptAndSamplingParamsWithoutAuthHeader(t *testing.T) {
 	}
 }
 
+// TestChatAlwaysSendsMessageContent content が空文字でも "content" キーを送る。
+// llama-server は assistant メッセージに content か tool_calls のどちらかを必須とし、
+// 両方欠けた {"role":"assistant"} は 400 を返すため、omitempty で欠落させてはならない。
+func TestChatAlwaysSendsMessageContent(t *testing.T) {
+	var gotBody struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+
+	c := llamacpp.New(llamacpp.Options{BaseURL: srv.URL})
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Model: "shisa-12b",
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: "q1"},
+			{Role: llm.RoleAssistant, Content: ""},
+			{Role: llm.RoleUser, Content: "q2"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if len(gotBody.Messages) != 3 {
+		t.Fatalf("messages=%d, want 3", len(gotBody.Messages))
+	}
+	if _, ok := gotBody.Messages[1]["content"]; !ok {
+		t.Errorf(`assistant message lost "content" key: %v`, gotBody.Messages[1])
+	}
+}
+
 func TestChatOmitsSamplingParamsWhenUnset(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

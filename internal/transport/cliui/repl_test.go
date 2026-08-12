@@ -251,6 +251,87 @@ func TestRepl_EscCancelsTurn(t *testing.T) {
 	}
 }
 
+// interruptCapturingSvc 1 回目は EventFinal を出さずに context キャンセルまで待ち、
+// 2 回目以降は通常応答する。中断後の履歴の形を検証するために Input を記録する。
+type interruptCapturingSvc struct {
+	inputs     []agent.Input
+	firstDelta string // 空でなければ 1 回目の中断前に delta を流す
+}
+
+func (s *interruptCapturingSvc) Run(ctx context.Context, in agent.Input, out chan<- agent.Event) error {
+	s.inputs = append(s.inputs, in)
+	if len(s.inputs) == 1 {
+		if s.firstDelta != "" {
+			out <- agent.Event{Kind: agent.EventDelta, Delta: s.firstDelta}
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	final := llm.Message{Role: llm.RoleAssistant, Content: "second answer"}
+	out <- agent.Event{Kind: agent.EventFinal, Final: &final, TurnMessages: []llm.Message{final}}
+	return nil
+}
+
+// TestRepl_InterruptedEmptyTurnIsRolledBack 何も生成されないまま ESC 中断されたターンは
+// user 入力ごと履歴から巻き戻す。空 content の assistant を積むと llama-server が
+// 「content か tool_calls が必須」で 400 を返し、user 連続も交互制約で 400 になるため、
+// どちらの形も次ターンの履歴に残してはならない。
+func TestRepl_InterruptedEmptyTurnIsRolledBack(t *testing.T) {
+	svc := &interruptCapturingSvc{}
+	in := strings.NewReader("q1\n\x1bq2\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true})
+	done := make(chan error, 1)
+	go func() { done <- r.Run(context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run err=%v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("REPL did not terminate")
+	}
+	if len(svc.inputs) != 2 {
+		t.Fatalf("inputs=%d, want 2", len(svc.inputs))
+	}
+	got := svc.inputs[1].Messages
+	if len(got) != 1 || got[0].Role != llm.RoleUser || got[0].Content != "q2" {
+		t.Fatalf("second turn messages=%+v, want only the new user message", got)
+	}
+}
+
+// TestRepl_InterruptedPartialContentIsKept 部分生成テキストがあるまま中断されたターンは、
+// その部分テキストを assistant として履歴に残す（content 非空なので履歴形状は有効）。
+func TestRepl_InterruptedPartialContentIsKept(t *testing.T) {
+	svc := &interruptCapturingSvc{firstDelta: "途中まで"}
+	in := strings.NewReader("q1\n\x1bq2\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true})
+	done := make(chan error, 1)
+	go func() { done <- r.Run(context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run err=%v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("REPL did not terminate")
+	}
+	if len(svc.inputs) != 2 {
+		t.Fatalf("inputs=%d, want 2", len(svc.inputs))
+	}
+	got := svc.inputs[1].Messages
+	if len(got) != 3 {
+		t.Fatalf("second turn messages=%+v, want [user q1, assistant partial, user q2]", got)
+	}
+	if got[1].Role != llm.RoleAssistant || got[1].Content != "途中まで" {
+		t.Errorf("messages[1]=%+v, want partial assistant content", got[1])
+	}
+	if got[2].Role != llm.RoleUser || got[2].Content != "q2" {
+		t.Errorf("messages[2]=%+v, want new user message", got[2])
+	}
+}
+
 // TestRepl_CtrlCDuringGenerationQuits 生成中の Ctrl-C はそのターンを中断しセッションを終了する。
 func TestRepl_CtrlCDuringGenerationQuits(t *testing.T) {
 	in := strings.NewReader("hi\n\x03")

@@ -92,9 +92,12 @@ type chatPayload struct {
 	ChatTemplateKwargs map[string]any    `json:"chat_template_kwargs,omitempty"`
 }
 
+// chatPayloadMsg の content は空文字でも必ず送る (omitempty 禁止)。
+// llama-server は assistant メッセージに content か tool_calls のどちらかを必須とし、
+// 両方欠けた {"role":"assistant"} は 400 invalid_request_error になるため。
 type chatPayloadMsg struct {
 	Role       string            `json:"role"`
-	Content    string            `json:"content,omitempty"`
+	Content    string            `json:"content"`
 	Name       string            `json:"name,omitempty"`
 	ToolCallID string            `json:"tool_call_id,omitempty"`
 	ToolCalls  []chatPayloadCall `json:"tool_calls,omitempty"`

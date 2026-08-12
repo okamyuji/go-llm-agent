@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -84,6 +85,53 @@ func (p *bytePump) readLine() (string, error) {
 		return "", p.err
 	}
 	return "", io.EOF
+}
+
+// readPrompt は 1 プロンプト分の入力を返す。最初の行を読んだ後、coalesce の時間窓内に
+// 連続到着した行を改行で結合する。改行込みの長文ペーストは cooked 端末 (rlwrap 経由含む)
+// から短時間のバーストで届くため 1 プロンプトにまとまり、手入力の連続質問は窓を超えるので
+// 従来どおり行単位になる。coalesce が 0 以下なら readLine と同じ (パイプ入力の互換維持)。
+// 窓内に改行まで届かなかった末尾バイトは消費せず pending へ戻す。
+func (p *bytePump) readPrompt(coalesce time.Duration) (string, error) {
+	line, err := p.readLine()
+	if err != nil || coalesce <= 0 {
+		return line, err
+	}
+	prompt := []byte(line)
+	var partial []byte
+	for {
+		var b byte
+		if len(p.pending) > 0 {
+			b = p.pending[0]
+			p.pending = append([]byte{}, p.pending[1:]...)
+		} else {
+			select {
+			case nb, ok := <-p.ch:
+				if !ok {
+					// 入力終端。未完の行があれば行として取り込む
+					if len(partial) > 0 {
+						prompt = append(prompt, '\n')
+						prompt = append(prompt, trimTrailingCR(partial)...)
+					}
+					return string(prompt), nil
+				}
+				b = nb
+			case <-time.After(coalesce):
+				p.pending = append(partial, p.pending...)
+				return string(prompt), nil
+			}
+		}
+		switch b {
+		case '\n':
+			prompt = append(prompt, '\n')
+			prompt = append(prompt, trimTrailingCR(partial)...)
+			partial = partial[:0:0]
+		case 0x03:
+			return "", errCtrlC
+		default:
+			partial = append(partial, b)
+		}
+	}
 }
 
 func trimTrailingCR(b []byte) string {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBytePumpReadLine(t *testing.T) {
@@ -93,6 +94,88 @@ func TestBytePumpReadLineCtrlCInPending(t *testing.T) {
 	_, err := p.readLine()
 	if !errors.Is(err, errCtrlC) {
 		t.Fatalf("want errCtrlC, got %v", err)
+	}
+}
+
+func TestBytePumpReadPromptCoalescesPastedLines(t *testing.T) {
+	// ペーストで一括到着した複数行は 1 プロンプトに結合される
+	p := newBytePump(strings.NewReader("line1\nline2\n\nline4\n"))
+	got, err := p.readPrompt(200 * time.Millisecond)
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if got != "line1\nline2\n\nline4" {
+		t.Errorf("got %q, want joined multi-line prompt", got)
+	}
+}
+
+func TestBytePumpReadPromptZeroWindowKeepsLineSemantics(t *testing.T) {
+	// 窓 0 (パイプ入力) では従来どおり 1 行 = 1 プロンプト
+	p := newBytePump(strings.NewReader("q1\nq2\n"))
+	got, err := p.readPrompt(0)
+	if err != nil || got != "q1" {
+		t.Fatalf("got %q err=%v, want q1", got, err)
+	}
+	got, err = p.readPrompt(0)
+	if err != nil || got != "q2" {
+		t.Fatalf("got %q err=%v, want q2", got, err)
+	}
+}
+
+func TestBytePumpReadPromptSeparatesLinesBeyondWindow(t *testing.T) {
+	// 窓を超えて到着した行は別プロンプトになる（手入力の連続質問）
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+	p := newBytePump(pr)
+	go func() {
+		_, _ = pw.Write([]byte("q1\n"))
+		time.Sleep(150 * time.Millisecond)
+		_, _ = pw.Write([]byte("q2\n"))
+	}()
+	got, err := p.readPrompt(30 * time.Millisecond)
+	if err != nil || got != "q1" {
+		t.Fatalf("got %q err=%v, want q1 (separate prompt)", got, err)
+	}
+	got, err = p.readPrompt(30 * time.Millisecond)
+	if err != nil || got != "q2" {
+		t.Fatalf("got %q err=%v, want q2", got, err)
+	}
+}
+
+func TestBytePumpReadPromptRestoresPartialTailToPending(t *testing.T) {
+	// 窓内に改行まで届かなかった末尾バイトは消費せず次の行読みへ戻す
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+	p := newBytePump(pr)
+	go func() { _, _ = pw.Write([]byte("x\ny")) }()
+	got, err := p.readPrompt(50 * time.Millisecond)
+	if err != nil || got != "x" {
+		t.Fatalf("got %q err=%v, want x", got, err)
+	}
+	go func() { _, _ = pw.Write([]byte("z\n")) }()
+	got, err = p.readPrompt(50 * time.Millisecond)
+	if err != nil || got != "yz" {
+		t.Fatalf("got %q err=%v, want yz (partial tail preserved)", got, err)
+	}
+}
+
+func TestBytePumpReadPromptCtrlCInBurst(t *testing.T) {
+	p := newBytePump(strings.NewReader("q1\n\x03"))
+	_, err := p.readPrompt(200 * time.Millisecond)
+	if !errors.Is(err, errCtrlC) {
+		t.Fatalf("want errCtrlC, got %v", err)
+	}
+}
+
+func TestBytePumpReadPromptConsumesPushbackLines(t *testing.T) {
+	// 生成中に pushback された複数行も 1 プロンプトへ結合される
+	p := newBytePump(strings.NewReader(""))
+	for _, b := range []byte("one\ntwo\n") {
+		p.pushback(b)
+	}
+	got, err := p.readPrompt(50 * time.Millisecond)
+	if err != nil || got != "one\ntwo" {
+		t.Fatalf("got %q err=%v, want one\\ntwo", got, err)
 	}
 }
 
