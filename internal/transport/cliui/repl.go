@@ -154,19 +154,30 @@ type replState struct {
 // CRLF 変換で包む (lineedit.Terminal 自身は \r\n を書くので二重変換にはならない)。
 // 端末でなければ行エディタは nil で、出力先は r.out のまま
 func (r *REPL) setupEditor(ctx context.Context, pump *bytePump) (io.Writer, *lineedit.Terminal, func()) {
-	out := r.out
-	f, ok := r.in.(*os.File)
+	fd, ok := r.terminalFD()
 	if !ok {
-		return out, nil, func() {}
-	}
-	fd := int(f.Fd())
-	if !term.IsTerminal(fd) {
-		return out, nil, func() {}
+		return r.out, nil, func() {}
 	}
 	saved, err := term.MakeRaw(fd)
 	if err != nil {
-		return out, nil, func() {}
+		return r.out, nil, func() {}
 	}
+	return r.newEditor(ctx, pump, fd, saved)
+}
+
+// terminalFD 入力が端末ならその file descriptor を返す
+func (r *REPL) terminalFD() (int, bool) {
+	f, ok := r.in.(*os.File)
+	if !ok {
+		return 0, false
+	}
+	fd := int(f.Fd())
+	return fd, term.IsTerminal(fd)
+}
+
+// newEditor raw 化済みの端末に対して行エディタと後始末関数を組み立てる
+func (r *REPL) newEditor(ctx context.Context, pump *bytePump, fd int, saved *term.State) (io.Writer, *lineedit.Terminal, func()) {
+	out := r.out
 	if isTTY(r.out) {
 		out = newCRLFWriter(r.out)
 	}

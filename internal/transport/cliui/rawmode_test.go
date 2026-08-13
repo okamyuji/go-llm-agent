@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -269,5 +270,35 @@ func TestBytePump_ReadAnswerLine_CtxDone(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("readAnswerLine が ctx キャンセルで返らない")
+	}
+}
+
+func TestREPL_TerminalFD_NonFileAndNonTTY(t *testing.T) {
+	r := &REPL{in: strings.NewReader("")}
+	if _, ok := r.terminalFD(); ok {
+		t.Fatal("io.Reader は端末ではない期待")
+	}
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	r2 := &REPL{in: f}
+	if _, ok := r2.terminalFD(); ok {
+		t.Fatal("/dev/null は端末ではない期待")
+	}
+}
+
+func TestREPL_SetupEditor_NonTerminalReturnsNoEditor(t *testing.T) {
+	var buf bytes.Buffer
+	r := &REPL{in: strings.NewReader(""), out: &buf}
+	pump := newBytePump(strings.NewReader(""))
+	out, editor, closeEditor := r.setupEditor(context.Background(), pump)
+	defer closeEditor()
+	if editor != nil {
+		t.Fatal("端末でなければ行エディタは作らない期待")
+	}
+	if out != io.Writer(&buf) {
+		t.Fatal("出力先はそのまま期待")
 	}
 }
