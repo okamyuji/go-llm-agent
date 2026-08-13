@@ -89,8 +89,8 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 		tc = s.defaultToolChoice
 	}
 	allowAutomaticWebTools := automaticToolChoice(tc)
-	// tool_choice none はツール定義の広告ごと抑制する。
-	// 定義を広告したまま「呼ぶな」と指示しても、tool_choice を無視するモデルが
+	// tool_choice none はツール定義の送信ごと抑制する。
+	// 定義を送ったまま「呼ぶな」と指示しても、tool_choice を無視するモデルが
 	// ツール呼び出し JSON をテキストとして出力する事故を防げないため
 	tools := s.specs()
 	if tc != nil && tc.Mode == "none" {

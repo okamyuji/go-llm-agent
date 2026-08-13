@@ -94,8 +94,9 @@ func (r *REPL) Run(ctx context.Context) error {
 			}
 		}
 	}
-	fmt.Fprintln(out, "go-llm-agent REPL  /quit で終了（生成中は ESC で中断、複数行ペーストは Enter で送信）")
+	fmt.Fprintln(out, "go-llm-agent REPL  /quit で終了（生成中は ESC で中断、複数行ペーストは Enter で送信、/tools off でツール無効化）")
 
+	var toolChoice *llm.ToolChoice // nil = 設定既定。 /tools off で mode none に切り替える
 	for {
 		var line string
 		var err error
@@ -124,9 +125,29 @@ func (r *REPL) Run(ctx context.Context) error {
 		if line == "/quit" || line == "/exit" {
 			return nil
 		}
+		// /tools off|on: ツール定義をリクエストに含めるかをセッション中に切り替える。
+		// 小型ローカルモデルはツール定義があると履歴つき長文の指示追従を失うため、
+		// 翻訳・要約など純粋な対話では off にすると安定する (README の注意を参照)
+		if line == "/tools" || strings.HasPrefix(line, "/tools ") {
+			switch strings.TrimSpace(strings.TrimPrefix(line, "/tools")) {
+			case "off":
+				toolChoice = &llm.ToolChoice{Mode: "none"}
+				fmt.Fprintln(out, "[tools] off — ツール定義を送らずに応答します")
+			case "on":
+				toolChoice = nil
+				fmt.Fprintln(out, "[tools] on — ツールを使用します")
+			default:
+				state := "on"
+				if toolChoice != nil {
+					state = "off"
+				}
+				fmt.Fprintf(out, "[tools] 現在: %s（/tools off | /tools on で切替）\n", state)
+			}
+			continue
+		}
 		history = append(history, llm.Message{Role: llm.RoleUser, Content: line})
 
-		turnMessages, quit := r.runTurn(ctx, pump, append([]llm.Message{}, history...))
+		turnMessages, quit := r.runTurn(ctx, pump, append([]llm.Message{}, history...), toolChoice)
 		if len(turnMessages) == 0 {
 			// 中断やエラーで何も生成されなかったターンは user 入力ごと巻き戻す。
 			// content 空の assistant や user 連続を履歴に残すと、以後の全リクエストが
@@ -148,7 +169,7 @@ func (r *REPL) Run(ctx context.Context) error {
 // runTurn は 1 ターンを実行する。入力が端末なら raw 化し、pump 経由で届くバイトから
 // ESC（ターン中断）/ Ctrl-C（中断して終了）を検出する。その他のバイトは次の行編集へ
 // 引き継ぐ。返り値は履歴に積む assistant メッセージと終了フラグ。
-func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message) ([]llm.Message, bool) {
+func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, toolChoice *llm.ToolChoice) ([]llm.Message, bool) {
 	turnCtx, cancelTurn := context.WithCancel(ctx)
 	defer cancelTurn()
 
@@ -172,6 +193,7 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message) 
 			SystemPrompt: r.opt.SystemPrompt,
 			Messages:     hist,
 			MaxToolHops:  r.opt.MaxToolHops,
+			ToolChoice:   toolChoice,
 		}, ch); err != nil {
 			ch <- agent.Event{Kind: agent.EventError, Err: err}
 		}

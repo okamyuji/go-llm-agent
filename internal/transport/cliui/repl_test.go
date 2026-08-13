@@ -333,6 +333,46 @@ func TestRepl_InterruptedPartialContentIsKept(t *testing.T) {
 	}
 }
 
+// inputCapturingSvc Input を記録して固定回答を返す
+type inputCapturingSvc struct {
+	inputs []agent.Input
+}
+
+func (s *inputCapturingSvc) Run(_ context.Context, in agent.Input, out chan<- agent.Event) error {
+	s.inputs = append(s.inputs, in)
+	final := llm.Message{Role: llm.RoleAssistant, Content: "answer"}
+	out <- agent.Event{Kind: agent.EventFinal, Final: &final, TurnMessages: []llm.Message{final}}
+	return nil
+}
+
+// TestRepl_ToolsCommandTogglesToolChoice /tools off でツール広告を止め (tool_choice none)、
+// /tools on で戻す。小型ローカルモデルはツール定義があると長文の指示追従を失うため、
+// 純粋な対話セッションでツールを切る手段として使う。
+func TestRepl_ToolsCommandTogglesToolChoice(t *testing.T) {
+	svc := &inputCapturingSvc{}
+	in := strings.NewReader("q1\n/tools off\nq2\n/tools on\nq3\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	if len(svc.inputs) != 3 {
+		t.Fatalf("inputs=%d, want 3 (/tools 行はターンを消費しない)", len(svc.inputs))
+	}
+	if svc.inputs[0].ToolChoice != nil {
+		t.Errorf("q1 ToolChoice=%+v, want nil (既定)", svc.inputs[0].ToolChoice)
+	}
+	if svc.inputs[1].ToolChoice == nil || svc.inputs[1].ToolChoice.Mode != "none" {
+		t.Errorf("q2 ToolChoice=%+v, want mode none after /tools off", svc.inputs[1].ToolChoice)
+	}
+	if svc.inputs[2].ToolChoice != nil {
+		t.Errorf("q3 ToolChoice=%+v, want nil after /tools on", svc.inputs[2].ToolChoice)
+	}
+	if !strings.Contains(out.String(), "[tools]") {
+		t.Errorf("state feedback missing: %q", out.String())
+	}
+}
+
 // TestRepl_ExitsWhenContextCanceledAtPrompt SIGINT で root context がキャンセルされたら、
 // プロンプト待ちでブロックしていても REPL は即座にきれいに終了する。
 // 従来はループが回り続け、以後の全ターンが即失敗するゾンビセッションになっていた。

@@ -102,6 +102,7 @@ bash scripts/verify-hardening.sh
 - **履歴**: ↑/↓ キーで呼び出し。`~/.agent_history` へ 1 行 1 エントリで永続化します（rlwrap `-H` と同形式のため既存ファイルをそのまま引き継げます）
 - **貼り付け**: bracketed paste 対応。改行を含む長文を貼り付けると 1 つのプロンプトにまとまり、Enter で送信します。1 行が 1024 バイトを超える長文も詰まりません
 - **中断と終了**: 生成中は ESC でそのターンを中断、Ctrl-C でセッションを終了します
+- **/tools off | on**: ツール定義をリクエストに含めるかをセッション中に切り替えます。翻訳・要約など純粋な対話は off が安定します（下記「注意: ツール定義が小型モデルの指示追従を壊す」参照）
 - **既知の制約**: 行エディタ（golang.org/x/term）は全角文字の表示幅を考慮しないため、日本語の行を矢印キーで戻って編集するとカーソル描画がずれることがあります（入力内容自体は正しく保持されます）
 
 ```bash
@@ -204,7 +205,7 @@ agent:
 
 検出対応言語は ruby / go / python / javascript / typescript / react / csharp / java / springboot / rust です (検出キーワードは `internal/enricher/enricher.go` を参照)。ローカルLLMでの実測では、質問に関連するセクションだけを絞り込んで注入することが重要で、無関係な情報を含む大きなリファレンスの全文注入はかえって正答率を下げます。
 
-注入効果はモデル依存です。実測 (3モデル x 6問のコーディング質問) では、コーディング特化モデル (qwen2.5-coder) はツール広告抑制と決定的出力の併用で3.5点から5.5点 (6点満点) まで一貫して改善した一方、小型汎用モデル (gemma4) は素のまま (enricher無効) が最も安定しました。enricherはopt-inであり、無効時のリクエストは機能追加前とバイト同等です (素のgemma4で応答のバイト単位一致を実測確認済み)。ベンチマーク資材は `scripts/bench_enricher.sh` と `bench-config.yaml` / `bench-config-plain.yaml` を参照してください。
+注入効果はモデル依存です。実測 (3モデル x 6問のコーディング質問) では、コーディング特化モデル (qwen2.5-coder) はツール定義送信の抑制と決定的出力の併用で3.5点から5.5点 (6点満点) まで一貫して改善した一方、小型汎用モデル (gemma4) は素のまま (enricher無効) が最も安定しました。enricherはopt-inであり、無効時のリクエストは機能追加前とバイト同等です (素のgemma4で応答のバイト単位一致を実測確認済み)。ベンチマーク資材は `scripts/bench_enricher.sh` と `bench-config.yaml` / `bench-config-plain.yaml` を参照してください。
 
 ## プロンプトテンプレート版管理
 
@@ -305,7 +306,7 @@ E2Eスクリプトは `tests/e2e/06-injection-and-redact.sh` です。fixtures/s
 
 `agent.tool_choice` でLLM のツール呼び出し挙動を制御できます。`mode` は `auto` / `required` / `none` / `tool` の 4 種類で、`tool` を指定したときは `name` に具体的なツール名を入れます。各プロバイダー (OpenAI / Anthropic / Gemini / Ollama / llama.cpp) のネイティブなtool_choice仕様にマッピングされます。
 
-`mode: none` はツール定義の広告ごと抑制します。定義を広告したまま「呼ぶな」と指示するだけでは、tool_choiceを無視するモデルがツール呼び出しJSONをテキストとして出力する事故を防げないためです。純粋なQA用途では `enabled_tools: []` がDefaultReadonlyToolsにフォールバックする点に注意し、`mode: none` を明示してください。
+`mode: none` はツール定義の送信ごと抑制します。定義を送ったまま「呼ぶな」と指示するだけでは、tool_choiceを無視するモデルがツール呼び出しJSONをテキストとして出力する事故を防げないためです。純粋なQA用途では `enabled_tools: []` がDefaultReadonlyToolsにフォールバックする点に注意し、`mode: none` を明示してください。
 
 `agent.tool_validation` で、ツール呼び出し時にLLMが生成するJSON引数を `tool.Spec.Schema` に照らして検証できます。スキーマ違反のときは `max_retries` 回までLLMに修正を促し、超過すると `EventError` で停止します。
 
@@ -430,6 +431,28 @@ llama-server -m model.gguf --jinja -c 8192 --port 8080
 - `tool_call_id_format: "alnum9"` は tool_call_id を 9 文字英数字へ決定的に書き換えます。Mistral-Nemo 系 (Shisa 等) のチャットテンプレートは tool_call_id に「9 文字英数字」を強制し、llama-server が生成する 32 文字 ID を 2 ターン目で拒否するため、その回避に使います。Qwen 系などこの制約を持たないモデルでは未指定にします。
 
 常用する場合は、日本語品質で勝る **Shisa v2 (Mistral-Nemo 12B) + `tool_call_id_format: "alnum9"`** 構成を実運用の第一候補として推奨します。Qwen 系 (`think: false`) は tool_call_id の制約が無く導入が単純ですが、日本語出力の品質は Shisa に劣ります。
+
+### 注意: ツール定義が小型モデルの指示追従を壊す
+
+小型の量子化モデルでは、**リクエストにツール定義が含まれると、会話履歴があるときに長文プロンプトの指示を無視して直前ターンの話題に引きずられる**ことがあります。「2 問目の回答が 1 問目の回答になる」「長文を貼り付けたのに前の話題を答える」という症状はこれです。
+
+実測 (Shisa v2 12B i1-Q5_K_M、履歴 1 往復 + 約 1.5KB の翻訳依頼、temperature 0.2、各条件 3 回):
+
+| 条件 | 結果 |
+|------|------|
+| ツール定義 9 個 + 履歴 | 3/3 失敗 (前ターンの話題を回答) |
+| ツール定義 5 個 + 履歴 | 3/3 失敗 |
+| ツール定義 2 個 + 履歴 | 2/3 失敗 (引きずりは消えるが指示を無視) |
+| ツール定義なし + 履歴 | 3/3 成功 |
+
+エージェントの送信内容は正常で (捕捉リクエストの byte 再生で確認)、原因はモデル側です。Mistral 系チャットテンプレートはツール定義 JSON を最後の user メッセージ直前に差し込むため、小型モデルが本来の指示を見失います。temperature を下げる (0.2) と揺らぎは減りますが、この症状自体は解消しません。
+
+対処の選択肢:
+
+- REPL で `/tools off` を打つ (そのセッションのツール定義送信を止める。翻訳・要約が終わったら `/tools on` で戻す)
+- ツールを使わない対話が主なら `agent.tool_choice.mode: none` を設定する (ツール定義の送信ごと抑制され、指示追従はツールなし相当に安定する)
+- `agent.enabled_tools` を本当に使うものだけへ絞る (部分的な緩和)
+- tool calling を多用するなら、より大きい・ツール学習が強いモデルを検討する
 
 ### macOS での常駐化 (launchd)
 
