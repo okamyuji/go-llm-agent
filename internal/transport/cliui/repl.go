@@ -13,10 +13,11 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 )
 
-// pasteCoalesceWindow ペースト行結合の時間窓。端末ペーストの行間は数 ms、rlwrap は
-// 一括書き込みのため 50ms で十分拾える。手入力で Enter 後 50ms 以内に次行を打ち終える
-// ことは現実的にないため、連続質問が誤って結合されることはない。
-const pasteCoalesceWindow = 50 * time.Millisecond
+// pasteCoalesceWindow ペースト行結合の時間窓。端末ペーストの行間は数 ms だが、
+// rlwrap 経由では 1 行ごとに readline の再表示処理を挟むため、巨大な行を含む
+// 貼り付けで数十 ms の間隙が生じる。手入力で Enter 後 150ms 以内に次の質問を
+// 打ち終えることは現実的にないため、連続質問が誤って結合されることはない。
+const pasteCoalesceWindow = 150 * time.Millisecond
 
 // Options REPL 生成オプション
 type Options struct {
@@ -68,20 +69,31 @@ func (r *REPL) Run(ctx context.Context) error {
 	history := []llm.Message{}
 	fmt.Fprintln(r.out, "go-llm-agent REPL  /quit で終了（生成中は ESC で中断）")
 
-	// 端末入力のときだけ、短時間に連続到着した行 (改行込みペースト) を 1 プロンプトへ結合する。
+	// 端末入力のときはプロンプトを非カノニカルで読む (カノニカルの 1024 バイト行制限で
+	// 長文ペーストが詰まるのを避ける)。あわせて短時間に連続到着した行 (改行込みペースト)
+	// を 1 プロンプトへ結合し、echo は readPrompt が自前で行う。
 	// パイプ入力は従来どおり 1 行 = 1 プロンプトを維持する。
 	coalesce := time.Duration(0)
+	var promptEcho io.Writer
 	if f, ok := r.in.(*os.File); ok {
-		if info, err := f.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+		if restore, started := beginPromptMode(f); started {
+			defer restore()
 			coalesce = pasteCoalesceWindow
+			promptEcho = r.out
 		}
 	}
 
 	for {
 		fmt.Fprint(r.out, ">> ")
-		line, err := pump.readPrompt(coalesce)
+		line, err := pump.readPrompt(ctx, coalesce, promptEcho)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, errCtrlC) {
+				return nil
+			}
+			if ctx.Err() != nil {
+				// SIGINT 等で root context がキャンセルされた。ループを続けると
+				// 以後の全ターンが即失敗し続けるため、ここできれいに終了する
+				fmt.Fprintln(r.out, "\nシグナルを受信したため終了します")
 				return nil
 			}
 			return err
@@ -105,6 +117,10 @@ func (r *REPL) Run(ctx context.Context) error {
 			history = append(history, turnMessages...)
 		}
 		if quit {
+			return nil
+		}
+		if ctx.Err() != nil {
+			fmt.Fprintln(r.out, "\nシグナルを受信したため終了します")
 			return nil
 		}
 	}
@@ -197,6 +213,10 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message) 
 				r.stopSpinner()
 				// ESC / Ctrl-C 中断による context キャンセルはユーザー操作なのでエラー表示しない
 				if interrupted && errors.Is(ev.Err, context.Canceled) {
+					continue
+				}
+				// SIGINT による root context キャンセルも同様 (呼び出し側が終了メッセージを出す)
+				if ctx.Err() != nil {
 					continue
 				}
 				fmt.Fprintf(out, "\n[error] %v\n", ev.Err)

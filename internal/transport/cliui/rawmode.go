@@ -1,10 +1,14 @@
 package cliui
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
@@ -88,48 +92,123 @@ func (p *bytePump) readLine() (string, error) {
 }
 
 // readPrompt は 1 プロンプト分の入力を返す。最初の行を読んだ後、coalesce の時間窓内に
-// 連続到着した行を改行で結合する。改行込みの長文ペーストは cooked 端末 (rlwrap 経由含む)
-// から短時間のバーストで届くため 1 プロンプトにまとまり、手入力の連続質問は窓を超えるので
-// 従来どおり行単位になる。coalesce が 0 以下なら readLine と同じ (パイプ入力の互換維持)。
+// 連続到着した行を改行で結合する。改行込みの長文ペーストは端末 (rlwrap 経由含む) から
+// 短時間のバーストで届くため 1 プロンプトにまとまり、手入力の連続質問は窓を超えるので
+// 行単位になる。coalesce が 0 以下なら 1 行 = 1 プロンプト (パイプ入力の互換維持)。
 // 窓内に改行まで届かなかった末尾バイトは消費せず pending へ戻す。
-func (p *bytePump) readPrompt(coalesce time.Duration) (string, error) {
-	line, err := p.readLine()
-	if err != nil || coalesce <= 0 {
-		return line, err
+//
+// 端末は beginPromptMode により非カノニカルで読むため (カノニカルの 1024 バイト行制限で
+// 長文ペーストが詰まるのを避ける)、行編集も自前で行う: BS/DEL は rune 単位の削除、
+// 空入力での Ctrl-D は EOF、\r 単独と \r\n は行末。echo 非 nil なら入力を書き戻す
+// (非カノニカルではカーネル echo が無効のため)。ctx キャンセル (SIGINT) で即座に返る。
+func (p *bytePump) readPrompt(ctx context.Context, coalesce time.Duration, echo io.Writer) (string, error) {
+	echoStr := func(s string) {
+		if echo != nil {
+			_, _ = io.WriteString(echo, s)
+		}
 	}
-	prompt := []byte(line)
-	var partial []byte
+	var prompt []byte // 確定済みの行 (\n 区切りで蓄積)
+	var line []byte   // 編集中の行
+	firstLineDone := false
+	lastWasCR := false
+	endLine := func() {
+		prompt = append(prompt, trimTrailingCR(line)...)
+		prompt = append(prompt, '\n')
+		line = line[:0:0]
+		firstLineDone = true
+		echoStr("\n")
+	}
+	finish := func() (string, error) {
+		return strings.TrimSuffix(string(prompt), "\n"), nil
+	}
 	for {
 		var b byte
-		if len(p.pending) > 0 {
+		switch {
+		case len(p.pending) > 0:
 			b = p.pending[0]
 			p.pending = append([]byte{}, p.pending[1:]...)
-		} else {
+		case !firstLineDone:
+			// 最初の行は時間制限なしで待つ
 			select {
 			case nb, ok := <-p.ch:
 				if !ok {
-					// 入力終端。未完の行があれば行として取り込む
-					if len(partial) > 0 {
-						prompt = append(prompt, '\n')
-						prompt = append(prompt, trimTrailingCR(partial)...)
+					if len(line) > 0 {
+						endLine()
+						return finish()
 					}
-					return string(prompt), nil
+					if len(prompt) > 0 {
+						return finish()
+					}
+					if p.err != nil {
+						return "", p.err
+					}
+					return "", io.EOF
 				}
 				b = nb
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		default:
+			if coalesce <= 0 {
+				return finish()
+			}
+			select {
+			case nb, ok := <-p.ch:
+				if !ok {
+					if len(line) > 0 {
+						endLine()
+					}
+					return finish()
+				}
+				b = nb
+			case <-ctx.Done():
+				return "", ctx.Err()
 			case <-time.After(coalesce):
-				p.pending = append(partial, p.pending...)
-				return string(prompt), nil
+				// 未完の行は消費せず次のプロンプトへ持ち越す
+				p.pending = append(line, p.pending...)
+				return finish()
 			}
 		}
+		wasCR := lastWasCR
+		lastWasCR = b == '\r'
 		switch b {
 		case '\n':
-			prompt = append(prompt, '\n')
-			prompt = append(prompt, trimTrailingCR(partial)...)
-			partial = partial[:0:0]
-		case 0x03:
+			if wasCR {
+				continue // \r で行末処理済み (\r\n)
+			}
+			endLine()
+			if coalesce <= 0 {
+				return finish()
+			}
+		case '\r':
+			endLine()
+			if coalesce <= 0 {
+				return finish()
+			}
+		case 0x03: // Ctrl-C
 			return "", errCtrlC
+		case 0x04: // Ctrl-D: 空入力なら EOF、途中なら無視 (cooked の挙動に合わせる)
+			if len(prompt) == 0 && len(line) == 0 {
+				return "", io.EOF
+			}
+		case 0x7f, 0x08: // BS/DEL: 編集中の行から最後の rune を消す
+			if len(line) == 0 {
+				continue
+			}
+			r, size := utf8.DecodeLastRune(line)
+			line = line[:len(line)-size]
+			// 消去 echo。マルチバイト rune は全角幅 (2 桁) とみなす近似で十分
+			width := 1
+			if r > unicode.MaxASCII {
+				width = 2
+			}
+			echoStr(strings.Repeat("\b \b", width))
 		default:
-			partial = append(partial, b)
+			line = append(line, b)
+			// string(b) は byte→rune 変換で UTF-8 を壊すため生バイトのまま書く
+			if echo != nil {
+				_, _ = echo.Write([]byte{b})
+			}
 		}
 	}
 }

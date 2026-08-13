@@ -3,6 +3,7 @@ package cliui_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -329,6 +330,29 @@ func TestRepl_InterruptedPartialContentIsKept(t *testing.T) {
 	}
 	if got[2].Role != llm.RoleUser || got[2].Content != "q2" {
 		t.Errorf("messages[2]=%+v, want new user message", got[2])
+	}
+}
+
+// TestRepl_ExitsWhenContextCanceledAtPrompt SIGINT で root context がキャンセルされたら、
+// プロンプト待ちでブロックしていても REPL は即座にきれいに終了する。
+// 従来はループが回り続け、以後の全ターンが即失敗するゾンビセッションになっていた。
+func TestRepl_ExitsWhenContextCanceledAtPrompt(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+	var out bytes.Buffer
+	r := cliui.NewREPL(fakeSvc{}, cliui.Options{Model: "test/m", In: pr, Out: &out, DisableSpinner: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+	time.Sleep(50 * time.Millisecond) // プロンプト待ちに入るのを待つ
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run err=%v, want nil (graceful exit)", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("REPL did not exit after context cancellation")
 	}
 }
 
