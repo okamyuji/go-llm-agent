@@ -34,6 +34,43 @@ func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
 	return s.runReAct(ctx, in, out)
 }
 
+// reactState runReAct が 1 ターンの間持ち回る可変状態。
+// ループ本体と各段階の下位関数が同じ履歴・再試行カウンタを共有する
+type reactState struct {
+	msgs             []llm.Message
+	turnMessageStart int
+	// expansionRequested 直前の assistant 回答への追加説明依頼か
+	expansionRequested        bool
+	priorAssistantContent     string
+	expansionGroundingContent string
+	expansionRetries          int
+	answerRetries             int
+	// automaticWebToolsExecuted LLM の判断を待たず web_search / web_fetch を実行済みか
+	automaticWebToolsExecuted bool
+	validationRetries         int
+	lastValidationCallID      string
+	maxValidationRetries      int
+}
+
+// streamResult 1 回の LLM ストリーム呼び出しから取り出した結果
+type streamResult struct {
+	content string
+	call    *llm.ToolCall
+}
+
+// streamAccumulator ストリームイベントの積算先
+type streamAccumulator struct {
+	content strings.Builder
+	call    *llm.ToolCall
+	usage   *llm.Usage
+}
+
+// emitFail EventError を送出して同じ err を返す。ターン打ち切り経路の共通形
+func emitFail(out chan<- Event, err error) error {
+	out <- Event{Kind: EventError, Err: err}
+	return err
+}
+
 // runReAct LLM とツールを最大 MaxToolHops 回交互に呼ぶ ReAct スタイルのループ本体
 func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) error {
 	ctx, agentSpan := obs.StartAgentSpan(ctx, in.Model)
@@ -41,9 +78,54 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 
 	prov, model, err := s.reg.Resolve(in.Model)
 	if err != nil {
-		out <- Event{Kind: EventError, Err: err}
-		return err
+		return emitFail(out, err)
 	}
+	st, err := s.newReactState(ctx, in)
+	if err != nil {
+		return emitFail(out, err)
+	}
+	tools, tc, allowAutomaticWebTools := s.resolveToolPlan(in)
+	if allowAutomaticWebTools && requiresWebSearch(st.msgs) {
+		if werr := s.runAutomaticWebTools(ctx, in, st, out); werr != nil {
+			return emitFail(out, werr)
+		}
+	}
+	if st.automaticWebToolsExecuted {
+		tc = nil
+	}
+	for hop := 0; hop <= in.MaxToolHops; hop++ {
+		res, serr := s.streamTurn(ctx, prov, model, llm.ChatRequest{
+			Model:       model,
+			Messages:    st.msgs,
+			Tools:       st.requestTools(tools, hop),
+			ToolChoice:  tc,
+			Temperature: generationRetryTemperature(max(st.expansionRetries, st.answerRetries)),
+		}, in.SessionID, !st.expansionRequested && !st.automaticWebToolsExecuted, out)
+		if serr != nil {
+			return emitFail(out, serr)
+		}
+		if res.call == nil {
+			content, retry := s.resolveAssistantContent(st, res.content, out)
+			if retry {
+				hop-- // 回答・追加説明の再生成は tool hop として数えない
+				continue
+			}
+			final := llm.Message{Role: llm.RoleAssistant, Content: content}
+			st.msgs = append(st.msgs, final)
+			turnMessages := append([]llm.Message(nil), st.msgs[st.turnMessageStart:]...)
+			out <- Event{Kind: EventFinal, Final: &final, TurnMessages: turnMessages}
+			return nil
+		}
+		st.msgs = append(st.msgs, llm.Message{Role: llm.RoleAssistant, Content: res.content, ToolCalls: []llm.ToolCall{*res.call}})
+		if terr := s.handleToolCall(ctx, in, st, res.call, out); terr != nil {
+			return emitFail(out, terr)
+		}
+	}
+	return emitFail(out, fmt.Errorf("max tool hops を超えました (%d)", in.MaxToolHops))
+}
+
+// newReactState system プロンプト付加・enricher 適用・入力スキャンを行い初期状態を組み立てる
+func (s *service) newReactState(ctx context.Context, in Input) (*reactState, error) {
 	msgs := append([]llm.Message{}, in.Messages...)
 	if in.SystemPrompt != "" {
 		msgs = append([]llm.Message{{Role: llm.RoleSystem, Content: in.SystemPrompt}}, msgs...)
@@ -56,299 +138,330 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 			msgs = enriched
 		}
 	}
-	expansionRequested := requiresExpandedAnswer(msgs)
-	priorAssistantContent := latestPriorAssistantContent(msgs)
-	expansionGroundingContent := latestToolResultContent(msgs, "web_fetch")
-	turnMessageStart := len(msgs)
-	// 06 番設計書 入力スキャナを最初の LLM 呼び出し前にすべての user/system メッセージへ適用する
-	// 検出された場合は EventError で早期リターンする (fail-closed)
-	// クライアントには PatternID 等の detector 内部情報を返さない (検出ロジック露出を防ぐ)
-	// 詳細なルール ID は slog でサーバ側にだけ残し、攻撃者へのフィードバックを最小化する
-	if s.scanner != nil {
-		for _, m := range msgs {
-			if m.Role != llm.RoleUser && m.Role != llm.RoleSystem {
-				continue
-			}
-			findings := s.scanner.Scan(m.Content)
-			if len(findings) > 0 {
-				slog.WarnContext(ctx, "input scanner blocked", "role", string(m.Role), "pattern_id", findings[0].PatternID)
-				err := fmt.Errorf("input blocked by safety scanner")
-				out <- Event{Kind: EventError, Err: err}
-				return err
-			}
-		}
+	if err := s.scanInput(ctx, msgs); err != nil {
+		return nil, err
 	}
-	validationRetries := 0
-	lastValidationCallID := ""
 	maxValidationRetries := max(in.ValidationMaxRetries, 0)
 	if maxValidationRetries == 0 {
 		maxValidationRetries = max(s.defaultMaxRetries, 0)
 	}
-	tc := in.ToolChoice
+	return &reactState{
+		msgs:                      msgs,
+		turnMessageStart:          len(msgs),
+		expansionRequested:        requiresExpandedAnswer(msgs),
+		priorAssistantContent:     latestPriorAssistantContent(msgs),
+		expansionGroundingContent: latestToolResultContent(msgs, "web_fetch"),
+		maxValidationRetries:      maxValidationRetries,
+	}, nil
+}
+
+// scanInput 06 番設計書 入力スキャナを最初の LLM 呼び出し前に user/system メッセージへ適用する。
+// クライアントには PatternID 等の detector 内部情報を返さない (検出ロジック露出を防ぐ)。
+// 詳細なルール ID は slog でサーバ側にだけ残し、攻撃者へのフィードバックを最小化する
+func (s *service) scanInput(ctx context.Context, msgs []llm.Message) error {
+	if s.scanner == nil {
+		return nil
+	}
+	for _, m := range msgs {
+		if m.Role != llm.RoleUser && m.Role != llm.RoleSystem {
+			continue
+		}
+		findings := s.scanner.Scan(m.Content)
+		if len(findings) > 0 {
+			slog.WarnContext(ctx, "input scanner blocked", "role", string(m.Role), "pattern_id", findings[0].PatternID)
+			return fmt.Errorf("input blocked by safety scanner")
+		}
+	}
+	return nil
+}
+
+// resolveToolPlan 送信するツール定義と tool_choice を決める。
+// tool_choice none はツール定義の送信ごと抑制する。定義を送ったまま「呼ぶな」と
+// 指示しても、tool_choice を無視するモデルがツール呼び出し JSON をテキストとして
+// 出力する事故を防げないため。allowAutomaticWebTools は none 抑制より前の tc で判定する
+func (s *service) resolveToolPlan(in Input) (tools []llm.ToolSpec, tc *llm.ToolChoice, allowAutomaticWebTools bool) {
+	tc = in.ToolChoice
 	if tc == nil {
 		tc = s.defaultToolChoice
 	}
-	allowAutomaticWebTools := automaticToolChoice(tc)
-	// tool_choice none はツール定義の送信ごと抑制する。
-	// 定義を送ったまま「呼ぶな」と指示しても、tool_choice を無視するモデルが
-	// ツール呼び出し JSON をテキストとして出力する事故を防げないため
-	tools := s.specs()
+	allowAutomaticWebTools = automaticToolChoice(tc)
+	tools = s.specs()
 	if tc != nil && tc.Mode == "none" {
-		tools = nil
-		tc = nil
+		return nil, nil, allowAutomaticWebTools
 	}
-	automaticWebToolsExecuted := false
-	if allowAutomaticWebTools && requiresWebSearch(msgs) {
-		if _, ok := s.tools.Lookup("web_search"); ok {
-			automaticWebToolsExecuted = true
-			prompt := latestUserPrompt(msgs)
-			searchArgs, marshalErr := json.Marshal(map[string]string{"query": prompt})
-			if marshalErr != nil {
-				err := fmt.Errorf("web_search arguments: %w", marshalErr)
-				out <- Event{Kind: EventError, Err: err}
-				return err
-			}
-			searchCall := llm.ToolCall{ID: nextAutomaticToolCallID(msgs, "web_search", "webs"), Name: "web_search", Arguments: searchArgs}
-			msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{searchCall}})
-			out <- Event{Kind: EventToolCall, ToolCall: &searchCall}
-			searchOutcome := s.executeOne(ctx, in.SessionID, searchCall)
-			searchResult := &ToolResult{CallID: searchOutcome.CallID, Name: searchOutcome.Name, Content: searchOutcome.Content, IsError: searchOutcome.IsError}
-			out <- Event{Kind: EventToolResult, ToolResult: searchResult}
-			msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: searchOutcome.Content, ToolCallID: searchCall.ID, Name: searchCall.Name})
+	return tools, tc, allowAutomaticWebTools
+}
 
-			if !searchOutcome.IsError {
-				if _, ok := s.tools.Lookup("web_fetch"); ok {
-					searchContent := unwrapUntrusted(searchOutcome.Content, "web_search")
-					if fetchURL := selectWebFetchURL(searchContent, prompt); fetchURL != "" {
-						fetchArgs, fetchMarshalErr := json.Marshal(map[string]string{"url": fetchURL})
-						if fetchMarshalErr != nil {
-							err := fmt.Errorf("web_fetch arguments: %w", fetchMarshalErr)
-							out <- Event{Kind: EventError, Err: err}
-							return err
-						}
-						fetchCall := llm.ToolCall{ID: nextAutomaticToolCallID(msgs, "web_fetch", "webf"), Name: "web_fetch", Arguments: fetchArgs}
-						msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{fetchCall}})
-						out <- Event{Kind: EventToolCall, ToolCall: &fetchCall}
-						fetchOutcome := s.executeOne(ctx, in.SessionID, fetchCall)
-						fetchResult := &ToolResult{CallID: fetchOutcome.CallID, Name: fetchOutcome.Name, Content: fetchOutcome.Content, IsError: fetchOutcome.IsError}
-						out <- Event{Kind: EventToolResult, ToolResult: fetchResult}
-						msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: fetchOutcome.Content, ToolCallID: fetchCall.ID, Name: fetchCall.Name})
-					}
-				}
-			}
-		}
+// requestTools 自動 Web 実行直後の最初の hop ではツール定義を送らない。
+// 取得済みの情報での回答生成を優先させるため
+func (st *reactState) requestTools(tools []llm.ToolSpec, hop int) []llm.ToolSpec {
+	if st.automaticWebToolsExecuted && hop == 0 {
+		return nil
 	}
-	if automaticWebToolsExecuted {
-		tc = nil
+	return tools
+}
+
+// runAutomaticWebTools web_search と (成功時は) web_fetch を LLM の判断を待たずに実行し
+// 結果を履歴へ積む。web_search 未登録なら何もしない
+func (s *service) runAutomaticWebTools(ctx context.Context, in Input, st *reactState, out chan<- Event) error {
+	if _, ok := s.tools.Lookup("web_search"); !ok {
+		return nil
 	}
-	expansionRetries := 0
-	answerRetries := 0
-	for hop := 0; hop <= in.MaxToolHops; hop++ {
-		requestTools := tools
-		if automaticWebToolsExecuted && hop == 0 {
-			requestTools = nil
-		}
-		llmCtx, llmSpan := obs.StartLLMSpan(ctx, prov.Name(), model)
-		stream, err := prov.Stream(llmCtx, llm.ChatRequest{
-			Model:       model,
-			Messages:    msgs,
-			Tools:       requestTools,
-			ToolChoice:  tc,
-			Temperature: generationRetryTemperature(max(expansionRetries, answerRetries)),
-		})
-		if err != nil {
-			llmSpan.End()
-			out <- Event{Kind: EventError, Err: err}
-			return err
-		}
-		var contentBuilder strings.Builder
-		var pendingCall *llm.ToolCall
-		var lastUsage *llm.Usage
-		for {
-			ev, ok := stream.Recv()
-			if !ok {
-				break
-			}
-			if ev.Err != nil {
-				if cerr := stream.Close(); cerr != nil {
-					slog.WarnContext(ctx, "llm stream close failed after recv error",
-						"provider", prov.Name(), "model", model, "err", cerr)
-				}
-				llmSpan.End()
-				out <- Event{Kind: EventError, Err: ev.Err}
-				return ev.Err
-			}
-			if ev.DeltaText != "" {
-				delta := ev.DeltaText
-				if s.redactor != nil {
-					delta = s.redactor.Redact(delta)
-				}
-				contentBuilder.WriteString(delta)
-				if !expansionRequested && !automaticWebToolsExecuted {
-					out <- Event{Kind: EventDelta, Delta: delta}
-				}
-			}
-			if ev.ToolCall != nil {
-				pendingCall = ev.ToolCall
-				out <- Event{Kind: EventToolCall, ToolCall: ev.ToolCall}
-			}
-			if ev.Usage != nil {
-				lastUsage = ev.Usage
-			}
-		}
-		assistantContent := contentBuilder.String()
-		if err := stream.Close(); err != nil {
-			llmSpan.End()
-			out <- Event{Kind: EventError, Err: err}
-			return err
-		}
-		if lastUsage != nil {
-			obs.RecordTokens(llmCtx, prov.Name(), model, lastUsage.InputTokens, lastUsage.OutputTokens)
-			ev := Event{Kind: EventUsage, Usage: lastUsage}
-			if s.billing != nil {
-				sessionID := in.SessionID
-				if sessionID == "" {
-					sessionID = "default"
-				}
-				snap, berr := s.billing.Add(ctx, sessionID, prov.Name(), model, lastUsage.InputTokens, lastUsage.OutputTokens)
-				if berr != nil {
-					// ErrBudgetExceeded を含むすべての billing エラーは EventError として伝播する
-					// 旧コードは ErrBudgetExceeded 分岐で同一処理を二重に書いていたため統合した
-					llmSpan.End()
-					out <- Event{Kind: EventError, Err: berr}
-					return berr
-				}
-				snapCopy := snap
-				ev.Cost = &snapCopy
-			}
-			out <- ev
-		}
-		llmSpan.End()
+	st.automaticWebToolsExecuted = true
+	prompt := latestUserPrompt(st.msgs)
+	searchArgs, err := json.Marshal(map[string]string{"query": prompt})
+	if err != nil {
+		return fmt.Errorf("web_search arguments: %w", err)
+	}
+	searchCall := llm.ToolCall{ID: nextAutomaticToolCallID(st.msgs, "web_search", "webs"), Name: "web_search", Arguments: searchArgs}
+	outcome := s.invokeAutomaticTool(ctx, in.SessionID, st, searchCall, out)
+	if outcome.IsError {
+		return nil
+	}
+	return s.runAutomaticWebFetch(ctx, in, st, unwrapUntrusted(outcome.Content, "web_search"), prompt, out)
+}
 
-		if pendingCall == nil && automaticWebToolsExecuted {
-			if !answerContentSufficient(assistantContent) && answerRetries < maxResponseRetries {
-				answerRetries++
-				hop-- // 回答の再生成はtool hopとして数えない。
-				continue
-			}
-			if !answerContentSufficient(assistantContent) {
-				assistantContent = "Web取得結果から完全な回答を生成できませんでした。質問を具体化して再実行してください。"
-			}
-			out <- Event{Kind: EventDelta, Delta: assistantContent}
-		}
+// runAutomaticWebFetch 検索結果から本文取得先を 1 件選び web_fetch を実行する
+func (s *service) runAutomaticWebFetch(ctx context.Context, in Input, st *reactState, searchContent, prompt string, out chan<- Event) error {
+	if _, ok := s.tools.Lookup("web_fetch"); !ok {
+		return nil
+	}
+	fetchURL := selectWebFetchURL(searchContent, prompt)
+	if fetchURL == "" {
+		return nil
+	}
+	fetchArgs, err := json.Marshal(map[string]string{"url": fetchURL})
+	if err != nil {
+		return fmt.Errorf("web_fetch arguments: %w", err)
+	}
+	fetchCall := llm.ToolCall{ID: nextAutomaticToolCallID(st.msgs, "web_fetch", "webf"), Name: "web_fetch", Arguments: fetchArgs}
+	s.invokeAutomaticTool(ctx, in.SessionID, st, fetchCall, out)
+	return nil
+}
 
-		if pendingCall == nil && expansionRequested {
-			expandedContent := expandedAnswerContent(priorAssistantContent, expansionGroundingContent, assistantContent)
-			if !expansionAnswerSufficient(expandedContent) && expansionRetries < maxResponseRetries {
-				expansionRetries++
-				hop-- // 追加説明の再生成はtool hopとして数えない。
-				continue
-			}
-			if !expansionAnswerSufficient(expandedContent) {
-				expandedContent = "直前の回答と重複しない追加情報を生成できませんでした。質問の観点を指定してください。"
-			}
-			assistantContent = expandedContent
-			out <- Event{Kind: EventDelta, Delta: assistantContent}
-		}
+// invokeAutomaticTool 自動実行するツール呼び出しを履歴へ積みつつ実行し結果を通知する
+func (s *service) invokeAutomaticTool(ctx context.Context, sessionID string, st *reactState, call llm.ToolCall, out chan<- Event) ParallelOutcome {
+	st.msgs = append(st.msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}})
+	out <- Event{Kind: EventToolCall, ToolCall: &call}
+	outcome := s.executeOne(ctx, sessionID, call)
+	out <- Event{Kind: EventToolResult, ToolResult: &ToolResult{CallID: outcome.CallID, Name: outcome.Name, Content: outcome.Content, IsError: outcome.IsError}}
+	st.msgs = append(st.msgs, llm.Message{Role: llm.RoleTool, Content: outcome.Content, ToolCallID: call.ID, Name: call.Name})
+	return outcome
+}
 
-		assistant := llm.Message{Role: llm.RoleAssistant, Content: assistantContent}
-		if pendingCall != nil {
-			assistant.ToolCalls = []llm.ToolCall{*pendingCall}
-		}
-		msgs = append(msgs, assistant)
-
-		if pendingCall == nil {
-			final := assistant
-			turnMessages := append([]llm.Message(nil), msgs[turnMessageStart:]...)
-			out <- Event{Kind: EventFinal, Final: &final, TurnMessages: turnMessages}
-			return nil
-		}
-
-		t, ok := s.tools.Lookup(pendingCall.Name)
+// streamTurn 1 回の LLM ストリーム呼び出しを行い、本文とツール呼び出しを取り出す。
+// usage が届いた場合は EventUsage (と billing 集計) をここで済ませる
+func (s *service) streamTurn(ctx context.Context, prov llm.Provider, model string, req llm.ChatRequest, sessionID string, emitDelta bool, out chan<- Event) (streamResult, error) {
+	llmCtx, llmSpan := obs.StartLLMSpan(ctx, prov.Name(), model)
+	defer llmSpan.End()
+	stream, err := prov.Stream(llmCtx, req)
+	if err != nil {
+		return streamResult{}, err
+	}
+	var acc streamAccumulator
+	for {
+		ev, ok := stream.Recv()
 		if !ok {
-			err := fmt.Errorf("tool %q が見つかりません", pendingCall.Name)
-			out <- Event{Kind: EventError, Err: err}
-			return err
+			break
 		}
-		if s.validator != nil {
-			// 異なる ToolCall に切り替わった場合は budget を per-call で初期化する
-			if pendingCall.ID != lastValidationCallID {
-				validationRetries = 0
-				lastValidationCallID = pendingCall.ID
+		if ev.Err != nil {
+			if cerr := stream.Close(); cerr != nil {
+				slog.WarnContext(ctx, "llm stream close failed after recv error",
+					"provider", prov.Name(), "model", model, "err", cerr)
 			}
-			if vok, vmsg := s.validator.Validate(pendingCall.Name, pendingCall.Arguments); !vok {
-				if validationRetries < maxValidationRetries {
-					validationRetries++
-					tr := &ToolResult{CallID: pendingCall.ID, Name: pendingCall.Name, Content: "schema validation failed: " + vmsg + " — please correct the arguments to match the JSON schema and try again", IsError: true}
-					out <- Event{Kind: EventToolResult, ToolResult: tr}
-					msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: tr.Content, ToolCallID: pendingCall.ID, Name: pendingCall.Name})
-					continue
-				}
-				var err error
-				if maxValidationRetries == 0 {
-					err = fmt.Errorf("schema validation failed (retries disabled): %s", vmsg)
-				} else {
-					err = fmt.Errorf("schema validation max retries (%d) exceeded: %s", maxValidationRetries, vmsg)
-				}
-				out <- Event{Kind: EventError, Err: err}
-				return err
-			}
+			return streamResult{}, ev.Err
 		}
-		if s.approver != nil && s.approvalRequired[pendingCall.Name] {
-			runID := in.SessionID
-			if runID == "" {
-				runID = "default"
-			}
-			// approvalTimeout 未指定 (0) は無期限待機による goroutine leak を招くため
-			// defaultApprovalTimeout (5 分) にフォールバックする
-			timeout := s.approvalTimeout
-			if timeout <= 0 {
-				timeout = defaultApprovalTimeout
-			}
-			apCtx, apCancel := context.WithTimeout(ctx, timeout)
-			d, aerr := s.approver.Request(apCtx, ApprovalRequest{
-				RunID: runID, CallID: pendingCall.ID, ToolName: pendingCall.Name, Arguments: pendingCall.Arguments,
-			})
-			apCancel()
-			if aerr != nil && !errors.Is(aerr, ErrApprovalTimeout) {
-				out <- Event{Kind: EventError, Err: aerr}
-				return aerr
-			}
-			if !d.Allowed {
-				tr := &ToolResult{CallID: pendingCall.ID, Name: pendingCall.Name, Content: "tool execution denied by reviewer: " + d.Reason, IsError: true}
-				out <- Event{Kind: EventToolResult, ToolResult: tr}
-				msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: tr.Content, ToolCallID: pendingCall.ID, Name: pendingCall.Name})
-				continue
-			}
-		}
-		execCtx := context.WithValue(ctx, tool.CorrelationKey(), pendingCall.ID)
-		execCtx, toolSpan := obs.StartToolSpan(execCtx, pendingCall.Name, pendingCall.ID)
-		start := time.Now()
-		res, terr := t.Execute(execCtx, pendingCall.Arguments)
-		ok2 := terr == nil && !res.IsError
-		obs.RecordToolOutcome(execCtx, pendingCall.Name, ok2, time.Since(start))
-		toolSpan.End()
-		content := res.Content
-		if terr != nil {
-			content = terr.Error()
-		}
-		// 06 番設計書 全ツール出力に untrusted マーカーを無条件付与する
-		// 旧実装は "[UNTRUSTED INPUT" 接頭辞ありで skip していたが、ツールが攻撃的に
-		// 自前マーカーを偽装した場合に外周のラップを回避できる穴があったため常に付与する
-		content = wrapUntrusted(content, pendingCall.Name)
-		if s.redactor != nil {
-			content = s.redactor.Redact(content)
-		}
-		tr := &ToolResult{CallID: pendingCall.ID, Name: pendingCall.Name, Content: content, IsError: terr != nil || res.IsError}
-		out <- Event{Kind: EventToolResult, ToolResult: tr}
-		// 02 番設計書 履歴へ積むツール結果だけを上限文字数まで切り詰める。
-		// EventToolResult で通知済みの tr.Content (全文) は変更しない。
-		historyContent := TruncateToolResult(tr.Content, s.toolResultLimitMaxChars)
-		msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: historyContent, ToolCallID: pendingCall.ID, Name: pendingCall.Name})
+		s.accumulateStreamEvent(&acc, ev, emitDelta, out)
 	}
-	err = fmt.Errorf("max tool hops を超えました (%d)", in.MaxToolHops)
-	out <- Event{Kind: EventError, Err: err}
-	return err
+	if cerr := stream.Close(); cerr != nil {
+		return streamResult{}, cerr
+	}
+	if acc.usage != nil {
+		if uerr := s.emitUsage(ctx, llmCtx, sessionID, prov.Name(), model, acc.usage, out); uerr != nil {
+			return streamResult{}, uerr
+		}
+	}
+	return streamResult{content: acc.content.String(), call: acc.call}, nil
+}
+
+// accumulateStreamEvent 1 件のストリームイベントを積算し、必要なら中継イベントを送る
+func (s *service) accumulateStreamEvent(acc *streamAccumulator, ev llm.StreamEvent, emitDelta bool, out chan<- Event) {
+	if ev.DeltaText != "" {
+		delta := ev.DeltaText
+		if s.redactor != nil {
+			delta = s.redactor.Redact(delta)
+		}
+		acc.content.WriteString(delta)
+		if emitDelta {
+			out <- Event{Kind: EventDelta, Delta: delta}
+		}
+	}
+	if ev.ToolCall != nil {
+		acc.call = ev.ToolCall
+		out <- Event{Kind: EventToolCall, ToolCall: ev.ToolCall}
+	}
+	if ev.Usage != nil {
+		acc.usage = ev.Usage
+	}
+}
+
+// emitUsage 実測 usage を記録し EventUsage を送る。
+// ErrBudgetExceeded を含むすべての billing エラーは呼び出し元へ伝播し、EventUsage は送らない
+func (s *service) emitUsage(ctx, llmCtx context.Context, sessionID, provName, model string, usage *llm.Usage, out chan<- Event) error {
+	obs.RecordTokens(llmCtx, provName, model, usage.InputTokens, usage.OutputTokens)
+	ev := Event{Kind: EventUsage, Usage: usage}
+	if s.billing != nil {
+		if sessionID == "" {
+			sessionID = "default"
+		}
+		snap, berr := s.billing.Add(ctx, sessionID, provName, model, usage.InputTokens, usage.OutputTokens)
+		if berr != nil {
+			return berr
+		}
+		snapCopy := snap
+		ev.Cost = &snapCopy
+	}
+	out <- ev
+	return nil
+}
+
+// resolveAssistantContent ツール呼び出しを伴わない応答の後処理を行う。
+// 自動 Web 実行後と追加説明依頼では内容が不十分なら再生成を要求する (retry=true)
+func (s *service) resolveAssistantContent(st *reactState, content string, out chan<- Event) (string, bool) {
+	if st.automaticWebToolsExecuted {
+		if !answerContentSufficient(content) && st.answerRetries < maxResponseRetries {
+			st.answerRetries++
+			return content, true
+		}
+		if !answerContentSufficient(content) {
+			content = "Web取得結果から完全な回答を生成できませんでした。質問を具体化して再実行してください。"
+		}
+		out <- Event{Kind: EventDelta, Delta: content}
+	}
+	if st.expansionRequested {
+		expanded := expandedAnswerContent(st.priorAssistantContent, st.expansionGroundingContent, content)
+		if !expansionAnswerSufficient(expanded) && st.expansionRetries < maxResponseRetries {
+			st.expansionRetries++
+			return content, true
+		}
+		if !expansionAnswerSufficient(expanded) {
+			expanded = "直前の回答と重複しない追加情報を生成できませんでした。質問の観点を指定してください。"
+		}
+		content = expanded
+		out <- Event{Kind: EventDelta, Delta: content}
+	}
+	return content, false
+}
+
+// handleToolCall 1 件の ToolCall を検証・承認・実行し結果を履歴へ積む。
+// 非 nil の戻り値はターンの打ち切りを意味する。nil はスキップ・実行のいずれでも
+// 次の hop へ進んでよいことを表す
+func (s *service) handleToolCall(ctx context.Context, in Input, st *reactState, call *llm.ToolCall, out chan<- Event) error {
+	t, ok := s.tools.Lookup(call.Name)
+	if !ok {
+		return fmt.Errorf("tool %q が見つかりません", call.Name)
+	}
+	proceed, verr := s.validateToolArgs(st, call, out)
+	if verr != nil || !proceed {
+		return verr
+	}
+	approved, aerr := s.requestApproval(ctx, in, st, call, out)
+	if aerr != nil || !approved {
+		return aerr
+	}
+	s.executeAndRecord(ctx, st, t, call, out)
+	return nil
+}
+
+// validateToolArgs JSON Schema 検証を行う。検証失敗は budget の範囲で
+// モデルへ訂正を促すツール結果を積み (proceed=false, err=nil)、budget 超過は err を返す
+func (s *service) validateToolArgs(st *reactState, call *llm.ToolCall, out chan<- Event) (bool, error) {
+	if s.validator == nil {
+		return true, nil
+	}
+	// 異なる ToolCall に切り替わった場合は budget を per-call で初期化する
+	if call.ID != st.lastValidationCallID {
+		st.validationRetries = 0
+		st.lastValidationCallID = call.ID
+	}
+	vok, vmsg := s.validator.Validate(call.Name, call.Arguments)
+	if vok {
+		return true, nil
+	}
+	if st.validationRetries < st.maxValidationRetries {
+		st.validationRetries++
+		st.appendToolError(out, call, "schema validation failed: "+vmsg+" — please correct the arguments to match the JSON schema and try again")
+		return false, nil
+	}
+	if st.maxValidationRetries == 0 {
+		return false, fmt.Errorf("schema validation failed (retries disabled): %s", vmsg)
+	}
+	return false, fmt.Errorf("schema validation max retries (%d) exceeded: %s", st.maxValidationRetries, vmsg)
+}
+
+// requestApproval 承認が必要なツールについて承認を待つ。
+// 拒否は (false, nil) で、ツール結果へ拒否として積みターンは継続する
+func (s *service) requestApproval(ctx context.Context, in Input, st *reactState, call *llm.ToolCall, out chan<- Event) (bool, error) {
+	if s.approver == nil || !s.approvalRequired[call.Name] {
+		return true, nil
+	}
+	runID := in.SessionID
+	if runID == "" {
+		runID = "default"
+	}
+	// approvalTimeout 未指定 (0) は無期限待機による goroutine leak を招くため
+	// defaultApprovalTimeout (5 分) にフォールバックする
+	timeout := s.approvalTimeout
+	if timeout <= 0 {
+		timeout = defaultApprovalTimeout
+	}
+	apCtx, apCancel := context.WithTimeout(ctx, timeout)
+	d, aerr := s.approver.Request(apCtx, ApprovalRequest{
+		RunID: runID, CallID: call.ID, ToolName: call.Name, Arguments: call.Arguments,
+	})
+	apCancel()
+	if aerr != nil && !errors.Is(aerr, ErrApprovalTimeout) {
+		return false, aerr
+	}
+	if !d.Allowed {
+		st.appendToolError(out, call, "tool execution denied by reviewer: "+d.Reason)
+		return false, nil
+	}
+	return true, nil
+}
+
+// executeAndRecord ツールを実行し、結果を通知して履歴へ積む
+func (s *service) executeAndRecord(ctx context.Context, st *reactState, t tool.Tool, call *llm.ToolCall, out chan<- Event) {
+	execCtx := context.WithValue(ctx, tool.CorrelationKey(), call.ID)
+	execCtx, toolSpan := obs.StartToolSpan(execCtx, call.Name, call.ID)
+	start := time.Now()
+	res, terr := t.Execute(execCtx, call.Arguments)
+	ok := terr == nil && !res.IsError
+	obs.RecordToolOutcome(execCtx, call.Name, ok, time.Since(start))
+	toolSpan.End()
+	content := res.Content
+	if terr != nil {
+		content = terr.Error()
+	}
+	// 06 番設計書 全ツール出力に untrusted マーカーを無条件付与する
+	// 旧実装は "[UNTRUSTED INPUT" 接頭辞ありで skip していたが、ツールが攻撃的に
+	// 自前マーカーを偽装した場合に外周のラップを回避できる穴があったため常に付与する
+	content = wrapUntrusted(content, call.Name)
+	if s.redactor != nil {
+		content = s.redactor.Redact(content)
+	}
+	tr := &ToolResult{CallID: call.ID, Name: call.Name, Content: content, IsError: !ok}
+	out <- Event{Kind: EventToolResult, ToolResult: tr}
+	// 02 番設計書 履歴へ積むツール結果だけを上限文字数まで切り詰める。
+	// EventToolResult で通知済みの tr.Content (全文) は変更しない。
+	st.msgs = append(st.msgs, llm.Message{Role: llm.RoleTool, Content: TruncateToolResult(tr.Content, s.toolResultLimitMaxChars), ToolCallID: call.ID, Name: call.Name})
+}
+
+// appendToolError 拒否・検証失敗をツール結果として通知し履歴へ積む
+func (st *reactState) appendToolError(out chan<- Event, call *llm.ToolCall, content string) {
+	tr := &ToolResult{CallID: call.ID, Name: call.Name, Content: content, IsError: true}
+	out <- Event{Kind: EventToolResult, ToolResult: tr}
+	st.msgs = append(st.msgs, llm.Message{Role: llm.RoleTool, Content: tr.Content, ToolCallID: call.ID, Name: call.Name})
 }
 
 func automaticToolChoice(tc *llm.ToolChoice) bool {
