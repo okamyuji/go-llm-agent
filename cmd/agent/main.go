@@ -126,7 +126,7 @@ func cmdEval(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts, _, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath))
+	opts, _, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath), nil)
 	if optsErr != nil {
 		return optsErr
 	}
@@ -294,10 +294,26 @@ func loadDeps(ctx context.Context, configPath string, isServe bool) (*config.Con
 	return cfg, llmReg, toolReg, store, nil
 }
 
+// approvalOption 承認オプションを組み立てる。decider が非 nil (chat の対話プロンプタ)
+// ならそれを使い、nil なら新規 HTTPApprover を broker アダプタで包む (serve・run・eval)。
+// 生成した HTTPApprover は serve が Submit 経路へ渡すため第 2 戻り値で返す
+func approvalOption(cfg *config.Config, decider agent.ApprovalDecider) (agent.Option, *agent.HTTPApprover) {
+	// default_decision と timeout_seconds は config.Load 側の validateApproval で
+	// 既に検証済みのため、ここでは値をそのまま使う。fail-open 経路は存在しない
+	var approver *agent.HTTPApprover
+	d := decider
+	if d == nil {
+		approver = agent.NewHTTPApprover()
+		d = agent.NewBrokerDecider(approver)
+	}
+	timeout := time.Duration(cfg.Agent.Approval.TimeoutSeconds) * time.Second
+	return agent.WithApprovalDecider(d, cfg.Agent.Approval.RequiredTools, timeout), approver
+}
+
 // agentOptions config に基づき agent.Service のオプション集合を組み立てる
 // safety / billing / strategy などの構築でエラーになった場合、呼び出し側に伝播する
 // HTTPApprover を生成した場合、第 2 戻り値で返す。chat/run サブコマンドでは捨ててよい
-func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulator, configDir string) ([]agent.Option, *agent.HTTPApprover, error) {
+func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulator, configDir string, decider agent.ApprovalDecider) ([]agent.Option, *agent.HTTPApprover, error) {
 	var opts []agent.Option
 	var approver *agent.HTTPApprover
 	if acc != nil {
@@ -345,11 +361,9 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 		}
 	}
 	if len(cfg.Agent.Approval.RequiredTools) > 0 {
-		// default_decision と timeout_seconds は config.Load 側の validateApproval で
-		// 既に検証済みのため、ここでは値をそのまま使う。fail-open 経路は存在しない
-		approver = agent.NewHTTPApprover()
-		timeout := time.Duration(cfg.Agent.Approval.TimeoutSeconds) * time.Second
-		opts = append(opts, agent.WithApprover(approver, cfg.Agent.Approval.RequiredTools, timeout))
+		var approvalOpt agent.Option
+		approvalOpt, approver = approvalOption(cfg, decider)
+		opts = append(opts, approvalOpt)
 	}
 	if e := enricher.New(enricher.Config{
 		Enabled:    cfg.Agent.Enricher.Enabled,
@@ -472,7 +486,14 @@ func cmdChat(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts, _, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath))
+	// 承認が必要な構成のときだけ対話プロンプタを作り、agent と REPL の両方へ渡す
+	var prompter *cliui.ApprovalPrompter
+	var decider agent.ApprovalDecider
+	if len(cfg.Agent.Approval.RequiredTools) > 0 {
+		prompter = cliui.NewApprovalPrompter()
+		decider = prompter
+	}
+	opts, _, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath), decider)
 	if optsErr != nil {
 		return optsErr
 	}
@@ -488,6 +509,8 @@ func cmdChat(ctx context.Context, args []string) error {
 		MaxToolHops:    cfg.Agent.MaxToolHops,
 		DisableSpinner: *noSpinner,
 		HistoryFile:    historyFile,
+
+		ApprovalPrompter: prompter,
 	})
 	return r.Run(ctx)
 }
@@ -512,7 +535,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts, _, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath))
+	opts, _, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath), nil)
 	if optsErr != nil {
 		return optsErr
 	}
@@ -539,7 +562,7 @@ func cmdServe(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	opts, approver, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath))
+	opts, approver, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath), nil)
 	if optsErr != nil {
 		return optsErr
 	}

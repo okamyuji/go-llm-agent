@@ -121,7 +121,7 @@ func TestExecuteToolsParallel_FallsBackToSerialWhenApprovalRequired(t *testing.T
 	}}
 	s := &service{
 		tools:            reg,
-		approver:         AutoApprover{Allow: true},
+		decider:          AutoDecider{Allow: true},
 		approvalRequired: map[string]bool{"dangerous": true},
 		approvalTimeout:  time.Second,
 	}

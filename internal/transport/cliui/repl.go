@@ -28,6 +28,8 @@ type Options struct {
 	// HistoryFile 端末入力時の履歴永続化先。空ならセッション内のみ。
 	// rlwrap -H の形式 (1 行 1 エントリ) と互換で、既存ファイルを引き継げる。
 	HistoryFile string
+	// ApprovalPrompter 対話承認。nil なら対話承認なし (従来どおり)
+	ApprovalPrompter *ApprovalPrompter
 }
 
 // REPL 対話型 CLI
@@ -211,6 +213,11 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 	turnStart := time.Now()
 	quit := false
 	keyCh := pump.ch // 入力終端 (close) 検知後は nil 化して select から外す
+	// nil チャネルは常にブロックするため、prompter 未設定なら select から外れる
+	var reqCh <-chan approvalPromptRequest
+	if r.opt.ApprovalPrompter != nil {
+		reqCh = r.opt.ApprovalPrompter.requestsCh()
+	}
 	r.startSpinner(PhaseThinking, "")
 
 	for ch != nil {
@@ -227,6 +234,14 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 				continue
 			}
 			if r.handleTurnKey(b, pump, cancelTurn, st) {
+				quit = true
+			}
+		case pr, ok := <-reqCh:
+			if !ok {
+				reqCh = nil
+				continue
+			}
+			if r.handleApprovalPrompt(pr, pump, cancelTurn, st) {
 				quit = true
 			}
 		}
@@ -370,6 +385,65 @@ func (r *REPL) handleTurnKey(b byte, pump *bytePump, cancelTurn context.CancelFu
 		// 生成中に打たれたバイトは次の行読みへ引き継ぐ
 		pump.pushback(b)
 		return false
+	}
+}
+
+// handleApprovalPrompt 承認要求を表示し 1 行応答を読んで prompter へ返す。
+// 戻り値 true はセッション終了要求 (Ctrl-C) を意味する
+func (r *REPL) handleApprovalPrompt(pr approvalPromptRequest, pump *bytePump, cancelTurn context.CancelFunc, st *turnState) bool {
+	r.stopSpinner()
+	// 未出力の delta バイトを先に吐く
+	_ = st.safeOut.Flush()
+	fmt.Fprintf(st.out, "\n[approval] tool=%s\n%s\napprove? [y/N] ", pr.req.ToolName, pr.req.Summary)
+	ans := r.readApprovalAnswer(pump, pr.ctx)
+	select {
+	case pr.reply <- ans:
+	case <-pr.ctx.Done():
+	}
+	switch {
+	case ans.quit:
+		fmt.Fprintln(st.out, "[approval] denied (セッションを終了します)")
+		st.interrupted = true
+		cancelTurn()
+		return true
+	case ans.interrupted:
+		fmt.Fprintln(st.out, "[approval] denied (ターンを中断しました)")
+		st.interrupted = true
+		cancelTurn()
+	case ans.allowed:
+		fmt.Fprintln(st.out, "[approval] approved")
+		r.startSpinner(PhaseThinking, "")
+	default:
+		fmt.Fprintln(st.out, "[approval] denied")
+		r.startSpinner(PhaseThinking, "")
+	}
+	return false
+}
+
+// readApprovalAnswer は承認プロンプトへの 1 行応答を読み、deny / 中断 / 終了の
+// 3 状態を区別して返す。"y"/"yes" のときだけ allowed=true とする。
+// ESC (0x1b) は interrupted、Ctrl-C (0x03) は quit とし、いずれも deny を伴う。
+// ctx が Done (timeout・ターン中断) の場合と空文字・EOF は単純な deny として扱う。
+// この関数はターン実行中 pump を読む唯一の経路であり、他の goroutine が同時に
+// pump.ch を読むことはない (呼び出し元 runTurn の select ループ自身が
+// 一時的にこの関数へ読み取りを譲るため)
+func (r *REPL) readApprovalAnswer(pump *bytePump, ctx context.Context) approvalAnswer {
+	line, err := pump.readAnswerLine(ctx)
+	if err != nil {
+		switch {
+		case errors.Is(err, errCtrlC):
+			return approvalAnswer{reason: "interrupted by Ctrl-C", quit: true}
+		case errors.Is(err, errESC):
+			return approvalAnswer{reason: "interrupted by ESC", interrupted: true}
+		default:
+			return approvalAnswer{reason: "no answer; default_decision=deny"}
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return approvalAnswer{allowed: true}
+	default:
+		return approvalAnswer{reason: "denied by user"}
 	}
 }
 

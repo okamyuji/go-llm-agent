@@ -77,7 +77,7 @@ type service struct {
 	defaultMaxRetries       int
 	scanner                 safety.Scanner
 	redactor                safety.Redactor
-	approver                Approver
+	decider                 ApprovalDecider
 	approvalRequired        map[string]bool
 	approvalTimeout         time.Duration
 	strategy                Strategy
@@ -144,14 +144,14 @@ func WithToolResultLimit(maxChars int) Option {
 	return func(s *service) { s.toolResultLimitMaxChars = maxChars }
 }
 
-// WithApprover 承認ハンドラを注入する。required ツールセットも合わせて指定する
-func WithApprover(ap Approver, requiredTools []string, timeout time.Duration) Option {
+// WithApprovalDecider 承認判定を注入する。required ツールセットと timeout を合わせて指定する
+func WithApprovalDecider(d ApprovalDecider, requiredTools []string, timeout time.Duration) Option {
 	set := make(map[string]bool, len(requiredTools))
 	for _, t := range requiredTools {
 		set[t] = true
 	}
 	return func(s *service) {
-		s.approver = ap
+		s.decider = d
 		s.approvalRequired = set
 		s.approvalTimeout = timeout
 	}

@@ -13,6 +13,9 @@ type ApprovalRequest struct {
 	CallID    string
 	ToolName  string
 	Arguments json.RawMessage
+	// Summary 承認プロンプト表示用のテキスト (unified diff または整形済み引数 JSON)。
+	// loop.go が BuildApprovalSummary で組み立てて設定する
+	Summary string
 }
 
 // ApprovalDecision 承認結果
@@ -24,10 +27,24 @@ type ApprovalDecision struct {
 	Reviewer string
 }
 
-// Approver ツール実行前の人間承認を要求するインターフェース
-// timeout は ctx で渡し、Decision.Allowed が false の場合は実行をスキップする
-type Approver interface {
-	Request(ctx context.Context, r ApprovalRequest) (ApprovalDecision, error)
+// ApprovalDecider ツール実行前に許可・拒否を判定するインターフェース
+// loop.go・parallel.go はこのインターフェースだけに依存し、対話プロンプトか
+// HTTP broker かを知らない
+type ApprovalDecider interface {
+	// Decide はツール実行を許可するか判定する。
+	// ctx は呼び出し側 (loop.go) が timeout_seconds で WithTimeout したものを渡す。
+	//
+	// 戻り値の規約:
+	//   (true,  "",     nil) 許可。ツールを実行する
+	//   (false, reason, nil) 明示的な拒否・タイムアウトによる default_decision 解決。
+	//                        reason は空でもよく、空なら loop.go が既定の拒否文言を使う
+	//   (false, "",     err) 承認機構自体の致命的失敗 (broker の内部不整合など)。
+	//                        loop.go は EventError を送出しターンを打ち切る
+	//
+	// 拒否は異常系ではないため、実装は拒否や ctx のタイムアウトを err として
+	// 返してはならない (default_decision に解決してから返す)。
+	// err が非 nil のとき allowed は常に false であり、reason は使わない
+	Decide(ctx context.Context, req ApprovalRequest) (allowed bool, reason string, err error)
 }
 
 // ErrApprovalTimeout 承認待ちが ctx で timeout したことを示す sentinel error
@@ -128,10 +145,50 @@ func (a *HTTPApprover) Submit(d ApprovalDecision) bool {
 	}
 }
 
-// AutoApprover テスト用に常に Allowed=true を返す Approver
-type AutoApprover struct{ Allow bool }
+// approvalTimedOutReason タイムアウトを default_decision (deny 固定) へ解決したときの理由文
+const approvalTimedOutReason = "approval timed out; default_decision=deny"
 
-// Request 設定された Allow をそのまま返す
-func (a AutoApprover) Request(_ context.Context, r ApprovalRequest) (ApprovalDecision, error) {
-	return ApprovalDecision{RunID: r.RunID, CallID: r.CallID, Allowed: a.Allow, Reason: "auto"}, nil
+// BrokerDecider 既存 HTTPApprover を ApprovalDecider として扱うアダプタ
+// serve では /v1/runs/<id>/approve から Submit されるまで Request がブロックする
+type BrokerDecider struct {
+	approver *HTTPApprover
+}
+
+// NewBrokerDecider broker から BrokerDecider を構築する
+func NewBrokerDecider(approver *HTTPApprover) *BrokerDecider {
+	return &BrokerDecider{approver: approver}
+}
+
+// Decide broker へ問い合わせる。ErrApprovalTimeout は default_decision (deny 固定) へ
+// 解決してから (false, reason, nil) を返す。それ以外の error は承認機構自体の
+// 致命的失敗として err のまま伝播させる
+func (b *BrokerDecider) Decide(ctx context.Context, req ApprovalRequest) (bool, string, error) {
+	d, err := b.approver.Request(ctx, req)
+	if err != nil {
+		if errors.Is(err, ErrApprovalTimeout) {
+			return false, approvalTimedOutReason, nil
+		}
+		return false, "", err
+	}
+	if !d.Allowed {
+		return false, d.Reason, nil
+	}
+	return true, "", nil
+}
+
+// AutoDecider 常に固定の判断を返す ApprovalDecider。テストと、承認を
+// 無条件に許可する構成のために使う
+type AutoDecider struct {
+	// Allow true なら常に許可、false なら常に拒否する
+	Allow bool
+	// Reason Allow=false のときに返す拒否理由。空文字でもよい
+	Reason string
+}
+
+// Decide Allow の値をそのまま返す。err は常に nil (致命的失敗を模擬しない)
+func (a AutoDecider) Decide(_ context.Context, _ ApprovalRequest) (bool, string, error) {
+	if a.Allow {
+		return true, "", nil
+	}
+	return false, a.Reason, nil
 }

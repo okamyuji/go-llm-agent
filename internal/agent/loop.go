@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -400,9 +399,10 @@ func (s *service) validateToolArgs(st *reactState, call *llm.ToolCall, out chan<
 }
 
 // requestApproval 承認が必要なツールについて承認を待つ。
-// 拒否は (false, nil) で、ツール結果へ拒否として積みターンは継続する
+// 拒否は (false, nil) で、ツール結果へ拒否として積みターンは継続する。
+// 承認機構自体の致命的失敗のみ err として返し、ターンを打ち切らせる
 func (s *service) requestApproval(ctx context.Context, in Input, st *reactState, call *llm.ToolCall, out chan<- Event) (bool, error) {
-	if s.approver == nil || !s.approvalRequired[call.Name] {
+	if s.decider == nil || !s.approvalRequired[call.Name] {
 		return true, nil
 	}
 	runID := in.SessionID
@@ -415,16 +415,21 @@ func (s *service) requestApproval(ctx context.Context, in Input, st *reactState,
 	if timeout <= 0 {
 		timeout = defaultApprovalTimeout
 	}
+	summary := BuildApprovalSummary(ctx, s.tools, call.Name, call.Arguments)
 	apCtx, apCancel := context.WithTimeout(ctx, timeout)
-	d, aerr := s.approver.Request(apCtx, ApprovalRequest{
-		RunID: runID, CallID: call.ID, ToolName: call.Name, Arguments: call.Arguments,
+	allowed, reason, derr := s.decider.Decide(apCtx, ApprovalRequest{
+		RunID: runID, CallID: call.ID, ToolName: call.Name, Arguments: call.Arguments, Summary: summary,
 	})
 	apCancel()
-	if aerr != nil && !errors.Is(aerr, ErrApprovalTimeout) {
-		return false, aerr
+	if derr != nil {
+		return false, derr
 	}
-	if !d.Allowed {
-		st.appendToolError(out, call, "tool execution denied by reviewer: "+d.Reason)
+	if !allowed {
+		content := "tool execution denied by reviewer"
+		if reason != "" {
+			content += ": " + reason
+		}
+		st.appendToolError(out, call, content)
 		return false, nil
 	}
 	return true, nil

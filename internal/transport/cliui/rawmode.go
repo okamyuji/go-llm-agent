@@ -125,6 +125,62 @@ func (p *bytePump) readPrompt(ctx context.Context) (string, error) {
 	}
 }
 
+// errESC は承認プロンプト中に ESC (0x1b) を受け取ったことを表す。
+// 生成中の ESC と同じくターン中断を意味する
+var errESC = errors.New("cliui: ESC pressed")
+
+// readAnswerLine は承認プロンプトの y/n 応答を 1 行読む。pushback 済みバイトを先に消費し、
+// ctx が Done になった場合は即座に ctx.Err() を返す。
+// 0x03 (Ctrl-C) は errCtrlC、0x1b (ESC) は errESC を返す。呼び出し元がこの 2 つを
+// 終了・中断へ振り分ける。ESC を通常バイトとして積むと、承認待ちの間だけ ESC 中断が
+// 効かなくなるため専用の分岐を持つ
+func (p *bytePump) readAnswerLine(ctx context.Context) (string, error) {
+	var sb []byte
+	for i, b := range p.pending {
+		switch b {
+		case '\n':
+			rest := p.pending[i+1:]
+			p.pending = append([]byte{}, rest...)
+			return trimTrailingCR(sb), nil
+		case 0x03:
+			p.pending = nil
+			return "", errCtrlC
+		case 0x1b:
+			p.pending = nil
+			return "", errESC
+		default:
+			sb = append(sb, b)
+		}
+	}
+	p.pending = nil
+	for {
+		select {
+		case b, ok := <-p.ch:
+			if !ok {
+				if len(sb) > 0 {
+					return trimTrailingCR(sb), nil
+				}
+				if p.err != nil {
+					return "", p.err
+				}
+				return "", io.EOF
+			}
+			switch b {
+			case '\n':
+				return trimTrailingCR(sb), nil
+			case 0x03:
+				return "", errCtrlC
+			case 0x1b:
+				return "", errESC
+			default:
+				sb = append(sb, b)
+			}
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+}
+
 func trimTrailingCR(b []byte) string {
 	if n := len(b); n > 0 && b[n-1] == '\r' {
 		return string(b[:n-1])
