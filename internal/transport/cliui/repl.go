@@ -199,6 +199,11 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 		}
 	}
 
+	// safeOut は EventDelta の書込みを rune 境界で保護する。crlfWriter (out) の
+	// 内側 (生成側に近い側) に挟むことで、crlfWriter へ渡るバイト列が常に
+	// 完結した UTF-8 であるという不変条件を保つ (05-streaming.md 3.1 節)
+	safeOut := newRuneSafeWriter(out)
+
 	ch := make(chan agent.Event, 16)
 	go func() {
 		defer close(ch)
@@ -232,10 +237,11 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 			switch ev.Kind {
 			case agent.EventDelta:
 				r.stopSpinner()
-				_, _ = io.WriteString(out, ev.Delta)
+				_, _ = safeOut.Write([]byte(ev.Delta))
 				finalContent.WriteString(ev.Delta)
 			case agent.EventToolCall:
 				r.stopSpinner()
+				_ = safeOut.Flush()
 				name := ""
 				if ev.ToolCall != nil {
 					name = ev.ToolCall.Name
@@ -245,6 +251,7 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 				r.startSpinner(PhaseTool, name)
 			case agent.EventToolResult:
 				r.stopSpinner()
+				_ = safeOut.Flush()
 				name := ""
 				if ev.ToolResult != nil {
 					name = ev.ToolResult.Name
@@ -258,6 +265,7 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 				}
 			case agent.EventFinal:
 				r.stopSpinner()
+				_ = safeOut.Flush()
 				if len(ev.TurnMessages) > 0 {
 					turnMessages = append([]llm.Message(nil), ev.TurnMessages...)
 				} else if ev.Final != nil {
@@ -266,6 +274,7 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 				fmt.Fprintln(out)
 			case agent.EventError:
 				r.stopSpinner()
+				_ = safeOut.Flush()
 				// ESC / Ctrl-C 中断による context キャンセルはユーザー操作なのでエラー表示しない
 				if interrupted && errors.Is(ev.Err, context.Canceled) {
 					continue
@@ -287,6 +296,7 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 					interrupted = true
 					cancelTurn()
 					r.stopSpinner()
+					_ = safeOut.Flush()
 					fmt.Fprint(out, "\n[中断しました]\n")
 				}
 			case 0x03: // Ctrl-C: 中断してセッション終了 (raw では SIGINT にならずキーとして届く)
@@ -294,6 +304,7 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 					interrupted = true
 					cancelTurn()
 					r.stopSpinner()
+					_ = safeOut.Flush()
 				}
 				quit = true
 			default:
@@ -303,6 +314,9 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 		}
 	}
 	r.stopSpinner()
+	// ch が close のみで EventFinal も EventError も届かずにループを抜けた
+	// 場合でも、safeOut に未出力バイトが残っていないことを保証する防御的な呼出し
+	_ = safeOut.Flush()
 	restoreRaw() // セッション開始時の端末モードへ復帰する
 	// 中断時は「[中断しました]」を既に出しているため done サマリは抑制する。
 	// セッション全体が raw のときのために CRLF 変換済みの out へ書く
