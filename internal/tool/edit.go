@@ -53,16 +53,16 @@ type fsEditArgs struct {
 // validateEditArgs a の必須フィールドと自明な矛盾 (old==new) を検査する。
 // 問題なければ nil を返す
 func validateEditArgs(a fsEditArgs) *Result {
-	switch {
-	case a.Path == "":
+	if a.Path == "" {
 		return &Result{IsError: true, Content: "path is required"}
-	case a.OldString == "":
-		return &Result{IsError: true, Content: "old_string is required"}
-	case a.OldString == a.NewString:
-		return &Result{IsError: true, Content: "old_string and new_string are identical, nothing to do"}
-	default:
-		return nil
 	}
+	if a.OldString == "" {
+		return &Result{IsError: true, Content: "old_string is required"}
+	}
+	if a.OldString == a.NewString {
+		return &Result{IsError: true, Content: "old_string and new_string are identical, nothing to do"}
+	}
+	return nil
 }
 
 // Execute path のパス検証・既読チェック・一致件数検査を経て置換を行う
