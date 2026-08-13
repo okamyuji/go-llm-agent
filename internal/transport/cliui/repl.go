@@ -202,7 +202,7 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 	// safeOut は EventDelta の書込みを rune 境界で保護する。crlfWriter (out) の
 	// 内側 (生成側に近い側) に挟むことで、crlfWriter へ渡るバイト列が常に
 	// 完結した UTF-8 であるという不変条件を保つ (05-streaming.md 3.1 節)
-	safeOut := newRuneSafeWriter(out)
+	st := &turnState{out: out, safeOut: newRuneSafeWriter(out)}
 
 	ch := make(chan agent.Event, 16)
 	go func() {
@@ -219,10 +219,6 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 	}()
 
 	turnStart := time.Now()
-	var toolCount, usageIn, usageOut int
-	var finalContent strings.Builder
-	var turnMessages []llm.Message
-	interrupted := false
 	quit := false
 	keyCh := pump.ch // 入力終端 (close) 検知後は nil 化して select から外す
 	r.startSpinner(PhaseThinking, "")
@@ -234,102 +230,132 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 				ch = nil
 				continue
 			}
-			switch ev.Kind {
-			case agent.EventDelta:
-				r.stopSpinner()
-				_, _ = safeOut.Write([]byte(ev.Delta))
-				finalContent.WriteString(ev.Delta)
-			case agent.EventToolCall:
-				r.stopSpinner()
-				_ = safeOut.Flush()
-				name := ""
-				if ev.ToolCall != nil {
-					name = ev.ToolCall.Name
-				}
-				fmt.Fprintf(out, "\n[tool_call %s]\n", name)
-				toolCount++
-				r.startSpinner(PhaseTool, name)
-			case agent.EventToolResult:
-				r.stopSpinner()
-				_ = safeOut.Flush()
-				name := ""
-				if ev.ToolResult != nil {
-					name = ev.ToolResult.Name
-				}
-				fmt.Fprintf(out, "[tool_result %s]\n", name)
-				r.startSpinner(PhaseThinking, "")
-			case agent.EventUsage:
-				if ev.Usage != nil {
-					usageIn += ev.Usage.InputTokens
-					usageOut += ev.Usage.OutputTokens
-				}
-			case agent.EventFinal:
-				r.stopSpinner()
-				_ = safeOut.Flush()
-				if len(ev.TurnMessages) > 0 {
-					turnMessages = append([]llm.Message(nil), ev.TurnMessages...)
-				} else if ev.Final != nil {
-					turnMessages = []llm.Message{*ev.Final}
-				}
-				fmt.Fprintln(out)
-			case agent.EventError:
-				r.stopSpinner()
-				_ = safeOut.Flush()
-				// ESC / Ctrl-C 中断による context キャンセルはユーザー操作なのでエラー表示しない
-				if interrupted && errors.Is(ev.Err, context.Canceled) {
-					continue
-				}
-				// SIGINT による root context キャンセルも同様 (呼び出し側が終了メッセージを出す)
-				if ctx.Err() != nil {
-					continue
-				}
-				fmt.Fprintf(out, "\n[error] %v\n", ev.Err)
-			}
+			r.handleTurnEvent(ctx, ev, st)
 		case b, ok := <-keyCh:
 			if !ok {
 				keyCh = nil
 				continue
 			}
-			switch b {
-			case 0x1b: // ESC: このターンだけ中断
-				if !interrupted {
-					interrupted = true
-					cancelTurn()
-					r.stopSpinner()
-					_ = safeOut.Flush()
-					fmt.Fprint(out, "\n[中断しました]\n")
-				}
-			case 0x03: // Ctrl-C: 中断してセッション終了 (raw では SIGINT にならずキーとして届く)
-				if !interrupted {
-					interrupted = true
-					cancelTurn()
-					r.stopSpinner()
-					_ = safeOut.Flush()
-				}
+			if r.handleTurnKey(b, pump, cancelTurn, st) {
 				quit = true
-			default:
-				// 生成中に打たれたバイトは次の行読みへ引き継ぐ
-				pump.pushback(b)
 			}
 		}
 	}
 	r.stopSpinner()
 	// ch が close のみで EventFinal も EventError も届かずにループを抜けた
 	// 場合でも、safeOut に未出力バイトが残っていないことを保証する防御的な呼出し
-	_ = safeOut.Flush()
+	_ = st.safeOut.Flush()
 	restoreRaw() // セッション開始時の端末モードへ復帰する
 	// 中断時は「[中断しました]」を既に出しているため done サマリは抑制する。
 	// セッション全体が raw のときのために CRLF 変換済みの out へ書く
-	if !r.opt.DisableSpinner && !interrupted {
+	if !r.opt.DisableSpinner && !st.interrupted {
 		fmt.Fprintf(out, "↳ done in %.1fs · %d tool · in %d / out %d tok\n",
-			time.Since(turnStart).Seconds(), toolCount, usageIn, usageOut)
+			time.Since(turnStart).Seconds(), st.toolCount, st.usageIn, st.usageOut)
 	}
 	// EventFinal が届かないまま終わったターン (中断・エラー) は、部分生成テキストが
 	// あるときだけ assistant として残す。空のまま返すと呼び出し側がターンごと巻き戻す。
-	if len(turnMessages) == 0 && strings.TrimSpace(finalContent.String()) != "" {
-		turnMessages = []llm.Message{{Role: llm.RoleAssistant, Content: finalContent.String()}}
+	turnMessages := st.turnMessages
+	if len(turnMessages) == 0 && strings.TrimSpace(st.finalContent.String()) != "" {
+		turnMessages = []llm.Message{{Role: llm.RoleAssistant, Content: st.finalContent.String()}}
 	}
 	return turnMessages, quit
+}
+
+// turnState runTurn の select ループ中に複数の分岐から更新される可変状態をまとめる。
+// handleTurnEvent / handleTurnKey へ渡してループ本体の分岐数を下げるための分離
+type turnState struct {
+	out          io.Writer
+	safeOut      *runeSafeWriter
+	finalContent strings.Builder
+	turnMessages []llm.Message
+	toolCount    int
+	usageIn      int
+	usageOut     int
+	interrupted  bool
+}
+
+// handleTurnEvent ch から届いた 1 件の agent.Event を処理し st を更新する
+func (r *REPL) handleTurnEvent(ctx context.Context, ev agent.Event, st *turnState) {
+	switch ev.Kind {
+	case agent.EventDelta:
+		r.stopSpinner()
+		_, _ = st.safeOut.Write([]byte(ev.Delta))
+		st.finalContent.WriteString(ev.Delta)
+	case agent.EventToolCall:
+		r.stopSpinner()
+		_ = st.safeOut.Flush()
+		name := ""
+		if ev.ToolCall != nil {
+			name = ev.ToolCall.Name
+		}
+		fmt.Fprintf(st.out, "\n[tool_call %s]\n", name)
+		st.toolCount++
+		r.startSpinner(PhaseTool, name)
+	case agent.EventToolResult:
+		r.stopSpinner()
+		_ = st.safeOut.Flush()
+		name := ""
+		if ev.ToolResult != nil {
+			name = ev.ToolResult.Name
+		}
+		fmt.Fprintf(st.out, "[tool_result %s]\n", name)
+		r.startSpinner(PhaseThinking, "")
+	case agent.EventUsage:
+		if ev.Usage != nil {
+			st.usageIn += ev.Usage.InputTokens
+			st.usageOut += ev.Usage.OutputTokens
+		}
+	case agent.EventFinal:
+		r.stopSpinner()
+		_ = st.safeOut.Flush()
+		if len(ev.TurnMessages) > 0 {
+			st.turnMessages = append([]llm.Message(nil), ev.TurnMessages...)
+		} else if ev.Final != nil {
+			st.turnMessages = []llm.Message{*ev.Final}
+		}
+		fmt.Fprintln(st.out)
+	case agent.EventError:
+		r.stopSpinner()
+		_ = st.safeOut.Flush()
+		// ESC / Ctrl-C 中断による context キャンセルはユーザー操作なのでエラー表示しない
+		if st.interrupted && errors.Is(ev.Err, context.Canceled) {
+			return
+		}
+		// SIGINT による root context キャンセルも同様 (呼び出し側が終了メッセージを出す)
+		if ctx.Err() != nil {
+			return
+		}
+		fmt.Fprintf(st.out, "\n[error] %v\n", ev.Err)
+	}
+}
+
+// handleTurnKey 生成中に届いた 1 バイトを処理する。ESC はこのターンだけ中断し、
+// Ctrl-C は中断のうえセッション終了を要求する (戻り値 true)。それ以外のバイトは
+// 次の行編集へ引き継ぐ
+func (r *REPL) handleTurnKey(b byte, pump *bytePump, cancelTurn context.CancelFunc, st *turnState) bool {
+	switch b {
+	case 0x1b: // ESC: このターンだけ中断
+		if !st.interrupted {
+			st.interrupted = true
+			cancelTurn()
+			r.stopSpinner()
+			_ = st.safeOut.Flush()
+			fmt.Fprint(st.out, "\n[中断しました]\n")
+		}
+		return false
+	case 0x03: // Ctrl-C: 中断してセッション終了 (raw では SIGINT にならずキーとして届く)
+		if !st.interrupted {
+			st.interrupted = true
+			cancelTurn()
+			r.stopSpinner()
+			_ = st.safeOut.Flush()
+		}
+		return true
+	default:
+		// 生成中に打たれたバイトは次の行読みへ引き継ぐ
+		pump.pushback(b)
+		return false
+	}
 }
 
 // startSpinner sp が nil でなければスピナー描画を開始する。
