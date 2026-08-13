@@ -13,6 +13,7 @@ import (
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
+	"github.com/okamyuji/go-llm-agent/internal/transport/cliui/lineedit"
 )
 
 // Options REPL 生成オプション
@@ -72,7 +73,7 @@ func (r *REPL) Run(ctx context.Context) error {
 	// 端末入力なら raw 化して行エディタを用意する。out は raw 中の \n 出力のために
 	// CRLF 変換で包む (term.Terminal 自身は \r\n を書くので二重変換にはならない)
 	out := r.out
-	var editor *term.Terminal
+	var editor *lineedit.Terminal
 	if f, ok := r.in.(*os.File); ok {
 		fd := int(f.Fd())
 		if term.IsTerminal(fd) {
@@ -81,7 +82,7 @@ func (r *REPL) Run(ctx context.Context) error {
 				if isTTY(r.out) {
 					out = newCRLFWriter(r.out)
 				}
-				editor = term.NewTerminal(struct {
+				editor = lineedit.NewTerminal(struct {
 					io.Reader
 					io.Writer
 				}{&pumpReader{p: pump, ctx: ctx}, out}, ">> ")
