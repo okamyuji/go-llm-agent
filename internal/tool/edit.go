@@ -50,20 +50,29 @@ type fsEditArgs struct {
 	ReplaceAll bool   `json:"replace_all"`
 }
 
+// validateEditArgs a の必須フィールドと自明な矛盾 (old==new) を検査する。
+// 問題なければ nil を返す
+func validateEditArgs(a fsEditArgs) *Result {
+	switch {
+	case a.Path == "":
+		return &Result{IsError: true, Content: "path is required"}
+	case a.OldString == "":
+		return &Result{IsError: true, Content: "old_string is required"}
+	case a.OldString == a.NewString:
+		return &Result{IsError: true, Content: "old_string and new_string are identical, nothing to do"}
+	default:
+		return nil
+	}
+}
+
 // Execute path のパス検証・既読チェック・一致件数検査を経て置換を行う
 func (t *FSEdit) Execute(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var a fsEditArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
-	if a.Path == "" {
-		return Result{IsError: true, Content: "path is required"}, nil
-	}
-	if a.OldString == "" {
-		return Result{IsError: true, Content: "old_string is required"}, nil
-	}
-	if a.OldString == a.NewString {
-		return Result{IsError: true, Content: "old_string and new_string are identical, nothing to do"}, nil
+	if bad := validateEditArgs(a); bad != nil {
+		return *bad, nil
 	}
 
 	root, relative, err := t.sb.openRootForPath(a.Path)

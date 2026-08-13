@@ -349,3 +349,76 @@ func TestFSEdit_EmptyOldString_IsError(t *testing.T) {
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
+
+func TestFSEdit_Spec_ReturnsExpectedFields(t *testing.T) {
+	sb := tool.NewSandbox([]string{"/tmp"})
+	e := tool.NewFSEdit(sb, tool.NewReadRegistry(), nil)
+	spec := e.Spec()
+	if spec.Name != "fs_edit" {
+		t.Fatalf("Name=%q, want fs_edit", spec.Name)
+	}
+	if spec.Description == "" {
+		t.Fatal("Description should not be empty")
+	}
+	if len(spec.Schema) == 0 {
+		t.Fatal("Schema should not be empty")
+	}
+}
+
+func TestFSEdit_MalformedJSON_IsError(t *testing.T) {
+	sb := tool.NewSandbox([]string{"/tmp"})
+	e := tool.NewFSEdit(sb, tool.NewReadRegistry(), nil)
+	res, err := e.Execute(context.Background(), json.RawMessage(`{not valid json`))
+	if err != nil {
+		t.Fatalf("Execute should not return a Go error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("got %+v, want IsError=true for malformed JSON", res)
+	}
+}
+
+func TestFSEdit_ReadFilePermissionDenied_IsError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission checks are bypassed when running as root")
+	}
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", "hello world")
+	sb := tool.NewSandbox([]string{dir})
+	reg := tool.NewReadRegistry()
+	r := tool.NewFSReadWithLogger(sb, 0, nil, reg)
+	if _, err := r.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	e := tool.NewFSEdit(sb, reg, nil)
+	res, _ := e.Execute(context.Background(), editArgs(path, "hello", "hi", false))
+	if !res.IsError {
+		t.Fatalf("got %+v, want IsError=true for unreadable file", res)
+	}
+}
+
+func TestFSEdit_WriteFilePermissionDenied_IsError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission checks are bypassed when running as root")
+	}
+	dir := t.TempDir()
+	path := writeFile(t, dir, "a.txt", "hello world")
+	sb := tool.NewSandbox([]string{dir})
+	reg := tool.NewReadRegistry()
+	r := tool.NewFSReadWithLogger(sb, 0, nil, reg)
+	if _, err := r.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	e := tool.NewFSEdit(sb, reg, nil)
+	res, _ := e.Execute(context.Background(), editArgs(path, "hello", "hi", false))
+	if !res.IsError {
+		t.Fatalf("got %+v, want IsError=true for read-only file", res)
+	}
+}

@@ -178,3 +178,52 @@ func TestFSWrite_NilRegistry_ExecuteDoesNotPanic(t *testing.T) {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
 }
+
+func TestFSWrite_MalformedJSON_IsError(t *testing.T) {
+	sb := tool.NewSandbox([]string{"/tmp"})
+	w := tool.NewFSWrite(sb)
+	res, err := w.Execute(context.Background(), json.RawMessage(`{not valid`))
+	if err != nil {
+		t.Fatalf("Execute should not return a Go error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("got %+v, want IsError=true for malformed JSON", res)
+	}
+}
+
+func TestFSWrite_EmptyPath_IsError(t *testing.T) {
+	sb := tool.NewSandbox([]string{"/tmp"})
+	w := tool.NewFSWrite(sb)
+	res, _ := w.Execute(context.Background(), json.RawMessage(`{"path":"","content":"x"}`))
+	if !res.IsError {
+		t.Fatal("empty path は IsError")
+	}
+}
+
+func TestFSWrite_OutsideSandbox_IsError(t *testing.T) {
+	dir := t.TempDir()
+	sb := tool.NewSandbox([]string{dir})
+	w := tool.NewFSWrite(sb)
+	res, _ := w.Execute(context.Background(), json.RawMessage(`{"path":"/etc/passwd","content":"x"}`))
+	if !res.IsError {
+		t.Fatal("外側は IsError")
+	}
+}
+
+func TestFSWrite_ReadOnlyExistingFile_WriteFails(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission checks are bypassed when running as root")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("orig"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	sb := tool.NewSandbox([]string{dir})
+	w := tool.NewFSWrite(sb)
+	res, _ := w.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","content":"overwrite"}`))
+	if !res.IsError {
+		t.Fatalf("got %+v, want IsError=true for read-only existing file", res)
+	}
+}
