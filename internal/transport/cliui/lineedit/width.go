@@ -6,11 +6,22 @@ import runewidth "github.com/mattn/go-runewidth"
 // 負値を 0 へ丸めるのは、bracketed paste 中に制御文字が行へ入り得るため
 // (isPrintable を経由しない経路がある) 桁計算を破綻させないためである。
 func runeCells(r rune) int {
-	w := runewidth.RuneWidth(r)
+	return clampCells(runewidth.RuneWidth(r))
+}
+
+// clampCells 負の幅を 0 へ丸める。runewidth の実装は現状負値を返さないため、
+// 丸めを runeCells の内部分岐にすると到達不能になり検証できない。分離して
+// 直接テストできる形にしてある。
+func clampCells(w int) int {
 	if w < 0 {
 		return 0
 	}
 	return w
+}
+
+// isEscapeTerminator エスケープ列の終端かどうかを返す。
+func isEscapeTerminator(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
 // promptCells prompt 中のエスケープ列を取り除いた rune 列を返す。
@@ -22,7 +33,7 @@ func promptCells(prompt []rune) []rune {
 	for _, r := range prompt {
 		switch {
 		case inEscapeSeq:
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			if isEscapeTerminator(r) {
 				inEscapeSeq = false
 			}
 		case r == '\x1b':
@@ -65,11 +76,13 @@ func advanceCell(x, y, w, width int) (int, int) {
 // prompt と text を 2 つのループで順に走査する。append で 1 本のスライスへ
 // 連結しないのは、promptCells の戻り値が余剰容量を持つ場合に append が
 // 呼び出し側 (t.prompt) の backing array を上書きしうるためである。
+// text 側もエスケープ列を除くのは、writeLineCells がプロンプトと行を
+// それぞれ独立した走査で描くため、両者で同じ規則を使う必要があるからである。
 func cellPos(prompt, text []rune, width int) (x, y int) {
 	for _, r := range promptCells(prompt) {
 		x, y = advanceCell(x, y, runeCells(r), width)
 	}
-	for _, r := range text {
+	for _, r := range promptCells(text) {
 		x, y = advanceCell(x, y, runeCells(r), width)
 	}
 	return x, y

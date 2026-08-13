@@ -29,6 +29,26 @@ func TestRuneCells(t *testing.T) {
 	}
 }
 
+func TestClampCells(t *testing.T) {
+	tests := []struct {
+		name string
+		in   int
+		want int
+	}{
+		{name: "negative", in: -1, want: 0},
+		{name: "zero", in: 0, want: 0},
+		{name: "one", in: 1, want: 1},
+		{name: "two", in: 2, want: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := clampCells(tt.in); got != tt.want {
+				t.Errorf("clampCells(%d) = %d, want %d", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestVisualWidth(t *testing.T) {
 	tests := []struct {
 		name string
