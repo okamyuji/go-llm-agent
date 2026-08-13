@@ -187,17 +187,7 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 	turnCtx, cancelTurn := context.WithCancel(ctx)
 	defer cancelTurn()
 
-	out := r.out
-	restoreRaw := func() {}
-	if f, ok := r.in.(*os.File); ok {
-		if restore, started := beginRaw(f); started {
-			restoreRaw = restore
-			// raw 中は出力後処理が無効なので、TTY 出力に限り単独 \n を \r\n に変換する
-			if isTTY(r.out) {
-				out = newCRLFWriter(r.out)
-			}
-		}
-	}
+	out, restoreRaw := r.beginTurnRaw()
 
 	// safeOut は EventDelta の書込みを rune 境界で保護する。crlfWriter (out) の
 	// 内側 (生成側に近い側) に挟むことで、crlfWriter へ渡るバイト列が常に
@@ -261,6 +251,26 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 	return turnMessages, quit
 }
 
+// beginTurnRaw 入力が端末なら raw 化し、raw 中の出力先 (CRLF 変換込み) と
+// セッション開始時の端末モードへ戻す restore 関数を返す。端末でなければ
+// r.out と no-op の restore をそのまま返す
+func (r *REPL) beginTurnRaw() (io.Writer, func()) {
+	f, ok := r.in.(*os.File)
+	if !ok {
+		return r.out, func() {}
+	}
+	restore, started := beginRaw(f)
+	if !started {
+		return r.out, func() {}
+	}
+	out := r.out
+	// raw 中は出力後処理が無効なので、TTY 出力に限り単独 \n を \r\n に変換する
+	if isTTY(r.out) {
+		out = newCRLFWriter(r.out)
+	}
+	return out, restore
+}
+
 // turnState runTurn の select ループ中に複数の分岐から更新される可変状態をまとめる。
 // handleTurnEvent / handleTurnKey へ渡してループ本体の分岐数を下げるための分離
 type turnState struct {
@@ -317,16 +327,21 @@ func (r *REPL) handleTurnEvent(ctx context.Context, ev agent.Event, st *turnStat
 	case agent.EventError:
 		r.stopSpinner()
 		_ = st.safeOut.Flush()
-		// ESC / Ctrl-C 中断による context キャンセルはユーザー操作なのでエラー表示しない
-		if st.interrupted && errors.Is(ev.Err, context.Canceled) {
-			return
-		}
-		// SIGINT による root context キャンセルも同様 (呼び出し側が終了メッセージを出す)
-		if ctx.Err() != nil {
+		if suppressTurnError(ctx, st.interrupted, ev.Err) {
 			return
 		}
 		fmt.Fprintf(st.out, "\n[error] %v\n", ev.Err)
 	}
+}
+
+// suppressTurnError ユーザー操作 (ESC/Ctrl-C) や SIGINT による context キャンセルは
+// エラー表示しない。ESC/Ctrl-C 中断は呼び出し元が「[中断しました]」を既に出しており、
+// SIGINT は呼び出し側が終了メッセージを出すため
+func suppressTurnError(ctx context.Context, interrupted bool, err error) bool {
+	if interrupted && errors.Is(err, context.Canceled) {
+		return true
+	}
+	return ctx.Err() != nil
 }
 
 // handleTurnKey 生成中に届いた 1 バイトを処理する。ESC はこのターンだけ中断し、
