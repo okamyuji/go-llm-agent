@@ -341,7 +341,10 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 		}
 		tr := &ToolResult{CallID: pendingCall.ID, Name: pendingCall.Name, Content: content, IsError: terr != nil || res.IsError}
 		out <- Event{Kind: EventToolResult, ToolResult: tr}
-		msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: tr.Content, ToolCallID: pendingCall.ID, Name: pendingCall.Name})
+		// 02 番設計書 履歴へ積むツール結果だけを上限文字数まで切り詰める。
+		// EventToolResult で通知済みの tr.Content (全文) は変更しない。
+		historyContent := TruncateToolResult(tr.Content, s.toolResultLimitMaxChars)
+		msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: historyContent, ToolCallID: pendingCall.ID, Name: pendingCall.Name})
 	}
 	err = fmt.Errorf("max tool hops を超えました (%d)", in.MaxToolHops)
 	out <- Event{Kind: EventError, Err: err}

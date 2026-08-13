@@ -140,6 +140,14 @@ type AgentConfig struct {
 	Reflection       ReflectionConfig      `yaml:"reflection"`
 	ParallelTools    ParallelToolsConfig   `yaml:"parallel_tools"`
 	Enricher         EnricherConfig        `yaml:"enricher"`
+	ToolResultLimit  ToolResultLimitConfig `yaml:"tool_result_limit"`
+}
+
+// ToolResultLimitConfig ツール結果を履歴へ積む際の切り詰め設定
+type ToolResultLimitConfig struct {
+	// MaxChars 上限文字数 (rune 数)。未指定 (0) は applyDefaults が既定値へ
+	// 置換する。切り詰めを無効化する場合は -1 を指定する (00-overview 3.4)
+	MaxChars int `yaml:"max_chars"`
 }
 
 // EnricherConfig コンテキスト拡充の設定
@@ -340,6 +348,7 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("config parse: %w", err)
 	}
+	applyDefaults(&cfg)
 	if err := validateFallbackChains(cfg.Providers); err != nil {
 		return nil, err
 	}
@@ -350,6 +359,9 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	if err := validateWebTools(cfg.Tools); err != nil {
+		return nil, err
+	}
+	if err := validateToolResultLimit(cfg.Agent.ToolResultLimit); err != nil {
 		return nil, err
 	}
 	if err := resolveSystemPromptFile(&cfg, path); err != nil {
@@ -406,6 +418,28 @@ func validateApproval(a ApprovalConfig) error {
 	}
 	if len(a.RequiredTools) > 0 && a.TimeoutSeconds <= 0 {
 		return fmt.Errorf("config: agent.approval.timeout_seconds は required_tools 指定時に正の整数で必須 (got %d)", a.TimeoutSeconds)
+	}
+	return nil
+}
+
+// defaultToolResultLimitMaxChars agent.tool_result_limit.max_chars の実効既定値
+// (00-overview 3.4 節が凍結)。max_chars <= context_window_tokens * trigger_ratio * 0.4 を満たす
+const defaultToolResultLimitMaxChars = 8000
+
+// applyDefaults decode 直後・各 validateXxx の前に 1 回呼び、yaml で明示されなかった
+// キーへコード既定値を適用する (00-overview 3.4 節)。数値キーはゼロ値 (未指定) の
+// ときだけ既定値を代入する。切り詰めを明示的に無効化したい利用者は -1 を指定する
+func applyDefaults(cfg *Config) {
+	if cfg.Agent.ToolResultLimit.MaxChars == 0 {
+		cfg.Agent.ToolResultLimit.MaxChars = defaultToolResultLimitMaxChars
+	}
+}
+
+// validateToolResultLimit 起動時に tool_result_limit 設定の妥当性を検査する。
+// -1 は切り詰めの明示的な無効化として受理する。それより小さい値は設定ミスとして拒否する
+func validateToolResultLimit(c ToolResultLimitConfig) error {
+	if c.MaxChars < -1 {
+		return fmt.Errorf("config: agent.tool_result_limit.max_chars は -1 (無効) または 0 以上 (got %d)", c.MaxChars)
 	}
 	return nil
 }

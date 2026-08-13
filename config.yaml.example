@@ -132,6 +132,12 @@ agent:
   tool_choice:
     mode: auto
     name: ""
+  # ツール結果を履歴へ積む直前の切り詰め設定。max_chars は rune 数の上限で、
+  # 超過時は head 60% + tail 40% を残し中央を省略マーカーへ置換する。
+  # ユーザーへ表示する結果本文 (EventToolResult) は切り詰めない。
+  # 未指定 (0) はこの既定値が適用される。無効化する場合は -1 を指定する。
+  tool_result_limit:
+    max_chars: 8000
   # ツール引数の JSON Schema 検証。max_retries 回まで自動修正試行する。
   tool_validation:
     enabled: true

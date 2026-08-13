@@ -303,6 +303,9 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 	if cfg.Agent.ToolChoice.Mode != "" {
 		opts = append(opts, agent.WithDefaultToolChoice(&llm.ToolChoice{Mode: cfg.Agent.ToolChoice.Mode, Name: cfg.Agent.ToolChoice.Name}))
 	}
+	if cfg.Agent.ToolResultLimit.MaxChars > 0 {
+		opts = append(opts, agent.WithToolResultLimit(cfg.Agent.ToolResultLimit.MaxChars))
+	}
 	sc, err := buildScanner(cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build safety scanner: %w", err)

@@ -330,3 +330,47 @@ func TestLoad_WebSearchRejectsHostlessEndpoint(t *testing.T) {
 		t.Fatalf("want hostless endpoint error, got %v", err)
 	}
 }
+
+func TestLoad_ToolResultLimitDefaultsWhenUnspecified(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Agent.ToolResultLimit.MaxChars != 8000 {
+		t.Fatalf("got %d, want 8000 (coded default)", cfg.Agent.ToolResultLimit.MaxChars)
+	}
+}
+
+func TestLoad_ToolResultLimitMinusOneDisablesTruncation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "agent:\n  tool_result_limit:\n    max_chars: -1\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Agent.ToolResultLimit.MaxChars != -1 {
+		t.Fatalf("got %d, want -1 (kept, not overwritten by default)", cfg.Agent.ToolResultLimit.MaxChars)
+	}
+}
+
+func TestLoad_ToolResultLimitRejectsBelowMinusOne(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "agent:\n  tool_result_limit:\n    max_chars: -2\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "max_chars") {
+		t.Fatalf("want max_chars error, got %v", err)
+	}
+}
