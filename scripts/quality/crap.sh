@@ -59,10 +59,11 @@ while IFS= read -r line; do
   [ "$touched" != "yes" ] && continue
 
   # go tool cover -func から該当関数のカバレッジ取得。
-  # gocyclo はメソッドを "(*T).Name" と出すが cover -func は "Name" だけを出すため、
-  # レシーバ部分を落としてから突き合わせる。
-  covfn="${fn##*.}"
-  cov=$(awk -v f="$file" -v fn="$covfn" '$1 ~ f":" && $2 == fn { gsub(/%/, "", $3); print $3 }' "$TMP/funccov" | head -1)
+  # gocyclo はメソッドを "(*T).Name" と出すが cover -func は "Name" しか出さないため
+  # 名前では突き合わせられない。双方が出す "ファイル:宣言行" を鍵にする
+  # (同一ファイルに同名メソッドが複数ある場合に取り違えないため)。
+  # cover -func の第 1 列はモジュールパス付きなので後方一致で見る
+  cov=$(awk -v key="$file:$fline:" 'index($1, key) > 0 { gsub(/%/, "", $3); print $3 }' "$TMP/funccov" | head -1)
   [ -z "$cov" ] && cov=0
   crap=$(awk -v c="$comp" -v v="$cov" 'BEGIN { cv = v / 100; printf "%.1f", c*c*(1-cv)^3 + c }')
   over=$(awk -v x="$crap" -v t="$THRESHOLD" 'BEGIN { print (x > t) ? 1 : 0 }')

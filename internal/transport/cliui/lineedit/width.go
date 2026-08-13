@@ -76,8 +76,9 @@ func advanceCell(x, y, w, width int) (int, int) {
 // prompt と text を 2 つのループで順に走査する。append で 1 本のスライスへ
 // 連結しないのは、promptCells の戻り値が余剰容量を持つ場合に append が
 // 呼び出し側 (t.prompt) の backing array を上書きしうるためである。
-// text 側もエスケープ列を除くのは、writeLineCells がプロンプトと行を
-// それぞれ独立した走査で描くため、両者で同じ規則を使う必要があるからである。
+// text 側もエスケープ列を除くのは、描画側の writeLineCells が同じ走査規則で
+// 桁を進めるためである。bytesToKey が `\x1b` を keyUnknown へ畳むので生の
+// エスケープが t.line へ入る経路は現状ないが、規則を片側だけ変えない。
 func cellPos(prompt, text []rune, width int) (x, y int) {
 	for _, r := range promptCells(prompt) {
 		x, y = advanceCell(x, y, runeCells(r), width)

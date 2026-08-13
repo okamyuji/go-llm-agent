@@ -33,8 +33,11 @@ func (t *Terminal) displayPrompt() []rune {
 
 // searchBackward start 以降 (より過去方向) で最初に query を含む履歴を返す。
 // 一致は substring。正規化 (大文字小文字・全半角・NFC/NFD) は行わない。
+// 履歴アクセスは範囲判定を含めて historyAt に委ね、History のメソッドを
+// t.lock 保持のまま呼ばない (上流の規約。History が出力 writer を使うと
+// デッドロックしうる)。
 func (t *Terminal) searchBackward(start int) (idx int, entry string, ok bool) {
-	for i := start; i < t.History.Len(); i++ {
+	for i := start; ; i++ {
 		e, ok := t.historyAt(i)
 		if !ok {
 			break
@@ -97,6 +100,21 @@ func (t *Terminal) endSearchIfActive() {
 	if t.search.active {
 		t.endSearch(false)
 	}
+}
+
+// currentLine 利用者の入力行を返す。検索中の t.line は履歴候補であるため、
+// 検索開始時に退避した行を返す。
+func (t *Terminal) currentLine() []rune {
+	if t.search.active {
+		return t.search.line
+	}
+	return t.line
+}
+
+// exitSearchState 再描画を伴わずに検索状態を捨てる。ReadLine が
+// Ctrl-C / Ctrl-D / 読み取りエラーで抜ける経路で使い、状態を持ち越さない。
+func (t *Terminal) exitSearchState() {
+	t.search = searchState{}
 }
 
 // searchNext より過去方向の次の一致へ進む。

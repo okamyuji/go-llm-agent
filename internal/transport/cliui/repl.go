@@ -71,7 +71,7 @@ func (r *REPL) Run(ctx context.Context) error {
 	history := []llm.Message{}
 
 	// 端末入力なら raw 化して行エディタを用意する。out は raw 中の \n 出力のために
-	// CRLF 変換で包む (term.Terminal 自身は \r\n を書くので二重変換にはならない)
+	// CRLF 変換で包む (lineedit.Terminal 自身は \r\n を書くので二重変換にはならない)
 	out := r.out
 	var editor *lineedit.Terminal
 	if f, ok := r.in.(*os.File); ok {

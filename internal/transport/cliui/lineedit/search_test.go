@@ -83,6 +83,7 @@ func TestSearchBackward(t *testing.T) {
 		{name: "no match at all", query: "zzz", start: 0, wantIdx: -1, wantOK: false},
 		{name: "empty query matches first", query: "", start: 0, wantIdx: 0, wantEntry: "ls -la", wantOK: true},
 		{name: "negative start is out of range", query: "ls", start: -1, wantIdx: -1, wantOK: false},
+		{name: "start far beyond history", query: "ls", start: 99, wantIdx: -1, wantOK: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -319,5 +320,144 @@ func TestSearchKeysAreLiteralDuringPaste(t *testing.T) {
 	}
 	if line != "a\x12b\x07c" {
 		t.Errorf("line = %q, want the control bytes kept verbatim", line)
+	}
+}
+
+// runSearchAt は端末幅を指定して入力を 1 回の ReadLine へ流す。
+func runSearchAt(input string, width int, hist History) (*Terminal, string, string, error) {
+	mock := &MockTerminal{toSend: []byte(input), bytesPerRead: 1}
+	term := NewTerminal(mock, ">> ")
+	term.History = hist
+	if err := term.SetSize(width, 24); err != nil {
+		panic(err)
+	}
+	line, err := term.ReadLine()
+	return term, line, string(mock.received), err
+}
+
+// 検索プロンプトは 25 セル以上あり、狭い端末では折返す。再描画経路が
+// writeLineCells と同じ折返し規則を通らないと、端末へ送るバイト列に
+// パディングが入らず、内部桁位置と実画面が食い違う。
+func TestRepaintPaintsPromptWithSharedLayout(t *testing.T) {
+	newSearching := func(width int) *Terminal {
+		term := NewTerminal(&MockTerminal{}, ">> ")
+		if err := term.SetSize(width, 24); err != nil {
+			t.Fatalf("SetSize: %v", err)
+		}
+		term.search.active = true
+		term.search.query = []rune("本語")
+		return term
+	}
+	for width := 8; width <= 40; width++ {
+		ref := newSearching(width)
+		ref.writeLineCells(ref.displayPrompt())
+		want := string(ref.outBuf)
+		wantX, wantY := cellPos(ref.displayPrompt(), nil, width)
+		if ref.cursorX != wantX || ref.cursorY != wantY {
+			t.Fatalf("width=%d: writeLineCells cursor = (%d,%d), cellPos = (%d,%d)",
+				width, ref.cursorX, ref.cursorY, wantX, wantY)
+		}
+
+		term := newSearching(width)
+		term.clearAndRepaintLinePlusNPrevious(0)
+		if !strings.Contains(string(term.outBuf), want) {
+			t.Errorf("width=%d: repaint %q does not paint the prompt as %q",
+				width, string(term.outBuf), want)
+		}
+		if term.cursorX != wantX || term.cursorY != wantY {
+			t.Errorf("width=%d: repaint cursor = (%d,%d), want (%d,%d)",
+				width, term.cursorX, term.cursorY, wantX, wantY)
+		}
+	}
+}
+
+// 検索中の狭い端末でも、再描画後の桁位置は cellPos と一致する。
+func TestSearchRepaintMatchesCellPosOnNarrowTerminal(t *testing.T) {
+	for width := 8; width <= 40; width++ {
+		term, _, _, _ := runSearchAt("\x12本語", width, newStubHistory())
+		wantX, wantY := cellPos(term.displayPrompt(), term.line[:term.pos], width)
+		if term.cursorX != wantX || term.cursorY != wantY {
+			t.Errorf("width=%d: cursor = (%d,%d), want (%d,%d)",
+				width, term.cursorX, term.cursorY, wantX, wantY)
+		}
+	}
+}
+
+// Ctrl-L の再描画も同じ規則を共有する。
+func TestClearScreenRepaintMatchesCellPosOnNarrowTerminal(t *testing.T) {
+	for width := 8; width <= 40; width++ {
+		term, _, _, _ := runSearchAt("\x12本語\x0c", width, newStubHistory())
+		wantX, wantY := cellPos(term.displayPrompt(), term.line[:term.pos], width)
+		if term.cursorX != wantX || term.cursorY != wantY {
+			t.Errorf("width=%d: cursor = (%d,%d), want (%d,%d)",
+				width, term.cursorX, term.cursorY, wantX, wantY)
+		}
+	}
+}
+
+func TestCurrentLine(t *testing.T) {
+	tests := []struct {
+		name      string
+		line      string
+		active    bool
+		savedLine string
+		want      string
+	}{
+		{name: "not searching", line: "abc", want: "abc"},
+		{name: "not searching empty", line: "", want: ""},
+		{name: "searching returns saved line", line: "候補", active: true, savedLine: "abc", want: "abc"},
+		{name: "searching with empty saved line", line: "候補", active: true, savedLine: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			term := NewTerminal(&MockTerminal{}, ">> ")
+			term.line = []rune(tt.line)
+			term.search.active = tt.active
+			term.search.line = []rune(tt.savedLine)
+			if got := string(term.currentLine()); got != tt.want {
+				t.Errorf("currentLine() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExitSearchState(t *testing.T) {
+	term := NewTerminal(&MockTerminal{}, ">> ")
+	term.search = searchState{active: true, query: []rune("x"), index: 2, failed: true, line: []rune("abc"), pos: 3}
+	term.exitSearchState()
+	if term.search.active || term.search.query != nil || term.search.index != 0 ||
+		term.search.failed || term.search.line != nil || term.search.pos != 0 {
+		t.Errorf("search = %+v, want the zero value", term.search)
+	}
+}
+
+// 検索中の Ctrl-D は候補ではなく退避した入力行の空判定で終了を決める。
+func TestCtrlDDuringSearchUsesSavedLine(t *testing.T) {
+	_, line, _, err := runSearch("abc\x12\x04\r", newStubHistory())
+	if err != nil {
+		t.Fatalf("err = %v, want nil (saved line is not empty)", err)
+	}
+	if line != "" {
+		t.Errorf("line = %q, want the empty candidate committed", line)
+	}
+}
+
+func TestCtrlDDuringSearchOnEmptyLineEndsSession(t *testing.T) {
+	term, _, _, err := runSearch("\x12\x04", newStubHistory())
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("err = %v, want EOF", err)
+	}
+	if term.search.active {
+		t.Errorf("search.active = true, want the state cleared on exit")
+	}
+}
+
+func TestCtrlCDuringSearchClearsState(t *testing.T) {
+	term, _, _, err := runSearch("\x12本語\x03", newStubHistory())
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("err = %v, want EOF", err)
+	}
+	if term.search.active || term.search.query != nil {
+		t.Errorf("search = %+v, want the zero value", term.search)
 	}
 }

@@ -102,35 +102,25 @@ func TestTailCells(t *testing.T) {
 	}
 }
 
-func TestPromptCellWidth(t *testing.T) {
+func TestQueueRune(t *testing.T) {
 	tests := []struct {
-		name   string
-		prompt string
-		want   int
+		name string
+		in   rune
+		want string
 	}{
-		{name: "ascii prompt", prompt: ">> ", want: 3},
-		{name: "cjk prompt", prompt: "入力> ", want: 6},
-		{name: "escape in prompt", prompt: "\x1b[31m>> ", want: 3},
-		{name: "empty prompt", prompt: "", want: 0},
+		{name: "ascii", in: 'a', want: "a"},
+		{name: "cjk", in: '日', want: "日"},
+		{name: "control", in: '\x00', want: "\x00"},
+		{name: "emoji", in: '😀', want: "😀"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			term := NewTerminal(&MockTerminal{}, tt.prompt)
-			if got := term.promptCellWidth(); got != tt.want {
-				t.Errorf("promptCellWidth(%q) = %d, want %d", tt.prompt, got, tt.want)
+			term := NewTerminal(&MockTerminal{}, ">> ")
+			term.queueRune(tt.in)
+			if got := string(term.outBuf); got != tt.want {
+				t.Errorf("queueRune(%q) wrote %q, want %q", tt.in, got, tt.want)
 			}
 		})
-	}
-}
-
-// 検索中は表示プロンプトが検索プロンプトへ切り替わるため、幅もそちらを返す。
-func TestPromptCellWidthDuringSearch(t *testing.T) {
-	term := NewTerminal(&MockTerminal{}, ">> ")
-	term.search.active = true
-	term.search.query = []rune("本語")
-	want := visualWidth([]rune("(reverse-i-search)'本語': "))
-	if got := term.promptCellWidth(); got != want {
-		t.Errorf("promptCellWidth during search = %d, want %d", got, want)
 	}
 }
 

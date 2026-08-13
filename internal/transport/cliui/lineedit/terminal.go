@@ -337,7 +337,7 @@ func (t *Terminal) setLine(newLine []rune, newPos int) {
 	if echo {
 		t.moveCursorToPos(0)
 		t.writeLine(newLine)
-		for i := 0; i < eraseCells(t.line, newLine); i++ {
+		for i, n := 0, eraseCells(t.line, newLine); i < n; i++ {
 			t.writeLine(space)
 		}
 	}
@@ -551,7 +551,7 @@ func (t *Terminal) handleKey(key rune) (line string, ok bool) {
 	case keyDeleteLine:
 		// Delete everything from the current cursor position to the
 		// end of line.
-		for i := 0; i < tailCells(t.line, t.pos); i++ {
+		for i, n := 0, tailCells(t.line, t.pos); i < n; i++ {
 			t.queue(space)
 			t.advanceCursor(1)
 		}
@@ -588,9 +588,8 @@ func (t *Terminal) handleKey(key rune) (line string, ok bool) {
 	case keyClearScreen:
 		// Erases the screen and moves the cursor to the home position.
 		t.queue([]rune("\x1b[2J\x1b[H"))
-		t.queue(t.displayPrompt())
 		t.cursorX, t.cursorY = 0, 0
-		t.advanceCursor(t.promptCellWidth())
+		t.writeLineCells(t.displayPrompt())
 		t.setLine(t.line, t.pos)
 	default:
 		if !isPrintable(key) {
@@ -730,11 +729,13 @@ func (t *Terminal) readLine() (line string, err error) {
 			}
 			if !t.pasteActive {
 				if key == keyCtrlD {
-					if len(t.line) == 0 {
+					if len(t.currentLine()) == 0 {
+						t.exitSearchState()
 						return "", io.EOF
 					}
 				}
 				if key == keyCtrlC {
+					t.exitSearchState()
 					return "", io.EOF
 				}
 				if key == keyPasteStart {
@@ -809,8 +810,7 @@ func (t *Terminal) clearAndRepaintLinePlusNPrevious(numPrevLines int) {
 	t.move(t.cursorY, 0, 0, 0)
 	t.cursorX, t.cursorY = 0, 0
 
-	t.queue(t.displayPrompt())
-	t.advanceCursor(t.promptCellWidth())
+	t.writeLineCells(t.displayPrompt())
 	t.writeLine(t.line)
 	t.moveCursorToPos(t.pos)
 }

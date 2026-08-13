@@ -1,7 +1,16 @@
 package lineedit
 
+import "unicode/utf8"
+
 // 本ファイルはフォーク基底部 (terminal.go) が呼び出す統合点を提供する。
 // terminal.go 側は 1 行の呼び出し置換に留め、ロジックはここへ置く。
+
+// queueRune は 1 rune を outBuf へ直接符号化する。queue と違い
+// 中間の []rune / string を確保しないため、1 rune ずつ書き出す
+// writeLineCells の確保コストが行長に比例して増えない。
+func (t *Terminal) queueRune(r rune) {
+	t.outBuf = utf8.AppendRune(t.outBuf, r)
+}
 
 // padding n 個の空白 rune を返す。
 func padding(n int) []rune {
@@ -39,7 +48,7 @@ func (t *Terminal) writeLineCells(line []rune) {
 			t.queue(padding(remaining))
 			t.advanceCursor(remaining)
 		}
-		t.queue([]rune{r})
+		t.queueRune(r)
 		t.advanceCursor(w)
 	}
 }
@@ -71,9 +80,4 @@ func tailCells(line []rune, pos int) int {
 		return 0
 	}
 	return visualWidth(line[pos:])
-}
-
-// promptCellWidth 現在の表示プロンプトのセル幅を返す。検索中は検索プロンプトの幅になる。
-func (t *Terminal) promptCellWidth() int {
-	return visualWidth(t.displayPrompt())
 }
