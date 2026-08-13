@@ -74,6 +74,34 @@ func TestVisualWidth(t *testing.T) {
 	}
 }
 
+func TestIsEscapeTerminator(t *testing.T) {
+	tests := []struct {
+		name string
+		in   rune
+		want bool
+	}{
+		{name: "lower a", in: 'a', want: true},
+		{name: "lower z", in: 'z', want: true},
+		{name: "upper A", in: 'A', want: true},
+		{name: "upper Z", in: 'Z', want: true},
+		{name: "lower m", in: 'm', want: true},
+		{name: "before lower a", in: '`', want: false},
+		{name: "after lower z", in: '{', want: false},
+		{name: "before upper A", in: '@', want: false},
+		{name: "after upper Z", in: '[', want: false},
+		{name: "digit", in: '5', want: false},
+		{name: "semicolon", in: ';', want: false},
+		{name: "cjk", in: '日', want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isEscapeTerminator(tt.in); got != tt.want {
+				t.Errorf("isEscapeTerminator(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPromptCells(t *testing.T) {
 	tests := []struct {
 		name string
@@ -87,6 +115,10 @@ func TestPromptCells(t *testing.T) {
 		{name: "escape in middle", in: ">\x1b[1m>\x1b[0m ", want: ">> "},
 		{name: "cjk kept", in: "日> ", want: "日> "},
 		{name: "escape with digits only ends at letter", in: "\x1b[38;5;1mX", want: "X"},
+		{name: "escape ends at lower a", in: "\x1b[1aX", want: "X"},
+		{name: "escape ends at lower z", in: "\x1b[1zX", want: "X"},
+		{name: "escape ends at upper A", in: "\x1b[1AX", want: "X"},
+		{name: "escape ends at upper Z", in: "\x1b[1ZX", want: "X"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

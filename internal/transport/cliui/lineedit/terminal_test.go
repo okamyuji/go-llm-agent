@@ -328,6 +328,16 @@ var keyPressTests = []struct {
 		line: "bcda",
 	},
 	{
+		// Alt-Left で単語頭へ、Alt-Right で単語末へ移動する
+		in:   "one two\x1b[1;3D\x1b[1;3Cx\r",
+		line: "one twox",
+	},
+	{
+		// CJK を含む行での Alt-Left
+		in:   "日本 語\x1b[1;3Dx\r",
+		line: "日本 x語",
+	},
+	{
 		// CJK 入力がそのまま確定する
 		in:   "日本語\r",
 		line: "日本語",
@@ -516,7 +526,7 @@ func TestOutputNewlines(t *testing.T) {
 // --- 以下は本フォークで追加した CJK 表示幅の回帰テスト ---
 
 // runCJK は入力を 1 回の ReadLine へ流し、Terminal と出力バイト列を返す。
-func runCJK(input string, width int, hist History) (*Terminal, string, error, string) {
+func runCJK(input string, width int, hist History) (*Terminal, string, string, error) {
 	mock := &MockTerminal{toSend: []byte(input), bytesPerRead: 1}
 	term := NewTerminal(mock, "> ")
 	if hist != nil {
@@ -528,7 +538,7 @@ func runCJK(input string, width int, hist History) (*Terminal, string, error, st
 		}
 	}
 	line, err := term.ReadLine()
-	return term, line, err, string(mock.received)
+	return term, line, string(mock.received), err
 }
 
 func TestCursorMoveIsCellBased(t *testing.T) {
@@ -544,7 +554,7 @@ func TestCursorMoveIsCellBased(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, _, received := runCJK(tt.input, 0, nil)
+			_, _, received, _ := runCJK(tt.input, 0, nil)
 			if !strings.Contains(received, tt.want) {
 				t.Errorf("received %q does not contain %q", received, tt.want)
 			}
@@ -563,7 +573,7 @@ func TestBackspaceErasesCellWidth(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, _, received := runCJK(tt.input, 0, nil)
+			_, _, received, _ := runCJK(tt.input, 0, nil)
 			if !strings.Contains(received, tt.want) {
 				t.Errorf("received %q does not contain %q", received, tt.want)
 			}
@@ -574,7 +584,7 @@ func TestBackspaceErasesCellWidth(t *testing.T) {
 // 幅 21、プロンプト "> " (2 セル)。CJK 9 文字で 20 セルまで埋まるため、
 // 10 文字目は残り 1 桁に収まらず、空白 1 個のパディングと折返しが入る。
 func TestWrapPadsBeforeWideRune(t *testing.T) {
-	term, _, _, received := runCJK("日本語日本語日本語日", 21, nil)
+	term, _, received, _ := runCJK("日本語日本語日本語日", 21, nil)
 	if !strings.Contains(received, " \r\n") {
 		t.Errorf("received %q does not contain the padding + wrap", received)
 	}
@@ -587,7 +597,7 @@ func TestWrapPadsBeforeWideRune(t *testing.T) {
 func TestHistoryRecallErasesCellRemainder(t *testing.T) {
 	hist := &stubHistory{entries: []string{"ls"}}
 	// 長い CJK 行を入力してから上矢印で短い ASCII 行を呼び出す。
-	term, _, _, received := runCJK("日本語のテスト\x1b[A", 0, hist)
+	term, _, received, _ := runCJK("日本語のテスト\x1b[A", 0, hist)
 	if string(term.line) != "ls" {
 		t.Fatalf("line = %q, want %q", string(term.line), "ls")
 	}
@@ -608,7 +618,7 @@ func TestDeleteToEndErasesCellWidth(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, _, received := runCJK(tt.input, 0, nil)
+			_, _, received, _ := runCJK(tt.input, 0, nil)
 			if !strings.Contains(received, strings.Repeat(" ", tt.want)) {
 				t.Errorf("received %q does not contain %d erase cells", received, tt.want)
 			}
@@ -620,7 +630,7 @@ func TestDeleteToEndErasesCellWidth(t *testing.T) {
 }
 
 func TestCtrlUErasesCellWidth(t *testing.T) {
-	_, _, _, received := runCJK("日本語\x1b[D\x15", 0, nil)
+	_, _, received, _ := runCJK("日本語\x1b[D\x15", 0, nil)
 	// 手前 2 文字 (4 セル) を消す。
 	if !strings.Contains(received, "語"+strings.Repeat(" ", 4)) {
 		t.Errorf("received %q does not erase 4 cells", received)
@@ -628,7 +638,7 @@ func TestCtrlUErasesCellWidth(t *testing.T) {
 }
 
 func TestPastedCJKKeepsCellPosition(t *testing.T) {
-	term, line, err, _ := runCJK("\x1b[200~日本語\r", 0, nil)
+	term, line, _, err := runCJK("\x1b[200~日本語\r", 0, nil)
 	if !errors.Is(err, ErrPasteIndicator) {
 		t.Fatalf("err = %v, want ErrPasteIndicator", err)
 	}
@@ -660,12 +670,105 @@ func (r *errReader) Read([]byte) (int, error)    { return 0, r.err }
 func (r *errReader) Write(p []byte) (int, error) { return len(p), nil }
 
 func TestClearScreenUsesPromptCellWidth(t *testing.T) {
-	term, _, _, received := runCJK("日本\x0c", 0, nil)
+	term, _, received, _ := runCJK("日本\x0c", 0, nil)
 	if !strings.Contains(received, "\x1b[2J\x1b[H> 日本") {
 		t.Errorf("received %q does not repaint the prompt and line", received)
 	}
 	wantX, wantY := cellPos([]rune("> "), []rune("日本"), term.termWidth)
 	if term.cursorX != wantX || term.cursorY != wantY {
 		t.Errorf("cursor = (%d,%d), want (%d,%d)", term.cursorX, term.cursorY, wantX, wantY)
+	}
+}
+
+// Write は行編集中の画面を消してから出力し、プロンプトと行を描き直す。
+func TestWriteRepaintsCJKLine(t *testing.T) {
+	mock := &MockTerminal{toSend: []byte("日本"), bytesPerRead: 1}
+	term := NewTerminal(mock, "> ")
+	if _, err := term.ReadLine(); !errors.Is(err, io.EOF) {
+		t.Fatalf("err = %v, want EOF", err)
+	}
+	mock.received = nil
+	if _, err := term.Write([]byte("output\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	received := string(mock.received)
+	if !strings.Contains(received, "output\r\n") {
+		t.Errorf("received %q does not contain the CRLF converted output", received)
+	}
+	if !strings.Contains(received, "> 日本") {
+		t.Errorf("received %q does not repaint prompt and line", received)
+	}
+	wantX, wantY := cellPos([]rune("> "), []rune("日本"), term.termWidth)
+	if term.cursorX != wantX || term.cursorY != wantY {
+		t.Errorf("cursor = (%d,%d), want (%d,%d)", term.cursorX, term.cursorY, wantX, wantY)
+	}
+}
+
+// Write は画面に何も無ければ変換だけ行う。
+func TestWriteWithoutPrompt(t *testing.T) {
+	buf := new(bytes.Buffer)
+	term := NewTerminal(struct {
+		io.Reader
+		io.Writer
+	}{bytes.NewReader(nil), buf}, "> ")
+	if _, err := term.Write([]byte("1\n2\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if buf.String() != "1\r\n2\r\n" {
+		t.Errorf("output = %q", buf.String())
+	}
+}
+
+// SetSize は再描画後もセル基準で内部座標を保つ。
+func TestSetSizeRepaintsCJKLine(t *testing.T) {
+	tests := []struct {
+		name     string
+		width    int
+		wantSame bool
+	}{
+		{name: "shrink", width: 12},
+		{name: "grow", width: 60},
+		{name: "unchanged", width: 40, wantSame: true},
+		{name: "zero clamps to one", width: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &MockTerminal{toSend: []byte("日本語のテスト"), bytesPerRead: 1}
+			term := NewTerminal(mock, "> ")
+			if err := term.SetSize(40, 24); err != nil {
+				t.Fatalf("SetSize: %v", err)
+			}
+			if _, err := term.ReadLine(); !errors.Is(err, io.EOF) {
+				t.Fatalf("err = %v, want EOF", err)
+			}
+			if err := term.SetSize(tt.width, 24); err != nil {
+				t.Fatalf("SetSize: %v", err)
+			}
+			want := tt.width
+			if want == 0 {
+				want = 1
+			}
+			if term.termWidth != want {
+				t.Errorf("termWidth = %d, want %d", term.termWidth, want)
+			}
+			if tt.wantSame {
+				return
+			}
+			if term.cursorX >= term.termWidth {
+				t.Errorf("cursorX = %d, must be inside width %d", term.cursorX, term.termWidth)
+			}
+		})
+	}
+}
+
+// 何も表示していない状態の SetSize は再描画しない。
+func TestSetSizeOnEmptyScreen(t *testing.T) {
+	mock := &MockTerminal{}
+	term := NewTerminal(mock, "> ")
+	if err := term.SetSize(30, 10); err != nil {
+		t.Fatalf("SetSize: %v", err)
+	}
+	if len(mock.received) != 0 {
+		t.Errorf("received %q, want no output", string(mock.received))
 	}
 }

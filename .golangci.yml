@@ -50,3 +50,10 @@ linters:
         linters:
           - gosec
           - errcheck
+      # golang.org/x/term v0.45.0 のフォーク基底部。上流との差分を最小に保つため
+      # 上流由来の指摘は修正しない (docs/specs/2026-08-13-improvements/00-overview.md 6 章)
+      - path: internal/transport/cliui/lineedit/terminal(_test)?\.go
+        linters:
+          - errcheck
+          - gocritic
+          - staticcheck

@@ -30,12 +30,12 @@ func newStubHistory() *stubHistory {
 
 // runSearch は入力バイト列を 1 回の ReadLine へ流し、終了後の Terminal を返す。
 // 入力が確定行を含まない場合、ReadLine は EOF で戻り内部状態を観測できる。
-func runSearch(input string, hist History) (*Terminal, string, error, string) {
+func runSearch(input string, hist History) (*Terminal, string, string, error) {
 	mock := &MockTerminal{toSend: []byte(input), bytesPerRead: 1}
 	term := NewTerminal(mock, ">> ")
 	term.History = hist
 	line, err := term.ReadLine()
-	return term, line, err, string(mock.received)
+	return term, line, string(mock.received), err
 }
 
 func TestDisplayPrompt(t *testing.T) {
@@ -116,7 +116,7 @@ func TestSearchBackwardEmptyHistory(t *testing.T) {
 }
 
 func TestSearchPromptRendered(t *testing.T) {
-	_, _, err, received := runSearch("\x12", newStubHistory())
+	_, _, received, err := runSearch("\x12", newStubHistory())
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("err = %v, want EOF", err)
 	}
@@ -138,7 +138,7 @@ func TestSearchMatchesQuery(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			term, _, _, received := runSearch(tt.input, newStubHistory())
+			term, _, received, _ := runSearch(tt.input, newStubHistory())
 			if string(term.line) != tt.want {
 				t.Errorf("candidate line = %q, want %q", string(term.line), tt.want)
 			}
@@ -150,7 +150,7 @@ func TestSearchMatchesQuery(t *testing.T) {
 }
 
 func TestSearchFailedKeepsCandidate(t *testing.T) {
-	term, _, _, received := runSearch("\x12本語z", newStubHistory())
+	term, _, received, _ := runSearch("\x12本語z", newStubHistory())
 	if !term.search.failed {
 		t.Errorf("search.failed = false, want true")
 	}
@@ -198,7 +198,7 @@ func TestSearchBackspaceOnEmptyQuery(t *testing.T) {
 
 func TestSearchAbortRestoresLine(t *testing.T) {
 	// abc を入力し左矢印でカーソルを 2 へ移してから検索、Ctrl-G で中止する。
-	term, _, _, received := runSearch("abc\x1b[D\x12本語\x07", newStubHistory())
+	term, _, received, _ := runSearch("abc\x1b[D\x12本語\x07", newStubHistory())
 	if string(term.line) != "abc" {
 		t.Errorf("line = %q, want %q", string(term.line), "abc")
 	}
@@ -226,7 +226,7 @@ func TestSearchAbortedByUnknownKey(t *testing.T) {
 
 func TestSearchEnterCommitsCandidate(t *testing.T) {
 	hist := newStubHistory()
-	_, line, err, _ := runSearch("\x12本語\r", hist)
+	_, line, _, err := runSearch("\x12本語\r", hist)
 	if err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
@@ -240,7 +240,7 @@ func TestSearchEnterCommitsCandidate(t *testing.T) {
 
 func TestSearchDelegatesOtherKey(t *testing.T) {
 	// 左矢印で検索を終了し、候補行に対する通常編集としてそのキーが処理される。
-	_, line, err, _ := runSearch("\x12本語\x1b[Dx\r", newStubHistory())
+	_, line, _, err := runSearch("\x12本語\x1b[Dx\r", newStubHistory())
 	if err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
@@ -265,7 +265,7 @@ func TestSearchEndRepaintsWithNormalPrompt(t *testing.T) {
 
 func TestSearchEndResetsHistoryIndex(t *testing.T) {
 	// 検索を中止したあとの上矢印は最新履歴から再開する。
-	_, line, err, _ := runSearch("\x12本語\x12\x07\x1b[A\r", newStubHistory())
+	_, line, _, err := runSearch("\x12本語\x12\x07\x1b[A\r", newStubHistory())
 	if err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
@@ -275,7 +275,7 @@ func TestSearchEndResetsHistoryIndex(t *testing.T) {
 }
 
 func TestSearchEndsOnPasteStart(t *testing.T) {
-	term, line, err, _ := runSearch("\x12本語\x1b[200~ab\x1b[201~\r", newStubHistory())
+	term, line, _, err := runSearch("\x12本語\x1b[200~ab\x1b[201~\r", newStubHistory())
 	if err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
@@ -313,7 +313,7 @@ func TestReverseSearchKeyIsNotPrintable(t *testing.T) {
 
 // paste 中の 0x12 / 0x07 は制御キーではなく本文として行へ入る。
 func TestSearchKeysAreLiteralDuringPaste(t *testing.T) {
-	_, line, err, _ := runSearch("\x1b[200~a\x12b\x07c\x1b[201~\r", newStubHistory())
+	_, line, _, err := runSearch("\x1b[200~a\x12b\x07c\x1b[201~\r", newStubHistory())
 	if err != nil && !errors.Is(err, ErrPasteIndicator) {
 		t.Fatalf("err = %v", err)
 	}

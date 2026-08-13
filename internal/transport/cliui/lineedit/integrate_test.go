@@ -7,19 +7,24 @@ import (
 
 func TestPadding(t *testing.T) {
 	tests := []struct {
-		name string
-		n    int
-		want string
+		name    string
+		n       int
+		want    string
+		wantNil bool
 	}{
-		{name: "zero", n: 0, want: ""},
-		{name: "negative", n: -3, want: ""},
+		{name: "zero", n: 0, want: "", wantNil: true},
+		{name: "negative", n: -3, want: "", wantNil: true},
 		{name: "one", n: 1, want: " "},
 		{name: "many", n: 4, want: "    "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := string(padding(tt.n)); got != tt.want {
-				t.Errorf("padding(%d) = %q, want %q", tt.n, got, tt.want)
+			got := padding(tt.n)
+			if string(got) != tt.want {
+				t.Errorf("padding(%d) = %q, want %q", tt.n, string(got), tt.want)
+			}
+			if tt.wantNil && got != nil {
+				t.Errorf("padding(%d) = %v, want nil", tt.n, got)
 			}
 		})
 	}

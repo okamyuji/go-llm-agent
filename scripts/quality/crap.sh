@@ -58,8 +58,11 @@ while IFS= read -r line; do
   touched=$(awk -F: -v f="$file" -v s="$fline" -v e="$next" '$1 == f && $3+0 >= s+0 && $2+0 < e+0 { print "yes"; exit }' "$TMP/changed_ranges")
   [ "$touched" != "yes" ] && continue
 
-  # go tool cover -func から該当関数のカバレッジ取得
-  cov=$(awk -v f="$file" -v fn="$fn" '$1 ~ f":" && $2 == fn { gsub(/%/, "", $3); print $3 }' "$TMP/funccov" | head -1)
+  # go tool cover -func から該当関数のカバレッジ取得。
+  # gocyclo はメソッドを "(*T).Name" と出すが cover -func は "Name" だけを出すため、
+  # レシーバ部分を落としてから突き合わせる。
+  covfn="${fn##*.}"
+  cov=$(awk -v f="$file" -v fn="$covfn" '$1 ~ f":" && $2 == fn { gsub(/%/, "", $3); print $3 }' "$TMP/funccov" | head -1)
   [ -z "$cov" ] && cov=0
   crap=$(awk -v c="$comp" -v v="$cov" 'BEGIN { cv = v / 100; printf "%.1f", c*c*(1-cv)^3 + c }')
   over=$(awk -v x="$crap" -v t="$THRESHOLD" 'BEGIN { print (x > t) ? 1 : 0 }')
