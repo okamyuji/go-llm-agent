@@ -373,6 +373,64 @@ func TestRepl_ToolsCommandTogglesToolChoice(t *testing.T) {
 	}
 }
 
+// TestRepl_UnknownSlashCommandIsNotSentToLLM /tool on のようなタイプミスを LLM へ送ると、
+// 架空のツール実行計画テキストが履歴に残って以後の回答が汚染されるため、
+// "/" で始まる未知の入力はコマンド一覧を表示してターンを消費しない。
+func TestRepl_UnknownSlashCommandIsNotSentToLLM(t *testing.T) {
+	svc := &inputCapturingSvc{}
+	in := strings.NewReader("/tool xyz\n/unknown\nq1\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	if len(svc.inputs) != 1 {
+		t.Fatalf("inputs=%d, want 1 (slash 入力は LLM へ送らない)", len(svc.inputs))
+	}
+	if got := svc.inputs[0].Messages[len(svc.inputs[0].Messages)-1].Content; got != "q1" {
+		t.Errorf("sent prompt=%q, want q1", got)
+	}
+	if !strings.Contains(out.String(), "/tools") || !strings.Contains(out.String(), "/clear") {
+		t.Errorf("command help missing: %q", out.String())
+	}
+}
+
+// TestRepl_ToolAliasWorks /tool は /tools の別名として受け付ける (押し間違い対策)
+func TestRepl_ToolAliasWorks(t *testing.T) {
+	svc := &inputCapturingSvc{}
+	in := strings.NewReader("/tool off\nq1\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	if len(svc.inputs) != 1 || svc.inputs[0].ToolChoice == nil || svc.inputs[0].ToolChoice.Mode != "none" {
+		t.Fatalf("inputs=%+v, want one input with tool_choice none", svc.inputs)
+	}
+}
+
+// TestRepl_ClearCommandResetsHistory /clear は会話履歴を破棄する。
+// 汚染された履歴 (架空のツール計画テキスト等) からセッション再起動なしで復旧する手段。
+func TestRepl_ClearCommandResetsHistory(t *testing.T) {
+	svc := &inputCapturingSvc{}
+	in := strings.NewReader("q1\n/clear\nq2\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	if len(svc.inputs) != 2 {
+		t.Fatalf("inputs=%d, want 2", len(svc.inputs))
+	}
+	got := svc.inputs[1].Messages
+	if len(got) != 1 || got[0].Content != "q2" {
+		t.Errorf("second turn messages=%+v, want only q2 after /clear", got)
+	}
+	if !strings.Contains(out.String(), "履歴") {
+		t.Errorf("clear feedback missing: %q", out.String())
+	}
+}
+
 // TestRepl_ExitsWhenContextCanceledAtPrompt SIGINT で root context がキャンセルされたら、
 // プロンプト待ちでブロックしていても REPL は即座にきれいに終了する。
 // 従来はループが回り続け、以後の全ターンが即失敗するゾンビセッションになっていた。

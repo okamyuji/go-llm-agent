@@ -122,26 +122,39 @@ func (r *REPL) Run(ctx context.Context) error {
 		if line == "" {
 			continue
 		}
-		if line == "/quit" || line == "/exit" {
-			return nil
-		}
-		// /tools off|on: ツール定義をリクエストに含めるかをセッション中に切り替える。
-		// 小型ローカルモデルはツール定義があると履歴つき長文の指示追従を失うため、
-		// 翻訳・要約など純粋な対話では off にすると安定する (README の注意を参照)
-		if line == "/tools" || strings.HasPrefix(line, "/tools ") {
-			switch strings.TrimSpace(strings.TrimPrefix(line, "/tools")) {
-			case "off":
-				toolChoice = &llm.ToolChoice{Mode: "none"}
-				fmt.Fprintln(out, "[tools] off — ツール定義を送らずに応答します")
-			case "on":
-				toolChoice = nil
-				fmt.Fprintln(out, "[tools] on — ツールを使用します")
-			default:
-				state := "on"
-				if toolChoice != nil {
-					state = "off"
+		// "/" で始まる入力はコマンドとして処理し、LLM へは送らない。
+		// タイプミス (/tool on 等) を質問として送ると、モデルが架空のツール実行計画
+		// テキストを回答して履歴が汚染され、以後の回答がその書式を真似続けるため。
+		if strings.HasPrefix(line, "/") {
+			name, arg, _ := strings.Cut(line, " ")
+			arg = strings.TrimSpace(arg)
+			switch name {
+			case "/quit", "/exit":
+				return nil
+			case "/clear":
+				// 汚染された履歴からセッション再起動なしで復旧する手段
+				history = history[:0]
+				fmt.Fprintln(out, "[clear] 会話履歴を破棄しました")
+			case "/tools", "/tool":
+				// ツール定義をリクエストに含めるかをセッション中に切り替える。
+				// 小型ローカルモデルはツール定義があると履歴つき長文の指示追従を
+				// 失うため、翻訳・要約など純粋な対話では off が安定する (README 参照)
+				switch arg {
+				case "off":
+					toolChoice = &llm.ToolChoice{Mode: "none"}
+					fmt.Fprintln(out, "[tools] off — ツール定義を送らずに応答します")
+				case "on":
+					toolChoice = nil
+					fmt.Fprintln(out, "[tools] on — ツールを使用します")
+				default:
+					state := "on"
+					if toolChoice != nil {
+						state = "off"
+					}
+					fmt.Fprintf(out, "[tools] 現在: %s（/tools off | /tools on で切替）\n", state)
 				}
-				fmt.Fprintf(out, "[tools] 現在: %s（/tools off | /tools on で切替）\n", state)
+			default:
+				fmt.Fprintf(out, "[コマンド] %s は未定義です。利用可能: /quit /exit /clear /tools off|on\n", name)
 			}
 			continue
 		}
