@@ -85,6 +85,11 @@ agent:
   max_tool_hops: 8
   # 既定は readonly のみ。fs_write / shell を有効にしたい場合は意図して追記する。
   # enabled_tools を空または未指定にすると Registry が DefaultReadonlyTools を採用する。
+  # fs_edit (old_string 完全一致による部分編集) も既定では無効。有効化する場合は
+  # 追記する。専用の config キーはなく tools.fs の sandbox 設定を fs_read/fs_write
+  # と共有する。fs_read で読んでいないファイルへの fs_edit は拒否される。
+  # agent serve では read registry がプロセス単位のため fs_edit は自動的に無効化され、
+  # enabled_tools に含めても起動時に警告が出るだけで有効化されない。
   enabled_tools: [fs_read, search_files, http_fetch]
   # system_prompt と system_prompt_file は排他。両方指定するとエラーになる。
   # system_prompt_file は config.yaml からの相対パスでプロンプトファイルを参照する。

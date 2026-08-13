@@ -114,7 +114,7 @@ func cmdEval(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, reg, tools, _, err := loadDeps(ctx, *configPath)
+	cfg, reg, tools, _, err := loadDeps(ctx, *configPath, false)
 	if err != nil {
 		return err
 	}
@@ -162,7 +162,11 @@ func cmdEval(ctx context.Context, args []string) error {
 	return nil
 }
 
-func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Registry, tool.Registry, storage.SessionStore, error) {
+// loadDeps 設定・LLM registry・tool registry・session store を組み立てる。
+// isServe が true のとき、enabled_tools に "fs_edit" が含まれていても tool registry
+// から除外し、警告を stderr へ出す (03-fs-edit.md: read registry はプロセス単位で
+// scope するため、複数リクエストが混在する serve では既読チェックが破綻する)
+func loadDeps(ctx context.Context, configPath string, isServe bool) (*config.Config, llm.Registry, tool.Registry, storage.SessionStore, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -253,14 +257,21 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 	if slices.Contains(cfg.Agent.EnabledTools, "web_fetch") {
 		webFetch.WarnIfWebgrabMissing()
 	}
+	reg := tool.NewReadRegistry()
 	tools := []tool.Tool{
-		tool.NewFSReadWithLogger(sb, cfg.Tools.FS.MaxReadBytes, logger),
-		tool.NewFSWriteWithLogger(sb, logger),
+		tool.NewFSReadWithLogger(sb, cfg.Tools.FS.MaxReadBytes, logger, reg),
+		tool.NewFSWriteWithLogger(sb, logger, reg),
+		tool.NewFSEdit(sb, reg, logger),
 		tool.NewShell(cfg.Tools.Shell, logger),
 		tool.NewHTTPFetchWithLogger(cfg.Tools.HTTPFetch, logger),
 		tool.NewSearchFiles(sb, cfg.Tools.SearchFiles),
 		tool.NewWebSearch(cfg.Tools.WebSearch),
 		webFetch,
+	}
+	enabledTools := cfg.Agent.EnabledTools
+	if isServe && slices.Contains(enabledTools, "fs_edit") {
+		fmt.Fprintln(os.Stderr, "warn: serve では fs_edit を無効化します (read registry はプロセス単位のため複数リクエストで既読チェックが破綻する)")
+		enabledTools = excludeTool(enabledTools, "fs_edit")
 	}
 	notesPath := cfg.Storage.NotesPath
 	if notesPath == "" {
@@ -278,7 +289,7 @@ func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Regis
 		}
 		logger.Error("degraded mode: notes store init failed; note_add and note_search are disabled but agent continues to start", "path", notesPath, "err", err)
 	}
-	toolReg := tool.NewRegistry(tools, cfg.Agent.EnabledTools)
+	toolReg := tool.NewRegistry(tools, enabledTools)
 	store := storage.NewSessionStore(expand(cfg.Storage.SessionsDir))
 	return cfg, llmReg, toolReg, store, nil
 }
@@ -392,6 +403,17 @@ func buildRedactor(cfg *config.Config) (safety.Redactor, error) {
 	return safety.ChainRedactor(out, pii), nil
 }
 
+// excludeTool tools から name を除いた新しいスライスを返す (元スライスは変更しない)
+func excludeTool(tools []string, name string) []string {
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if t != name {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // wrapWithRetry RetryConfig を retry.Config に変換して Provider をラップする
 // MaxAttempts <= 1 のとき WrapProvider が inner をそのまま返すため互換性が保たれる
 func wrapWithRetry(name string, p llm.Provider, rc config.RetryConfig) llm.Provider {
@@ -438,7 +460,7 @@ func cmdChat(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, reg, tools, _, err := loadDeps(ctx, *configPath)
+	cfg, reg, tools, _, err := loadDeps(ctx, *configPath, false)
 	if err != nil {
 		return err
 	}
@@ -478,7 +500,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, reg, tools, _, err := loadDeps(ctx, *configPath)
+	cfg, reg, tools, _, err := loadDeps(ctx, *configPath, false)
 	if err != nil {
 		return err
 	}
@@ -505,7 +527,7 @@ func cmdServe(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, reg, tools, _, err := loadDeps(ctx, *configPath)
+	cfg, reg, tools, _, err := loadDeps(ctx, *configPath, true)
 	if err != nil {
 		return err
 	}
@@ -540,7 +562,7 @@ func cmdTools(ctx context.Context, args []string) error {
 		return err
 	}
 	// telemetry / 親 ctx の cancellation を伝搬させるため、サブコマンド受領 ctx をそのまま渡す
-	_, _, tools, _, err := loadDeps(ctx, *configPath)
+	_, _, tools, _, err := loadDeps(ctx, *configPath, false)
 	if err != nil {
 		return err
 	}

@@ -12,24 +12,33 @@ import (
 
 const defaultMaxRead = 1 << 20
 
+// SummaryReader 承認サマリ生成のための読み取り専用インターフェース。
+// ReadForSummary は Sandbox のパス検証を通すが read registry を更新しない
+type SummaryReader interface {
+	ReadForSummary(ctx context.Context, path string) (string, error)
+}
+
 // FSRead fs_read ツールの実装
 type FSRead struct {
 	sb       *Sandbox
 	maxBytes int
 	logger   *slog.Logger
+	registry *ReadRegistry
 }
 
-// NewFSRead Sandbox と最大バイト数で FSRead を生成する
+// NewFSRead Sandbox と最大バイト数で FSRead を生成する。read registry は
+// 空のものを内部で生成する (fs_edit の既読チェックを共有したい場合は
+// NewFSReadWithLogger へ共有インスタンスを渡すこと)
 func NewFSRead(sb *Sandbox, maxBytes int) *FSRead {
-	return NewFSReadWithLogger(sb, maxBytes, nil)
+	return NewFSReadWithLogger(sb, maxBytes, nil, NewReadRegistry())
 }
 
-// NewFSReadWithLogger Sandbox と最大バイト数と logger で FSRead を生成する
-func NewFSReadWithLogger(sb *Sandbox, maxBytes int, logger *slog.Logger) *FSRead {
+// NewFSReadWithLogger Sandbox と最大バイト数と logger と read registry で FSRead を生成する
+func NewFSReadWithLogger(sb *Sandbox, maxBytes int, logger *slog.Logger, registry *ReadRegistry) *FSRead {
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxRead
 	}
-	return &FSRead{sb: sb, maxBytes: maxBytes, logger: logger}
+	return &FSRead{sb: sb, maxBytes: maxBytes, logger: logger, registry: registry}
 }
 
 // Spec ツール定義を返す
@@ -90,23 +99,57 @@ func (t *FSRead) Execute(ctx context.Context, raw json.RawMessage) (Result, erro
 		truncated = true
 	}
 	auditFS(ctx, t.logger, "fs_read", a.Path, len(b), true, "ok")
+	if canonical, cerr := t.sb.resolveCanonical(a.Path); cerr == nil {
+		t.registry.markKnown(canonical)
+	}
 	return Result{Content: string(b), Truncated: truncated}, nil
+}
+
+// ReadForSummary path を Sandbox 経由で読み、内容を返す。
+// Execute と異なり markKnown を呼ばないため、承認サマリ生成のための読み取りが
+// fs_edit の既読チェックを汚さない
+func (t *FSRead) ReadForSummary(_ context.Context, path string) (string, error) {
+	root, relative, err := t.sb.openRootForPath(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = root.Close() }()
+	if info, lerr := root.Lstat(relative); lerr != nil {
+		return "", lerr
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("sandbox: symlink 経由のアクセスは拒否 %q", path)
+	}
+	f, err := root.Open(relative)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	limited := io.LimitReader(f, int64(t.maxBytes)+1)
+	b, err := io.ReadAll(limited)
+	if err != nil {
+		return "", err
+	}
+	if len(b) > t.maxBytes {
+		b = b[:t.maxBytes]
+	}
+	return string(b), nil
 }
 
 // FSWrite fs_write ツールの実装
 type FSWrite struct {
-	sb     *Sandbox
-	logger *slog.Logger
+	sb       *Sandbox
+	logger   *slog.Logger
+	registry *ReadRegistry
 }
 
-// NewFSWrite Sandbox から FSWrite を生成する
+// NewFSWrite Sandbox から FSWrite を生成する。read registry は空のものを内部で生成する
 func NewFSWrite(sb *Sandbox) *FSWrite {
-	return NewFSWriteWithLogger(sb, nil)
+	return NewFSWriteWithLogger(sb, nil, NewReadRegistry())
 }
 
-// NewFSWriteWithLogger Sandbox と logger から FSWrite を生成する
-func NewFSWriteWithLogger(sb *Sandbox, logger *slog.Logger) *FSWrite {
-	return &FSWrite{sb: sb, logger: logger}
+// NewFSWriteWithLogger Sandbox と logger と read registry から FSWrite を生成する
+func NewFSWriteWithLogger(sb *Sandbox, logger *slog.Logger, registry *ReadRegistry) *FSWrite {
+	return &FSWrite{sb: sb, logger: logger, registry: registry}
 }
 
 // Spec ツール定義を返す
@@ -162,6 +205,9 @@ func (t *FSWrite) Execute(ctx context.Context, raw json.RawMessage) (Result, err
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 	auditFS(ctx, t.logger, "fs_write", a.Path, len(a.Content), true, "ok")
+	if canonical, cerr := t.sb.resolveCanonical(a.Path); cerr == nil {
+		t.registry.markKnown(canonical)
+	}
 	return Result{Content: fmt.Sprintf("wrote %d bytes to %s", len(a.Content), a.Path)}, nil
 }
 

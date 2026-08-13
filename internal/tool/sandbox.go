@@ -94,6 +94,15 @@ func (s *Sandbox) openRootForPath(path string) (*os.Root, string, error) {
 	return root, resolved.relative, nil
 }
 
+// resolveCanonical path を検証し、記録キーとして使う canonical 絶対パスを返す
+func (s *Sandbox) resolveCanonical(path string) (string, error) {
+	resolved, err := s.resolvePath(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolved.root, resolved.relative), nil
+}
+
 func (s *Sandbox) resolvePath(path string) (sandboxPath, error) {
 	if path == "" {
 		return sandboxPath{}, fmt.Errorf("sandbox: パスが空です")

@@ -115,3 +115,66 @@ func TestFSWrite_WritesAndCreatesDir(t *testing.T) {
 		t.Fatalf("got %q", string(b))
 	}
 }
+
+func TestFSRead_ExecuteSuccess_MarksRegistryKnown(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sb := tool.NewSandbox([]string{dir})
+	reg := tool.NewReadRegistry()
+	r := tool.NewFSReadWithLogger(sb, 1024, nil, reg)
+	if _, err := r.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	e := tool.NewFSEdit(sb, reg, nil)
+	res, _ := e.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","old_string":"hello","new_string":"hi"}`))
+	if res.IsError {
+		t.Fatalf("registry should be known after fs_read Execute: %+v", res)
+	}
+}
+
+func TestFSRead_ReadForSummary_DoesNotMarkRegistryKnown(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sb := tool.NewSandbox([]string{dir})
+	reg := tool.NewReadRegistry()
+	r := tool.NewFSReadWithLogger(sb, 1024, nil, reg)
+	if _, err := r.ReadForSummary(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	e := tool.NewFSEdit(sb, reg, nil)
+	res, _ := e.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","old_string":"hello","new_string":"hi"}`))
+	if !res.IsError {
+		t.Fatal("ReadForSummary should not mark registry known; fs_edit should still be rejected")
+	}
+}
+
+func TestFSRead_NilRegistry_ExecuteDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sb := tool.NewSandbox([]string{dir})
+	r := tool.NewFSReadWithLogger(sb, 1024, nil, nil)
+	res, err := r.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`"}`))
+	if err != nil || res.IsError {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+func TestFSWrite_NilRegistry_ExecuteDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "out.txt")
+	sb := tool.NewSandbox([]string{dir})
+	w := tool.NewFSWriteWithLogger(sb, nil, nil)
+	res, err := w.Execute(context.Background(), json.RawMessage(`{"path":"`+target+`","content":"hi"}`))
+	if err != nil || res.IsError {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
