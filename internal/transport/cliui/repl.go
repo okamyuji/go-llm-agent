@@ -9,15 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 )
-
-// pasteCoalesceWindow ペースト行結合の時間窓。端末ペーストの行間は数 ms だが、
-// rlwrap 経由では 1 行ごとに readline の再表示処理を挟むため、巨大な行を含む
-// 貼り付けで数十 ms の間隙が生じる。手入力で Enter 後 150ms 以内に次の質問を
-// 打ち終えることは現実的にないため、連続質問が誤って結合されることはない。
-const pasteCoalesceWindow = 150 * time.Millisecond
 
 // Options REPL 生成オプション
 type Options struct {
@@ -28,6 +24,9 @@ type Options struct {
 	Out            io.Writer
 	Spinner        *Spinner // nil なら DisableSpinner=false 時に自動生成
 	DisableSpinner bool     // true なら turn サマリも出力しない（旧来動作）
+	// HistoryFile 端末入力時の履歴永続化先。空ならセッション内のみ。
+	// rlwrap -H の形式 (1 行 1 エントリ) と互換で、既存ファイルを引き継げる。
+	HistoryFile string
 }
 
 // REPL 対話型 CLI
@@ -56,8 +55,10 @@ func NewREPL(svc agent.Service, opt Options) *REPL {
 }
 
 // Run REPL ループを実行する。/quit・Ctrl-C・EOF で終了。
-// 入力は cooked モードのまま端末と IME に任せ（日本語変換・折り返しを壊さない）、
-// 生成中だけ raw 化して ESC / Ctrl-C を監視する。
+// 端末入力では全期間 raw 化し、プロンプトは term.Terminal の行エディタで読む
+// (履歴・矢印キー編集・bracketed paste 対応。カノニカルモードの 1024 バイト
+// 行制限による長文ペーストの詰まりも回避する)。生成中は pump 経由で届く
+// バイトから ESC / Ctrl-C を監視する。パイプ入力は 1 行 = 1 プロンプト。
 func (r *REPL) Run(ctx context.Context) error {
 	// スピナー: 注入があればそれを、無ければ TTY のとき有効化して生成する
 	if r.sp == nil && !r.opt.DisableSpinner {
@@ -67,33 +68,51 @@ func (r *REPL) Run(ctx context.Context) error {
 
 	pump := newBytePump(r.in)
 	history := []llm.Message{}
-	fmt.Fprintln(r.out, "go-llm-agent REPL  /quit で終了（生成中は ESC で中断）")
 
-	// 端末入力のときはプロンプトを非カノニカルで読む (カノニカルの 1024 バイト行制限で
-	// 長文ペーストが詰まるのを避ける)。あわせて短時間に連続到着した行 (改行込みペースト)
-	// を 1 プロンプトへ結合し、echo は readPrompt が自前で行う。
-	// パイプ入力は従来どおり 1 行 = 1 プロンプトを維持する。
-	coalesce := time.Duration(0)
-	var promptEcho io.Writer
+	// 端末入力なら raw 化して行エディタを用意する。out は raw 中の \n 出力のために
+	// CRLF 変換で包む (term.Terminal 自身は \r\n を書くので二重変換にはならない)
+	out := r.out
+	var editor *term.Terminal
 	if f, ok := r.in.(*os.File); ok {
-		if restore, started := beginPromptMode(f); started {
-			defer restore()
-			coalesce = pasteCoalesceWindow
-			promptEcho = r.out
+		fd := int(f.Fd())
+		if term.IsTerminal(fd) {
+			if saved, err := term.MakeRaw(fd); err == nil {
+				defer func() { _ = term.Restore(fd, saved) }()
+				if isTTY(r.out) {
+					out = newCRLFWriter(r.out)
+				}
+				editor = term.NewTerminal(struct {
+					io.Reader
+					io.Writer
+				}{&pumpReader{p: pump, ctx: ctx}, out}, ">> ")
+				if w, h, sizeErr := term.GetSize(fd); sizeErr == nil {
+					_ = editor.SetSize(w, h)
+				}
+				editor.History = newFileHistory(r.opt.HistoryFile, historyMaxEntries)
+				editor.SetBracketedPasteMode(true)
+				defer editor.SetBracketedPasteMode(false)
+			}
 		}
 	}
+	fmt.Fprintln(out, "go-llm-agent REPL  /quit で終了（生成中は ESC で中断、複数行ペーストは Enter で送信）")
 
 	for {
-		fmt.Fprint(r.out, ">> ")
-		line, err := pump.readPrompt(ctx, coalesce, promptEcho)
+		var line string
+		var err error
+		if editor != nil {
+			line, err = readEditorPrompt(editor)
+		} else {
+			fmt.Fprint(out, ">> ")
+			line, err = pump.readPrompt(ctx)
+		}
 		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, errCtrlC) {
-				return nil
-			}
 			if ctx.Err() != nil {
 				// SIGINT 等で root context がキャンセルされた。ループを続けると
 				// 以後の全ターンが即失敗し続けるため、ここできれいに終了する
-				fmt.Fprintln(r.out, "\nシグナルを受信したため終了します")
+				fmt.Fprintln(out, "\nシグナルを受信したため終了します")
+				return nil
+			}
+			if errors.Is(err, io.EOF) || errors.Is(err, errCtrlC) {
 				return nil
 			}
 			return err
@@ -120,7 +139,7 @@ func (r *REPL) Run(ctx context.Context) error {
 			return nil
 		}
 		if ctx.Err() != nil {
-			fmt.Fprintln(r.out, "\nシグナルを受信したため終了します")
+			fmt.Fprintln(out, "\nシグナルを受信したため終了します")
 			return nil
 		}
 	}
@@ -248,10 +267,11 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message) 
 		}
 	}
 	r.stopSpinner()
-	restoreRaw() // cooked へ復帰。以降の出力は通常の \n でよい
-	// 中断時は「[中断しました]」を既に出しているため done サマリは抑制する
+	restoreRaw() // セッション開始時の端末モードへ復帰する
+	// 中断時は「[中断しました]」を既に出しているため done サマリは抑制する。
+	// セッション全体が raw のときのために CRLF 変換済みの out へ書く
 	if !r.opt.DisableSpinner && !interrupted {
-		fmt.Fprintf(r.out, "↳ done in %.1fs · %d tool · in %d / out %d tok\n",
+		fmt.Fprintf(out, "↳ done in %.1fs · %d tool · in %d / out %d tok\n",
 			time.Since(turnStart).Seconds(), toolCount, usageIn, usageOut)
 	}
 	// EventFinal が届かないまま終わったターン (中断・エラー) は、部分生成テキストが

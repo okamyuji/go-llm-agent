@@ -5,10 +5,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"strings"
-	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"golang.org/x/term"
 )
@@ -91,53 +87,22 @@ func (p *bytePump) readLine() (string, error) {
 	return "", io.EOF
 }
 
-// readPrompt は 1 プロンプト分の入力を返す。最初の行を読んだ後、coalesce の時間窓内に
-// 連続到着した行を改行で結合する。改行込みの長文ペーストは端末 (rlwrap 経由含む) から
-// 短時間のバーストで届くため 1 プロンプトにまとまり、手入力の連続質問は窓を超えるので
-// 行単位になる。coalesce が 0 以下なら 1 行 = 1 プロンプト (パイプ入力の互換維持)。
-// 窓内に改行まで届かなかった末尾バイトは消費せず pending へ戻す。
-//
-// 端末は beginPromptMode により非カノニカルで読むため (カノニカルの 1024 バイト行制限で
-// 長文ペーストが詰まるのを避ける)、行編集も自前で行う: BS/DEL は rune 単位の削除、
-// 空入力での Ctrl-D は EOF、\r 単独と \r\n は行末。echo 非 nil なら入力を書き戻す
-// (非カノニカルではカーネル echo が無効のため)。ctx キャンセル (SIGINT) で即座に返る。
-func (p *bytePump) readPrompt(ctx context.Context, coalesce time.Duration, echo io.Writer) (string, error) {
-	echoStr := func(s string) {
-		if echo != nil {
-			_, _ = io.WriteString(echo, s)
-		}
-	}
-	var prompt []byte // 確定済みの行 (\n 区切りで蓄積)
-	var line []byte   // 編集中の行
-	firstLineDone := false
-	lastWasCR := false
-	endLine := func() {
-		prompt = append(prompt, trimTrailingCR(line)...)
-		prompt = append(prompt, '\n')
-		line = line[:0:0]
-		firstLineDone = true
-		echoStr("\n")
-	}
-	finish := func() (string, error) {
-		return strings.TrimSuffix(string(prompt), "\n"), nil
-	}
+// readPrompt はパイプ入力向けに 1 行 = 1 プロンプトで読む (端末入力は term.Terminal が担当)。
+// readLine との違いは ctx キャンセル (SIGINT) でブロック中でも即座に返ること。
+// pushback されたバイトを先に消費する。
+func (p *bytePump) readPrompt(ctx context.Context) (string, error) {
+	var line []byte
 	for {
 		var b byte
-		switch {
-		case len(p.pending) > 0:
+		if len(p.pending) > 0 {
 			b = p.pending[0]
 			p.pending = append([]byte{}, p.pending[1:]...)
-		case !firstLineDone:
-			// 最初の行は時間制限なしで待つ
+		} else {
 			select {
 			case nb, ok := <-p.ch:
 				if !ok {
 					if len(line) > 0 {
-						endLine()
-						return finish()
-					}
-					if len(prompt) > 0 {
-						return finish()
+						return trimTrailingCR(line), nil
 					}
 					if p.err != nil {
 						return "", p.err
@@ -148,67 +113,14 @@ func (p *bytePump) readPrompt(ctx context.Context, coalesce time.Duration, echo 
 			case <-ctx.Done():
 				return "", ctx.Err()
 			}
-		default:
-			if coalesce <= 0 {
-				return finish()
-			}
-			select {
-			case nb, ok := <-p.ch:
-				if !ok {
-					if len(line) > 0 {
-						endLine()
-					}
-					return finish()
-				}
-				b = nb
-			case <-ctx.Done():
-				return "", ctx.Err()
-			case <-time.After(coalesce):
-				// 未完の行は消費せず次のプロンプトへ持ち越す
-				p.pending = append(line, p.pending...)
-				return finish()
-			}
 		}
-		wasCR := lastWasCR
-		lastWasCR = b == '\r'
 		switch b {
 		case '\n':
-			if wasCR {
-				continue // \r で行末処理済み (\r\n)
-			}
-			endLine()
-			if coalesce <= 0 {
-				return finish()
-			}
-		case '\r':
-			endLine()
-			if coalesce <= 0 {
-				return finish()
-			}
-		case 0x03: // Ctrl-C
+			return trimTrailingCR(line), nil
+		case 0x03:
 			return "", errCtrlC
-		case 0x04: // Ctrl-D: 空入力なら EOF、途中なら無視 (cooked の挙動に合わせる)
-			if len(prompt) == 0 && len(line) == 0 {
-				return "", io.EOF
-			}
-		case 0x7f, 0x08: // BS/DEL: 編集中の行から最後の rune を消す
-			if len(line) == 0 {
-				continue
-			}
-			r, size := utf8.DecodeLastRune(line)
-			line = line[:len(line)-size]
-			// 消去 echo。マルチバイト rune は全角幅 (2 桁) とみなす近似で十分
-			width := 1
-			if r > unicode.MaxASCII {
-				width = 2
-			}
-			echoStr(strings.Repeat("\b \b", width))
 		default:
 			line = append(line, b)
-			// string(b) は byte→rune 変換で UTF-8 を壊すため生バイトのまま書く
-			if echo != nil {
-				_, _ = echo.Write([]byte{b})
-			}
 		}
 	}
 }

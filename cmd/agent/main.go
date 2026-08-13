@@ -452,11 +452,17 @@ func cmdChat(ctx context.Context, args []string) error {
 		return optsErr
 	}
 	svc := agent.New(reg, tools, opts...)
+	// 入力履歴は rlwrap -H と同形式で永続化する (既存の ~/.agent_history を引き継ぐ)
+	historyFile := ""
+	if home, homeErr := os.UserHomeDir(); homeErr == nil {
+		historyFile = filepath.Join(home, ".agent_history")
+	}
 	r := cliui.NewREPL(svc, cliui.Options{
 		Model:          m,
 		SystemPrompt:   cfg.Agent.SystemPrompt,
 		MaxToolHops:    cfg.Agent.MaxToolHops,
 		DisableSpinner: *noSpinner,
+		HistoryFile:    historyFile,
 	})
 	return r.Run(ctx)
 }

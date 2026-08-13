@@ -98,85 +98,39 @@ func TestBytePumpReadLineCtrlCInPending(t *testing.T) {
 	}
 }
 
-func TestBytePumpReadPromptCoalescesPastedLines(t *testing.T) {
-	// ペーストで一括到着した複数行は 1 プロンプトに結合される
-	p := newBytePump(strings.NewReader("line1\nline2\n\nline4\n"))
-	got, err := p.readPrompt(context.Background(), 200*time.Millisecond, nil)
-	if err != nil {
-		t.Fatalf("err=%v", err)
-	}
-	if got != "line1\nline2\n\nline4" {
-		t.Errorf("got %q, want joined multi-line prompt", got)
-	}
-}
-
-func TestBytePumpReadPromptZeroWindowKeepsLineSemantics(t *testing.T) {
-	// 窓 0 (パイプ入力) では従来どおり 1 行 = 1 プロンプト
+func TestBytePumpReadPromptLineSemantics(t *testing.T) {
+	// パイプ入力は 1 行 = 1 プロンプト
 	p := newBytePump(strings.NewReader("q1\nq2\n"))
-	got, err := p.readPrompt(context.Background(), 0, nil)
+	got, err := p.readPrompt(context.Background())
 	if err != nil || got != "q1" {
 		t.Fatalf("got %q err=%v, want q1", got, err)
 	}
-	got, err = p.readPrompt(context.Background(), 0, nil)
+	got, err = p.readPrompt(context.Background())
 	if err != nil || got != "q2" {
 		t.Fatalf("got %q err=%v, want q2", got, err)
 	}
 }
 
-func TestBytePumpReadPromptSeparatesLinesBeyondWindow(t *testing.T) {
-	// 窓を超えて到着した行は別プロンプトになる（手入力の連続質問）
-	pr, pw := io.Pipe()
-	defer func() { _ = pw.Close() }()
-	p := newBytePump(pr)
-	go func() {
-		_, _ = pw.Write([]byte("q1\n"))
-		time.Sleep(150 * time.Millisecond)
-		_, _ = pw.Write([]byte("q2\n"))
-	}()
-	got, err := p.readPrompt(context.Background(), 30*time.Millisecond, nil)
-	if err != nil || got != "q1" {
-		t.Fatalf("got %q err=%v, want q1 (separate prompt)", got, err)
-	}
-	got, err = p.readPrompt(context.Background(), 30*time.Millisecond, nil)
-	if err != nil || got != "q2" {
-		t.Fatalf("got %q err=%v, want q2", got, err)
-	}
-}
-
-func TestBytePumpReadPromptRestoresPartialTailToPending(t *testing.T) {
-	// 窓内に改行まで届かなかった末尾バイトは消費せず次の行読みへ戻す
-	pr, pw := io.Pipe()
-	defer func() { _ = pw.Close() }()
-	p := newBytePump(pr)
-	go func() { _, _ = pw.Write([]byte("x\ny")) }()
-	got, err := p.readPrompt(context.Background(), 50*time.Millisecond, nil)
-	if err != nil || got != "x" {
-		t.Fatalf("got %q err=%v, want x", got, err)
-	}
-	go func() { _, _ = pw.Write([]byte("z\n")) }()
-	got, err = p.readPrompt(context.Background(), 50*time.Millisecond, nil)
-	if err != nil || got != "yz" {
-		t.Fatalf("got %q err=%v, want yz (partial tail preserved)", got, err)
-	}
-}
-
-func TestBytePumpReadPromptCtrlCInBurst(t *testing.T) {
+func TestBytePumpReadPromptCtrlC(t *testing.T) {
 	p := newBytePump(strings.NewReader("q1\n\x03"))
-	_, err := p.readPrompt(context.Background(), 200*time.Millisecond, nil)
+	if got, err := p.readPrompt(context.Background()); err != nil || got != "q1" {
+		t.Fatalf("got %q err=%v, want q1", got, err)
+	}
+	_, err := p.readPrompt(context.Background())
 	if !errors.Is(err, errCtrlC) {
 		t.Fatalf("want errCtrlC, got %v", err)
 	}
 }
 
-func TestBytePumpReadPromptConsumesPushbackLines(t *testing.T) {
-	// 生成中に pushback された複数行も 1 プロンプトへ結合される
+func TestBytePumpReadPromptConsumesPushbackFirst(t *testing.T) {
+	// 生成中に pushback されたバイトは次のプロンプトの先頭で消費される
 	p := newBytePump(strings.NewReader(""))
-	for _, b := range []byte("one\ntwo\n") {
+	for _, b := range []byte("one\n") {
 		p.pushback(b)
 	}
-	got, err := p.readPrompt(context.Background(), 50*time.Millisecond, nil)
-	if err != nil || got != "one\ntwo" {
-		t.Fatalf("got %q err=%v, want one\\ntwo", got, err)
+	got, err := p.readPrompt(context.Background())
+	if err != nil || got != "one" {
+		t.Fatalf("got %q err=%v, want one", got, err)
 	}
 }
 
@@ -188,7 +142,7 @@ func TestBytePumpReadPromptReturnsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.readPrompt(ctx, 50*time.Millisecond, nil)
+		_, err := p.readPrompt(ctx)
 		done <- err
 	}()
 	cancel()
@@ -199,66 +153,6 @@ func TestBytePumpReadPromptReturnsOnContextCancel(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("readPrompt did not return on context cancel")
-	}
-}
-
-func TestBytePumpReadPromptBackspaceEditsLine(t *testing.T) {
-	// 非カノニカル入力では BS/DEL を自前処理する (rune 単位で削除)
-	p := newBytePump(strings.NewReader("abc\x7f\x7fB日\x7fZ\n"))
-	got, err := p.readPrompt(context.Background(), 0, nil)
-	if err != nil || got != "aBZ" {
-		t.Fatalf("got %q err=%v, want aBZ (rune-wise backspace)", got, err)
-	}
-}
-
-func TestBytePumpReadPromptBackspaceOnEmptyLineIgnored(t *testing.T) {
-	p := newBytePump(strings.NewReader("\x7f\x7fok\n"))
-	got, err := p.readPrompt(context.Background(), 0, nil)
-	if err != nil || got != "ok" {
-		t.Fatalf("got %q err=%v, want ok", got, err)
-	}
-}
-
-func TestBytePumpReadPromptCtrlDOnEmptyIsEOF(t *testing.T) {
-	// 空入力での Ctrl-D は cooked モードの EOF と同じ扱い
-	pr, pw := io.Pipe()
-	defer func() { _ = pw.Close() }()
-	p := newBytePump(pr)
-	go func() { _, _ = pw.Write([]byte{0x04}) }()
-	_, err := p.readPrompt(context.Background(), 50*time.Millisecond, nil)
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("want io.EOF, got %v", err)
-	}
-}
-
-func TestBytePumpReadPromptCtrlDMidLineIgnored(t *testing.T) {
-	p := newBytePump(strings.NewReader("ab\x04c\n"))
-	got, err := p.readPrompt(context.Background(), 0, nil)
-	if err != nil || got != "abc" {
-		t.Fatalf("got %q err=%v, want abc", got, err)
-	}
-}
-
-func TestBytePumpReadPromptEchoesInput(t *testing.T) {
-	// echo 非 nil のとき、入力バイトと backspace の消去列を書き出す
-	var echo bytes.Buffer
-	p := newBytePump(strings.NewReader("ab\x7fc\n"))
-	got, err := p.readPrompt(context.Background(), 0, &echo)
-	if err != nil || got != "ac" {
-		t.Fatalf("got %q err=%v, want ac", got, err)
-	}
-	e := echo.String()
-	if !strings.Contains(e, "a") || !strings.Contains(e, "\b \b") || !strings.Contains(e, "\n") {
-		t.Errorf("echo=%q, want typed bytes, erase sequence and newline", e)
-	}
-}
-
-func TestBytePumpReadPromptCRTreatedAsNewline(t *testing.T) {
-	// 非カノニカルで ICRNL を経ない \r 単独・\r\n の両方を行末として扱う
-	p := newBytePump(strings.NewReader("q1\r\nq2\rq3\n"))
-	got, err := p.readPrompt(context.Background(), 200*time.Millisecond, nil)
-	if err != nil || got != "q1\nq2\nq3" {
-		t.Fatalf("got %q err=%v, want q1\\nq2\\nq3", got, err)
 	}
 }
 

@@ -97,16 +97,16 @@ bash scripts/verify-hardening.sh
 
 ### REPL の入力と履歴
 
-`agent chat` の入力行は端末の cooked モードでそのまま読みます。描画・編集・折り返しは端末と IME が担うため、日本語変換は崩れません。生成中は raw モードに切り替わり、ESC でそのターンを中断、Ctrl-C でセッションを終了します。
+`agent chat` は行エディタを内蔵しています（rlwrap は不要です。むしろ rlwrap で包むと「rlwrap appears to do nothing」の警告が出て履歴機能が無効になるため、包まずに直接起動してください）。
 
-矢印キーでの履歴呼び出しは内蔵していません。履歴と行編集が必要な場合は [rlwrap](https://github.com/hanslub42/rlwrap) で包んでください。GNU readline が履歴・行編集・IME 共存を提供します。
+- **履歴**: ↑/↓ キーで呼び出し。`~/.agent_history` へ 1 行 1 エントリで永続化します（rlwrap `-H` と同形式のため既存ファイルをそのまま引き継げます）
+- **貼り付け**: bracketed paste 対応。改行を含む長文を貼り付けると 1 つのプロンプトにまとまり、Enter で送信します。1 行が 1024 バイトを超える長文も詰まりません
+- **中断と終了**: 生成中は ESC でそのターンを中断、Ctrl-C でセッションを終了します
+- **既知の制約**: 行エディタ（golang.org/x/term）は全角文字の表示幅を考慮しないため、日本語の行を矢印キーで戻って編集するとカーソル描画がずれることがあります（入力内容自体は正しく保持されます）
 
 ```bash
-brew install rlwrap
-rlwrap -H ~/.agent_history ./bin/agent chat -config /path/to/config.yaml
+./bin/agent chat -config /path/to/config.yaml
 ```
-
-`-H` は履歴の永続化先です。alias に登録すると常用しやすくなります。rlwrap 配下でも生成中の ESC 中断はそのまま機能します。
 
 ## 評価フレームワーク
 
