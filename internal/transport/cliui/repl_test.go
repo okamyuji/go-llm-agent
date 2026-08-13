@@ -208,8 +208,69 @@ func TestRepl_ToolCallSummary(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "1 tool") {
-		t.Errorf("expected '1 tool' in summary, got %q", got)
+	// "· 1 tool ·" とデリミタごと確認する。"1 tool" だけだと toolCount が誤って
+	// -1 になった場合の "-1 tool" もこの部分文字列を含んでしまい判別できない
+	if !strings.Contains(got, "· 1 tool ·") {
+		t.Errorf("expected '· 1 tool ·' in summary, got %q", got)
+	}
+	if !strings.Contains(got, "[tool_call fs_read]") {
+		t.Errorf("expected tool_call name in output, got %q", got)
+	}
+	if !strings.Contains(got, "[tool_result fs_read]") {
+		t.Errorf("expected tool_result name in output, got %q", got)
+	}
+}
+
+// TestRepl_ToolEventsWithNilPayloadDoNotPanicAndOmitName
+// EventToolCall / EventToolResult の ToolCall / ToolResult が nil のとき、
+// 名前欄が空のまま panic せず出力されることを確認する
+func TestRepl_ToolEventsWithNilPayloadDoNotPanicAndOmitName(t *testing.T) {
+	svc := scriptedSvc{events: []agent.Event{
+		{Kind: agent.EventToolCall, ToolCall: nil},
+		{Kind: agent.EventToolResult, ToolResult: nil},
+		{Kind: agent.EventDelta, Delta: "done"},
+		{Kind: agent.EventFinal, Final: &llm.Message{Role: llm.RoleAssistant, Content: "done"}},
+	}}
+	in := strings.NewReader("hi\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "[tool_call ]") {
+		t.Errorf("expected empty tool_call name, got %q", got)
+	}
+	if !strings.Contains(got, "[tool_result ]") {
+		t.Errorf("expected empty tool_result name, got %q", got)
+	}
+}
+
+// ctxCancelingSvc は Run 呼出し直後に呼び出し元から渡された cancel で
+// 「Run に渡した ctx」自身 (root ctx) をキャンセルしてから EventError を送る。
+// SIGINT による root context キャンセル (ESC/Ctrl-C 中断とは別経路) を模倣する
+type ctxCancelingSvc struct {
+	cancel context.CancelFunc
+}
+
+func (s ctxCancelingSvc) Run(_ context.Context, _ agent.Input, out chan<- agent.Event) error {
+	s.cancel()
+	out <- agent.Event{Kind: agent.EventError, Err: context.Canceled}
+	return nil
+}
+
+// TestRepl_RootContextCancellationSuppressesErrorDisplay ESC/Ctrl-C を経由しない
+// root context キャンセル (SIGINT 相当) でも [error] 表示が抑制されることを確認する
+func TestRepl_RootContextCancellationSuppressesErrorDisplay(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	svc := ctxCancelingSvc{cancel: cancel}
+	in := strings.NewReader("hi\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out})
+	_ = r.Run(ctx)
+	got := out.String()
+	if strings.Contains(got, "[error]") {
+		t.Errorf("root ctx cancellation should suppress [error] display, got %q", got)
 	}
 }
 

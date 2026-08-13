@@ -55,18 +55,19 @@ func (s *runeSafeWriter) Flush() error {
 // leadByteLen c が UTF-8 の先頭バイトである場合、そのシーケンス全体の
 // バイト長（1〜4）を返す。継続バイト（0x80-0xBF）や不正な先頭パターンは 0 を返す。
 func leadByteLen(c byte) int {
-	switch {
-	case c&0x80 == 0x00:
+	if c&0x80 == 0x00 {
 		return 1
-	case c&0xE0 == 0xC0:
-		return 2
-	case c&0xF0 == 0xE0:
-		return 3
-	case c&0xF8 == 0xF0:
-		return 4
-	default:
-		return 0
 	}
+	if c&0xE0 == 0xC0 {
+		return 2
+	}
+	if c&0xF0 == 0xE0 {
+		return 3
+	}
+	if c&0xF8 == 0xF0 {
+		return 4
+	}
+	return 0
 }
 
 // splitIncompleteTail data の末尾が UTF-8 マルチバイト文字の途中で切れて
@@ -79,10 +80,7 @@ func splitIncompleteTail(data []byte) (complete, pending []byte) {
 	if n == 0 {
 		return data, nil
 	}
-	limit := 3
-	if n < limit {
-		limit = n
-	}
+	limit := min(n, 3)
 	for i := 1; i <= limit; i++ {
 		c := data[n-i]
 		need := leadByteLen(c)

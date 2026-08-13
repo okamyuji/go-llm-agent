@@ -156,6 +156,44 @@ func (e *errWriter) Write(_ []byte) (int, error) {
 	return 0, e.err
 }
 
+// spyWriter は Write が呼ばれた回数を記録する。downstream への Write 呼出しが
+// 「complete が空のときはスキップされる」ことを検証するために使う
+// (バイト列が空でも bytes.Buffer.Write は無害な no-op を返すため、
+// 呼び出し自体が起きたかどうかは戻り値だけでは判定できない)
+type spyWriter struct {
+	bytes.Buffer
+	calls int
+}
+
+func (s *spyWriter) Write(p []byte) (int, error) {
+	s.calls++
+	return s.Buffer.Write(p)
+}
+
+func TestRuneSafeWriter_NoDownstreamWriteWhenCompleteEmpty(t *testing.T) {
+	// "あ" の先頭 1 バイトのみでは complete が空になるはずで、
+	// downstream の Write は一度も呼ばれてはならない
+	spy := &spyWriter{}
+	w := newRuneSafeWriter(spy)
+	if _, err := w.Write([]byte("あ")[:1]); err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+	if spy.calls != 0 {
+		t.Fatalf("downstream Write called %d times, want 0 (complete was empty)", spy.calls)
+	}
+}
+
+func TestRuneSafeWriter_DownstreamWriteCalledWhenCompleteNonEmpty(t *testing.T) {
+	spy := &spyWriter{}
+	w := newRuneSafeWriter(spy)
+	if _, err := w.Write([]byte("hello")); err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+	if spy.calls != 1 {
+		t.Fatalf("downstream Write called %d times, want 1", spy.calls)
+	}
+}
+
 func TestRuneSafeWriter_DownstreamWriteError(t *testing.T) {
 	wantErr := errors.New("downstream broke")
 	w := newRuneSafeWriter(&errWriter{err: wantErr})
