@@ -167,6 +167,17 @@ func printEnabledResult(historyContent, fullContent string) {
 	fmt.Printf("event_tool_result_full_chars=%d\n", utf8.RuneCountInString(fullContent))
 }
 
+// mustRunOnce runOnce を実行し、失敗時は label 付きのエラーを stderr へ書いて
+// exitCode で終了する
+func mustRunOnce(maxChars int, content, label string, exitCode int) (historyContent, fullContent string) {
+	historyContent, fullContent, err := runOnce(maxChars, content)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERR "+label+":", err)
+		os.Exit(exitCode)
+	}
+	return historyContent, fullContent
+}
+
 func main() {
 	content, wrappedChars := buildFixtureContent()
 	if wrappedChars != wrappedTarget {
@@ -174,17 +185,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	historyContent, fullContent, err := runOnce(8000, content)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "ERR enabled run:", err)
-		os.Exit(2)
-	}
+	historyContent, fullContent := mustRunOnce(8000, content, "enabled run", 2)
 	printEnabledResult(historyContent, fullContent)
 
-	disabledHistory, _, err := runOnce(-1, content)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "ERR disabled run:", err)
-		os.Exit(3)
-	}
+	disabledHistory, _ := mustRunOnce(-1, content, "disabled run", 3)
 	fmt.Printf("disabled_history_content_chars=%d\n", utf8.RuneCountInString(disabledHistory))
 }
