@@ -253,3 +253,37 @@ func TestRunChatSession_ConfigLoadError(t *testing.T) {
 		t.Fatal("設定読み込み失敗はエラー期待")
 	}
 }
+
+func TestAgentOptions_StrategyAndEnricherAndBilling(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Agent.Strategy = "planner_executor"
+	cfg.Agent.PlannerExecutor.MaxSteps = 2
+	cfg.Agent.Enricher.Enabled = true
+	cfg.Agent.Enricher.Languages = map[string]string{"go": "go.md"}
+	base := baselineOptionCount(t)
+	opts, _, err := agentOptionsWithDecider(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(opts) <= base {
+		t.Fatalf("strategy / enricher でオプションが増える期待 got %d (base %d)", len(opts), base)
+	}
+}
+
+func TestAgentOptions_InvalidScannerPatternErrors(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Safety.InputScanner.Enabled = true
+	cfg.Safety.InputScanner.Patterns = []config.SafetyInputScannerRule{{ID: "bad", Regex: "("}}
+	if _, _, err := agentOptionsWithDecider(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil); err == nil {
+		t.Fatal("不正な正規表現はエラー期待")
+	}
+}
+
+func TestAgentOptions_InvalidRedactorPatternErrors(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Safety.OutputRedactor.Enabled = true
+	cfg.Safety.OutputRedactor.Rules = []config.SafetyOutputRedactorRule{{ID: "bad", Regex: "(", Replacement: "x"}}
+	if _, _, err := agentOptionsWithDecider(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil); err == nil {
+		t.Fatal("不正な正規表現はエラー期待")
+	}
+}

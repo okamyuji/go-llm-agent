@@ -251,6 +251,11 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 	// 場合でも、safeOut に未出力バイトが残っていないことを保証する防御的な呼出し
 	_ = st.safeOut.Flush()
 	restoreRaw() // セッション開始時の端末モードへ復帰する
+	return r.finishTurn(st, out, turnStart), quit
+}
+
+// finishTurn ターン終了時のサマリ表示を行い、履歴へ積むメッセージ列を返す
+func (r *REPL) finishTurn(st *turnState, out io.Writer, turnStart time.Time) []llm.Message {
 	// 中断時は「[中断しました]」を既に出しているため done サマリは抑制する。
 	// セッション全体が raw のときのために CRLF 変換済みの out へ書く
 	if !r.opt.DisableSpinner && !st.interrupted {
@@ -259,11 +264,10 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 	}
 	// EventFinal が届かないまま終わったターン (中断・エラー) は、部分生成テキストが
 	// あるときだけ assistant として残す。空のまま返すと呼び出し側がターンごと巻き戻す。
-	turnMessages := st.turnMessages
-	if len(turnMessages) == 0 && strings.TrimSpace(st.finalContent.String()) != "" {
-		turnMessages = []llm.Message{{Role: llm.RoleAssistant, Content: st.finalContent.String()}}
+	if len(st.turnMessages) == 0 && strings.TrimSpace(st.finalContent.String()) != "" {
+		return []llm.Message{{Role: llm.RoleAssistant, Content: st.finalContent.String()}}
 	}
-	return turnMessages, quit
+	return st.turnMessages
 }
 
 // beginTurnRaw 入力が端末なら raw 化し、raw 中の出力先 (CRLF 変換込み) と
