@@ -30,6 +30,28 @@ type Options struct {
 	HistoryFile string
 	// ApprovalPrompter 対話承認。nil なら対話承認なし (従来どおり)
 	ApprovalPrompter *ApprovalPrompter
+	// Registry 圧縮時の要約呼び出しに使う。nil なら圧縮を無効化する
+	Registry llm.Registry
+	// Compaction agent.compaction の値をそのまま運ぶ
+	Compaction CompactionOptions
+}
+
+// CompactionOptions agent.compaction の値をそのまま運ぶ。
+// Enabled は bool とする。ポインタは config の decode でゼロ値と未指定を
+// 区別するための都合であり、cliui へは確定済みの値だけを渡す
+type CompactionOptions struct {
+	Enabled             bool
+	ContextWindowTokens int
+	TriggerRatio        float64
+	KeepRecentTurns     int
+}
+
+// turnUsage 1 ターン中に観測した usage。In / Out はターン内の全 LLM 呼び出しの
+// 合計 (/cost 用)、LastIn は最後の LLM 呼び出しの InputTokens (圧縮の閾値判定用)
+type turnUsage struct {
+	In     int
+	Out    int
+	LastIn int
 }
 
 // REPL 対話型 CLI
@@ -39,6 +61,8 @@ type REPL struct {
 	in  io.Reader
 	out io.Writer
 	sp  *Spinner
+	// model 実行時のモデル文字列。圧縮の要約呼び出しもこの値で解決する
+	model string
 }
 
 // NewREPL Service とオプションから REPL を生成する
@@ -70,6 +94,7 @@ func (r *REPL) Run(ctx context.Context) error {
 	}
 
 	pump := newBytePump(r.in)
+	r.model = r.opt.Model
 	history := []llm.Message{}
 
 	// 端末入力なら raw 化して行エディタを用意する。out は raw 中の \n 出力のために
@@ -138,6 +163,12 @@ func (r *REPL) Run(ctx context.Context) error {
 				// 汚染された履歴からセッション再起動なしで復旧する手段
 				history = history[:0]
 				fmt.Fprintln(out, "[clear] 会話履歴を破棄しました")
+			case "/compact":
+				if r.opt.Registry == nil {
+					fmt.Fprintln(out, "[compact] Registry が未設定のため圧縮できません")
+					break
+				}
+				history = r.compactHistory(ctx, pump, history, out)
 			case "/tools", "/tool":
 				// ツール定義をリクエストに含めるかをセッション中に切り替える。
 				// 小型ローカルモデルはツール定義があると履歴つき長文の指示追従を
@@ -157,13 +188,13 @@ func (r *REPL) Run(ctx context.Context) error {
 					fmt.Fprintf(out, "[tools] 現在: %s（/tools off | /tools on で切替）\n", state)
 				}
 			default:
-				fmt.Fprintf(out, "[コマンド] %s は未定義です。利用可能: /quit /exit /clear /tools off|on\n", name)
+				fmt.Fprintf(out, "[コマンド] %s は未定義です。利用可能: /quit /exit /clear /compact /tools off|on\n", name)
 			}
 			continue
 		}
 		history = append(history, llm.Message{Role: llm.RoleUser, Content: line})
 
-		turnMessages, quit := r.runTurn(ctx, pump, append([]llm.Message{}, history...), toolChoice)
+		turnMessages, quit, usage := r.runTurn(ctx, pump, append([]llm.Message{}, history...), toolChoice)
 		if len(turnMessages) == 0 {
 			// 中断やエラーで何も生成されなかったターンは user 入力ごと巻き戻す。
 			// content 空の assistant や user 連続を履歴に残すと、以後の全リクエストが
@@ -179,13 +210,16 @@ func (r *REPL) Run(ctx context.Context) error {
 			fmt.Fprintln(out, "\nシグナルを受信したため終了します")
 			return nil
 		}
+		if r.shouldCompact(usage.LastIn) {
+			history = r.compactHistory(ctx, pump, history, out)
+		}
 	}
 }
 
 // runTurn は 1 ターンを実行する。入力が端末なら raw 化し、pump 経由で届くバイトから
 // ESC（ターン中断）/ Ctrl-C（中断して終了）を検出する。その他のバイトは次の行編集へ
 // 引き継ぐ。返り値は履歴に積む assistant メッセージと終了フラグ。
-func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, toolChoice *llm.ToolChoice) ([]llm.Message, bool) {
+func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, toolChoice *llm.ToolChoice) (turnMessages []llm.Message, quit bool, usage turnUsage) {
 	turnCtx, cancelTurn := context.WithCancel(ctx)
 	defer cancelTurn()
 
@@ -200,7 +234,7 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 	go func() {
 		defer close(ch)
 		if err := r.svc.Run(turnCtx, agent.Input{
-			Model:        r.opt.Model,
+			Model:        r.model,
 			SystemPrompt: r.opt.SystemPrompt,
 			Messages:     hist,
 			MaxToolHops:  r.opt.MaxToolHops,
@@ -211,7 +245,6 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 	}()
 
 	turnStart := time.Now()
-	quit := false
 	keyCh := pump.ch // 入力終端 (close) 検知後は nil 化して select から外す
 	// nil チャネルは常にブロックするため、prompter 未設定なら select から外れる
 	var reqCh <-chan approvalPromptRequest
@@ -251,7 +284,7 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 	// 場合でも、safeOut に未出力バイトが残っていないことを保証する防御的な呼出し
 	_ = st.safeOut.Flush()
 	restoreRaw() // セッション開始時の端末モードへ復帰する
-	return r.finishTurn(st, out, turnStart), quit
+	return r.finishTurn(st, out, turnStart), quit, turnUsage{In: st.usageIn, Out: st.usageOut, LastIn: st.usageLastIn}
 }
 
 // finishTurn ターン終了時のサマリ表示を行い、履歴へ積むメッセージ列を返す
@@ -300,7 +333,9 @@ type turnState struct {
 	toolCount    int
 	usageIn      int
 	usageOut     int
-	interrupted  bool
+	// usageLastIn 最後に届いた EventUsage の InputTokens (圧縮の閾値判定用)
+	usageLastIn int
+	interrupted bool
 }
 
 // handleTurnEvent ch から届いた 1 件の agent.Event を処理し st を更新する
@@ -333,6 +368,7 @@ func (r *REPL) handleTurnEvent(ctx context.Context, ev agent.Event, st *turnStat
 		if ev.Usage != nil {
 			st.usageIn += ev.Usage.InputTokens
 			st.usageOut += ev.Usage.OutputTokens
+			st.usageLastIn = ev.Usage.InputTokens
 		}
 	case agent.EventFinal:
 		r.stopSpinner()

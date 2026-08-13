@@ -52,6 +52,14 @@ func runChatSession(ctx context.Context, p chatSessionParams) error {
 		DisableSpinner:   p.NoSpinner,
 		HistoryFile:      chatHistoryFile(),
 		ApprovalPrompter: prompter,
+		Registry:         reg,
+		Compaction: cliui.CompactionOptions{
+			// Load 通過後は非 nil が保証される (00-overview 3.4)
+			Enabled:             *cfg.Agent.Compaction.Enabled,
+			ContextWindowTokens: cfg.Agent.Compaction.ContextWindowTokens,
+			TriggerRatio:        cfg.Agent.Compaction.TriggerRatio,
+			KeepRecentTurns:     cfg.Agent.Compaction.KeepRecentTurns,
+		},
 	})
 	return r.Run(ctx)
 }

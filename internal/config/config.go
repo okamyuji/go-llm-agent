@@ -141,6 +141,18 @@ type AgentConfig struct {
 	ParallelTools    ParallelToolsConfig   `yaml:"parallel_tools"`
 	Enricher         EnricherConfig        `yaml:"enricher"`
 	ToolResultLimit  ToolResultLimitConfig `yaml:"tool_result_limit"`
+	Compaction       CompactionConfig      `yaml:"compaction"`
+}
+
+// CompactionConfig 会話履歴圧縮の設定。
+// Enabled は yaml 未指定 (nil) と enabled: false を区別するため *bool とする。
+// applyDefaults が nil のとき true を指すポインタを代入するため、Load を
+// 通過した値では常に非 nil であり、利用側は *c.Enabled を読む
+type CompactionConfig struct {
+	Enabled             *bool   `yaml:"enabled"`
+	ContextWindowTokens int     `yaml:"context_window_tokens"`
+	TriggerRatio        float64 `yaml:"trigger_ratio"`
+	KeepRecentTurns     int     `yaml:"keep_recent_turns"`
 }
 
 // ToolResultLimitConfig ツール結果を履歴へ積む際の切り詰め設定
@@ -364,6 +376,9 @@ func Load(path string) (*Config, error) {
 	if err := validateToolResultLimit(cfg.Agent.ToolResultLimit); err != nil {
 		return nil, err
 	}
+	if err := validateCompaction(cfg.Agent.Compaction); err != nil {
+		return nil, err
+	}
 	if err := resolveSystemPromptFile(&cfg, path); err != nil {
 		return nil, err
 	}
@@ -426,6 +441,13 @@ func validateApproval(a ApprovalConfig) error {
 // (00-overview 3.4 節が凍結)。max_chars <= context_window_tokens * trigger_ratio * 0.4 を満たす
 const defaultToolResultLimitMaxChars = 8000
 
+// agent.compaction の実効既定値 (00-overview 3.4 節が凍結)
+const (
+	defaultCompactionContextWindowTokens = 32768
+	defaultCompactionTriggerRatio        = 0.7
+	defaultCompactionKeepRecentTurns     = 4
+)
+
 // applyDefaults decode 直後・各 validateXxx の前に 1 回呼び、yaml で明示されなかった
 // キーへコード既定値を適用する (00-overview 3.4 節)。数値キーはゼロ値 (未指定) の
 // ときだけ既定値を代入する。切り詰めを明示的に無効化したい利用者は -1 を指定する
@@ -433,6 +455,45 @@ func applyDefaults(cfg *Config) {
 	if cfg.Agent.ToolResultLimit.MaxChars == 0 {
 		cfg.Agent.ToolResultLimit.MaxChars = defaultToolResultLimitMaxChars
 	}
+	applyCompactionDefaults(&cfg.Agent.Compaction)
+}
+
+// applyCompactionDefaults 未指定の compaction キーへコード既定値を適用する。
+// Enabled は nil (yaml に enabled 行が無い) のときだけ true を代入し、
+// enabled: false の明示は上書きしない
+func applyCompactionDefaults(c *CompactionConfig) {
+	if c.Enabled == nil {
+		enabled := true
+		c.Enabled = &enabled
+	}
+	if c.ContextWindowTokens == 0 {
+		c.ContextWindowTokens = defaultCompactionContextWindowTokens
+	}
+	if c.TriggerRatio == 0 {
+		c.TriggerRatio = defaultCompactionTriggerRatio
+	}
+	// keep_recent_turns: 0 (全区間の要約) は運用として想定しないため未指定として扱う
+	if c.KeepRecentTurns == 0 {
+		c.KeepRecentTurns = defaultCompactionKeepRecentTurns
+	}
+}
+
+// validateCompaction 起動時に compaction 設定の妥当性を検査する
+func validateCompaction(c CompactionConfig) error {
+	// applyDefaults の後に呼ばれるため c.Enabled は常に非 nil
+	if c.Enabled == nil || !*c.Enabled {
+		return nil
+	}
+	if c.ContextWindowTokens <= 0 {
+		return fmt.Errorf("config: agent.compaction.context_window_tokens は enabled=true のとき正の整数で必須 (got %d)", c.ContextWindowTokens)
+	}
+	if c.TriggerRatio <= 0 || c.TriggerRatio > 1 {
+		return fmt.Errorf("config: agent.compaction.trigger_ratio は 0 より大きく 1 以下 (got %f)", c.TriggerRatio)
+	}
+	if c.KeepRecentTurns < 0 {
+		return fmt.Errorf("config: agent.compaction.keep_recent_turns は 0 以上 (got %d)", c.KeepRecentTurns)
+	}
+	return nil
 }
 
 // validateToolResultLimit 起動時に tool_result_limit 設定の妥当性を検査する。

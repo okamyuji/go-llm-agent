@@ -374,3 +374,72 @@ func TestLoad_ToolResultLimitRejectsBelowMinusOne(t *testing.T) {
 		t.Fatalf("want max_chars error, got %v", err)
 	}
 }
+
+func loadCompactionConfig(t *testing.T, body string) *config.Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("default_model: test/m\n"+body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	return cfg
+}
+
+func TestLoad_CompactionDefaultsWhenUnspecified(t *testing.T) {
+	cfg := loadCompactionConfig(t, "")
+	c := cfg.Agent.Compaction
+	if c.Enabled == nil || !*c.Enabled {
+		t.Fatalf("未指定なら enabled=true 期待 got %v", c.Enabled)
+	}
+	if c.ContextWindowTokens != 32768 || c.TriggerRatio != 0.7 || c.KeepRecentTurns != 4 {
+		t.Fatalf("コード既定値期待 got %+v", c)
+	}
+}
+
+func TestLoad_CompactionEnabledExplicitFalse_StaysFalse(t *testing.T) {
+	cfg := loadCompactionConfig(t, "agent:\n  compaction:\n    enabled: false\n")
+	if cfg.Agent.Compaction.Enabled == nil || *cfg.Agent.Compaction.Enabled {
+		t.Fatalf("明示 false は上書きしない期待 got %v", cfg.Agent.Compaction.Enabled)
+	}
+}
+
+func TestLoad_CompactionExplicitValuesKept(t *testing.T) {
+	cfg := loadCompactionConfig(t, "agent:\n  compaction:\n    context_window_tokens: 8192\n    trigger_ratio: 0.5\n    keep_recent_turns: 2\n")
+	c := cfg.Agent.Compaction
+	if c.ContextWindowTokens != 8192 || c.TriggerRatio != 0.5 || c.KeepRecentTurns != 2 {
+		t.Fatalf("明示値を保持する期待 got %+v", c)
+	}
+}
+
+func TestLoad_CompactionRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"trigger_ratio 過大", "agent:\n  compaction:\n    trigger_ratio: 1.5\n"},
+		{"trigger_ratio 負", "agent:\n  compaction:\n    trigger_ratio: -0.1\n"},
+		{"keep_recent_turns 負", "agent:\n  compaction:\n    keep_recent_turns: -1\n"},
+		{"context_window_tokens 負", "agent:\n  compaction:\n    context_window_tokens: -1\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("default_model: test/m\n"+tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := config.Load(path); err == nil {
+				t.Fatal("エラー期待")
+			}
+		})
+	}
+}
+
+func TestLoad_CompactionDisabledSkipsValidation(t *testing.T) {
+	cfg := loadCompactionConfig(t, "agent:\n  compaction:\n    enabled: false\n    trigger_ratio: 1.5\n")
+	if *cfg.Agent.Compaction.Enabled {
+		t.Fatal("enabled=false 期待")
+	}
+}
