@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
@@ -48,7 +53,7 @@ func TestApprovalOption_InjectedDeciderSkipsBroker(t *testing.T) {
 // 個別キーの効果は差分で判定する
 func baselineOptionCount(t *testing.T) int {
 	t.Helper()
-	opts, approver, err := agentOptions(&config.Config{}, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil)
+	opts, approver, err := agentOptionsWithDecider(&config.Config{}, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +71,7 @@ func TestAgentOptions_NoApprovalRequiredToolsSkipsApprover(t *testing.T) {
 
 func TestAgentOptions_ApprovalRequiredBuildsBroker(t *testing.T) {
 	cfg := approvalConfig("shell")
-	opts, approver, err := agentOptions(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil)
+	opts, approver, err := agentOptionsWithDecider(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +86,7 @@ func TestAgentOptions_ApprovalRequiredBuildsBroker(t *testing.T) {
 func TestAgentOptions_ApprovalWithDeciderUsesInjected(t *testing.T) {
 	cfg := approvalConfig("shell")
 	d := &stubDecider{}
-	opts, approver, err := agentOptions(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), d)
+	opts, approver, err := agentOptionsWithDecider(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), d)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +101,7 @@ func TestAgentOptions_ApprovalWithDeciderUsesInjected(t *testing.T) {
 func TestAgentOptions_ToolResultLimitOptionAdded(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Agent.ToolResultLimit.MaxChars = 100
-	opts, _, err := agentOptions(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil)
+	opts, _, err := agentOptionsWithDecider(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +114,7 @@ func TestAgentOptions_ToolValidationBuildsValidator(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Agent.ToolValidation.Enabled = true
 	cfg.Agent.ToolValidation.MaxRetries = 2
-	opts, _, err := agentOptions(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil)
+	opts, _, err := agentOptionsWithDecider(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +127,7 @@ func TestAgentOptions_ToolValidationBuildsValidator(t *testing.T) {
 func TestAgentOptions_ToolChoiceOptionAdded(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Agent.ToolChoice.Mode = "none"
-	opts, _, err := agentOptions(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil)
+	opts, _, err := agentOptionsWithDecider(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,5 +140,116 @@ func TestExcludeTool(t *testing.T) {
 	got := excludeTool([]string{"a", "fs_edit", "b"}, "fs_edit")
 	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
 		t.Fatalf("指定ツールのみ除外する期待 got %v", got)
+	}
+}
+
+func TestChatApprovalWiring_NoRequiredTools(t *testing.T) {
+	p, d := chatApprovalWiring(&config.Config{})
+	if p != nil || d != nil {
+		t.Fatalf("required_tools が空なら対話プロンプタを作らない期待 got %v %v", p, d)
+	}
+}
+
+func TestChatApprovalWiring_CreatesPrompter(t *testing.T) {
+	p, d := chatApprovalWiring(approvalConfig("fs_write"))
+	if p == nil || d == nil {
+		t.Fatal("対話プロンプタを作る期待")
+	}
+	if d != agent.ApprovalDecider(p) {
+		t.Fatal("同じ prompter を decider として渡す期待")
+	}
+}
+
+func TestChatHistoryFile(t *testing.T) {
+	got := chatHistoryFile()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		if got != "" {
+			t.Fatalf("ホーム解決不可なら空文字期待 got %q", got)
+		}
+		return
+	}
+	if got != filepath.Join(home, ".agent_history") {
+		t.Fatalf("~/.agent_history 期待 got %q", got)
+	}
+}
+
+// writeChatConfig runChatSession が読める最小構成の config.yaml を書く
+func writeChatConfig(t *testing.T, dir, extra string) string {
+	t.Helper()
+	t.Setenv("OPENAI_API_KEY", "dummy")
+	path := filepath.Join(dir, "config.yaml")
+	cfg := "default_model: openai/gpt-4.1-mini\n" +
+		"providers:\n" +
+		"  openai:\n" +
+		"    base_url: http://127.0.0.1:1\n" +
+		"    api_key_env: OPENAI_API_KEY\n" +
+		"agent:\n" +
+		"  max_tool_hops: 2\n" +
+		"  enabled_tools: []\n" + extra +
+		"tools:\n" +
+		"  fs:\n" +
+		"    allow_paths: [\"" + dir + "\"]\n" +
+		"  shell:\n" +
+		"    timeout_seconds: 5\n" +
+		"    max_timeout_seconds: 10\n" +
+		"    allow_binaries: []\n" +
+		"  http_fetch: {}\n" +
+		"  search_files: {}\n" +
+		"server:\n" +
+		"  addr: 127.0.0.1:0\n" +
+		"storage:\n" +
+		"  sessions_dir: " + dir + "\n" +
+		"logging:\n" +
+		"  format: text\n" +
+		"  level: info\n"
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRunChatSession_QuitsImmediately(t *testing.T) {
+	dir := t.TempDir()
+	path := writeChatConfig(t, dir, "")
+	var out bytes.Buffer
+	err := runChatSession(context.Background(), chatSessionParams{
+		ConfigPath: path,
+		NoSpinner:  true,
+		In:         strings.NewReader("/quit\n"),
+		Out:        &out,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "REPL") {
+		t.Fatalf("REPL バナー期待 got %q", out.String())
+	}
+}
+
+func TestRunChatSession_WithApprovalRequiredTools(t *testing.T) {
+	dir := t.TempDir()
+	path := writeChatConfig(t, dir, "  approval:\n    required_tools: [\"fs_write\"]\n    timeout_seconds: 5\n    default_decision: deny\n")
+	var out bytes.Buffer
+	err := runChatSession(context.Background(), chatSessionParams{
+		ConfigPath: path,
+		Model:      "openai/gpt-4.1-mini",
+		NoSpinner:  true,
+		In:         strings.NewReader("/quit\n"),
+		Out:        &out,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunChatSession_ConfigLoadError(t *testing.T) {
+	err := runChatSession(context.Background(), chatSessionParams{
+		ConfigPath: filepath.Join(t.TempDir(), "missing.yaml"),
+		In:         strings.NewReader("/quit\n"),
+		Out:        io.Discard,
+	})
+	if err == nil {
+		t.Fatal("設定読み込み失敗はエラー期待")
 	}
 }
