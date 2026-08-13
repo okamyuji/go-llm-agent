@@ -95,56 +95,16 @@ func (r *REPL) Run(ctx context.Context) error {
 
 	pump := newBytePump(r.in)
 	r.model = r.opt.Model
-	history := []llm.Message{}
+	st := &replState{history: []llm.Message{}}
 
-	// 端末入力なら raw 化して行エディタを用意する。out は raw 中の \n 出力のために
-	// CRLF 変換で包む (lineedit.Terminal 自身は \r\n を書くので二重変換にはならない)
-	out := r.out
-	var editor *lineedit.Terminal
-	if f, ok := r.in.(*os.File); ok {
-		fd := int(f.Fd())
-		if term.IsTerminal(fd) {
-			if saved, err := term.MakeRaw(fd); err == nil {
-				defer func() { _ = term.Restore(fd, saved) }()
-				if isTTY(r.out) {
-					out = newCRLFWriter(r.out)
-				}
-				editor = lineedit.NewTerminal(struct {
-					io.Reader
-					io.Writer
-				}{&pumpReader{p: pump, ctx: ctx}, out}, ">> ")
-				if w, h, sizeErr := term.GetSize(fd); sizeErr == nil {
-					_ = editor.SetSize(w, h)
-				}
-				editor.History = newFileHistory(r.opt.HistoryFile, historyMaxEntries)
-				editor.SetBracketedPasteMode(true)
-				defer editor.SetBracketedPasteMode(false)
-			}
-		}
-	}
+	out, editor, closeEditor := r.setupEditor(ctx, pump)
+	defer closeEditor()
 	fmt.Fprintln(out, "go-llm-agent REPL  /quit で終了（生成中は ESC で中断、複数行ペーストは Enter で送信、/tools off でツール無効化）")
 
-	var toolChoice *llm.ToolChoice // nil = 設定既定。 /tools off で mode none に切り替える
 	for {
-		var line string
-		var err error
-		if editor != nil {
-			line, err = readEditorPrompt(editor)
-		} else {
-			fmt.Fprint(out, ">> ")
-			line, err = pump.readPrompt(ctx)
-		}
+		line, err := r.readPromptLine(ctx, editor, pump, out)
 		if err != nil {
-			if ctx.Err() != nil {
-				// SIGINT 等で root context がキャンセルされた。ループを続けると
-				// 以後の全ターンが即失敗し続けるため、ここできれいに終了する
-				fmt.Fprintln(out, "\nシグナルを受信したため終了します")
-				return nil
-			}
-			if errors.Is(err, io.EOF) || errors.Is(err, errCtrlC) {
-				return nil
-			}
-			return err
+			return r.endSession(ctx, err, out)
 		}
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -154,54 +114,21 @@ func (r *REPL) Run(ctx context.Context) error {
 		// タイプミス (/tool on 等) を質問として送ると、モデルが架空のツール実行計画
 		// テキストを回答して履歴が汚染され、以後の回答がその書式を真似続けるため。
 		if strings.HasPrefix(line, "/") {
-			name, arg, _ := strings.Cut(line, " ")
-			arg = strings.TrimSpace(arg)
-			switch name {
-			case "/quit", "/exit":
+			if r.handleSlashCommand(ctx, pump, line, st, out) {
 				return nil
-			case "/clear":
-				// 汚染された履歴からセッション再起動なしで復旧する手段
-				history = history[:0]
-				fmt.Fprintln(out, "[clear] 会話履歴を破棄しました")
-			case "/compact":
-				if r.opt.Registry == nil {
-					fmt.Fprintln(out, "[compact] Registry が未設定のため圧縮できません")
-					break
-				}
-				history = r.compactHistory(ctx, pump, history, out)
-			case "/tools", "/tool":
-				// ツール定義をリクエストに含めるかをセッション中に切り替える。
-				// 小型ローカルモデルはツール定義があると履歴つき長文の指示追従を
-				// 失うため、翻訳・要約など純粋な対話では off が安定する (README 参照)
-				switch arg {
-				case "off":
-					toolChoice = &llm.ToolChoice{Mode: "none"}
-					fmt.Fprintln(out, "[tools] off — ツール定義を送らずに応答します")
-				case "on":
-					toolChoice = nil
-					fmt.Fprintln(out, "[tools] on — ツールを使用します")
-				default:
-					state := "on"
-					if toolChoice != nil {
-						state = "off"
-					}
-					fmt.Fprintf(out, "[tools] 現在: %s（/tools off | /tools on で切替）\n", state)
-				}
-			default:
-				fmt.Fprintf(out, "[コマンド] %s は未定義です。利用可能: /quit /exit /clear /compact /tools off|on\n", name)
 			}
 			continue
 		}
-		history = append(history, llm.Message{Role: llm.RoleUser, Content: line})
+		st.history = append(st.history, llm.Message{Role: llm.RoleUser, Content: line})
 
-		turnMessages, quit, usage := r.runTurn(ctx, pump, append([]llm.Message{}, history...), toolChoice)
+		turnMessages, quit, usage := r.runTurn(ctx, pump, append([]llm.Message{}, st.history...), st.toolChoice)
 		if len(turnMessages) == 0 {
 			// 中断やエラーで何も生成されなかったターンは user 入力ごと巻き戻す。
 			// content 空の assistant や user 連続を履歴に残すと、以後の全リクエストが
 			// llama-server の履歴検証 (400) で失敗し続けるため。
-			history = history[:len(history)-1]
+			st.history = st.history[:len(st.history)-1]
 		} else {
-			history = append(history, turnMessages...)
+			st.history = append(st.history, turnMessages...)
 		}
 		if quit {
 			return nil
@@ -211,8 +138,119 @@ func (r *REPL) Run(ctx context.Context) error {
 			return nil
 		}
 		if r.shouldCompact(usage.LastIn) {
-			history = r.compactHistory(ctx, pump, history, out)
+			st.history = r.compactHistory(ctx, pump, st.history, out)
 		}
+	}
+}
+
+// replState セッション中にコマンドとターンが共有する状態
+type replState struct {
+	history []llm.Message
+	// toolChoice nil = 設定既定。/tools off で mode none に切り替える
+	toolChoice *llm.ToolChoice
+}
+
+// setupEditor 端末入力なら raw 化して行エディタを用意する。out は raw 中の \n 出力のために
+// CRLF 変換で包む (lineedit.Terminal 自身は \r\n を書くので二重変換にはならない)。
+// 端末でなければ行エディタは nil で、出力先は r.out のまま
+func (r *REPL) setupEditor(ctx context.Context, pump *bytePump) (io.Writer, *lineedit.Terminal, func()) {
+	out := r.out
+	f, ok := r.in.(*os.File)
+	if !ok {
+		return out, nil, func() {}
+	}
+	fd := int(f.Fd())
+	if !term.IsTerminal(fd) {
+		return out, nil, func() {}
+	}
+	saved, err := term.MakeRaw(fd)
+	if err != nil {
+		return out, nil, func() {}
+	}
+	if isTTY(r.out) {
+		out = newCRLFWriter(r.out)
+	}
+	editor := lineedit.NewTerminal(struct {
+		io.Reader
+		io.Writer
+	}{&pumpReader{p: pump, ctx: ctx}, out}, ">> ")
+	if w, h, sizeErr := term.GetSize(fd); sizeErr == nil {
+		_ = editor.SetSize(w, h)
+	}
+	editor.History = newFileHistory(r.opt.HistoryFile, historyMaxEntries)
+	editor.SetBracketedPasteMode(true)
+	return out, editor, func() {
+		editor.SetBracketedPasteMode(false)
+		_ = term.Restore(fd, saved)
+	}
+}
+
+// readPromptLine 1 行のプロンプト入力を読む。端末なら行エディタ、パイプなら pump を使う
+func (r *REPL) readPromptLine(ctx context.Context, editor *lineedit.Terminal, pump *bytePump, out io.Writer) (string, error) {
+	if editor != nil {
+		return readEditorPrompt(editor)
+	}
+	fmt.Fprint(out, ">> ")
+	return pump.readPrompt(ctx)
+}
+
+// endSession プロンプト読み取りエラーからセッション終了の可否を決める。
+// SIGINT 等の context キャンセルと EOF / Ctrl-C は正常終了、それ以外は err を返す
+func (r *REPL) endSession(ctx context.Context, err error, out io.Writer) error {
+	if ctx.Err() != nil {
+		// SIGINT 等で root context がキャンセルされた。ループを続けると
+		// 以後の全ターンが即失敗し続けるため、ここできれいに終了する
+		fmt.Fprintln(out, "\nシグナルを受信したため終了します")
+		return nil
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, errCtrlC) {
+		return nil
+	}
+	return err
+}
+
+// handleSlashCommand スラッシュコマンドを処理する。戻り値 true はセッション終了を意味する
+func (r *REPL) handleSlashCommand(ctx context.Context, pump *bytePump, line string, st *replState, out io.Writer) bool {
+	name, arg, _ := strings.Cut(line, " ")
+	arg = strings.TrimSpace(arg)
+	switch name {
+	case "/quit", "/exit":
+		return true
+	case "/clear":
+		// 汚染された履歴からセッション再起動なしで復旧する手段
+		st.history = st.history[:0]
+		fmt.Fprintln(out, "[clear] 会話履歴を破棄しました")
+	case "/compact":
+		if r.opt.Registry == nil {
+			fmt.Fprintln(out, "[compact] Registry が未設定のため圧縮できません")
+			break
+		}
+		st.history = r.compactHistory(ctx, pump, st.history, out)
+	case "/tools", "/tool":
+		r.handleToolsCommand(arg, st, out)
+	default:
+		fmt.Fprintf(out, "[コマンド] %s は未定義です。利用可能: /quit /exit /clear /compact /tools off|on\n", name)
+	}
+	return false
+}
+
+// handleToolsCommand ツール定義をリクエストに含めるかをセッション中に切り替える。
+// 小型ローカルモデルはツール定義があると履歴つき長文の指示追従を失うため、
+// 翻訳・要約など純粋な対話では off が安定する (README 参照)
+func (r *REPL) handleToolsCommand(arg string, st *replState, out io.Writer) {
+	switch arg {
+	case "off":
+		st.toolChoice = &llm.ToolChoice{Mode: "none"}
+		fmt.Fprintln(out, "[tools] off — ツール定義を送らずに応答します")
+	case "on":
+		st.toolChoice = nil
+		fmt.Fprintln(out, "[tools] on — ツールを使用します")
+	default:
+		state := "on"
+		if st.toolChoice != nil {
+			state = "off"
+		}
+		fmt.Fprintf(out, "[tools] 現在: %s（/tools off | /tools on で切替）\n", state)
 	}
 }
 
