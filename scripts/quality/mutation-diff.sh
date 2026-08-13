@@ -31,7 +31,8 @@ fi
 fail=0
 for pkg in "$@"; do
   echo ">>> gremlins unleash $pkg"
-  gremlins unleash "$pkg" 2>&1 | tee "$TMP/gremlins_out" | tail -5
+  # timeout-coefficient: 既定係数では重いパッケージの mutant が全件 TIMED OUT になる
+  gremlins unleash "$pkg" --timeout-coefficient 20 --workers 4 2>&1 | tee "$TMP/gremlins_out" | tail -5
   # 出力形式: "  KILLED CONDITIONALS_NEGATION at fs.go:55:41" (パスはpkg相対)
   awk -v pkg="$pkg" '
     / (LIVED|NOT COVERED) / {
