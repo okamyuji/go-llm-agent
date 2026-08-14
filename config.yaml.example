@@ -141,6 +141,8 @@ agent:
   # 超過時は head 60% + tail 40% を残し中央を省略マーカーへ置換する。
   # ユーザーへ表示する結果本文 (EventToolResult) は切り詰めない。
   # 未指定 (0) はこの既定値が適用される。無効化する場合は -1 を指定する。
+  # max_chars は agent.compaction の context_window_tokens * trigger_ratio の
+  # 40% 以下に保つ (ツール 1 回の使用で圧縮の閾値に達しないようにするため)。
   tool_result_limit:
     max_chars: 8000
   # ツール引数の JSON Schema 検証。max_retries 回まで自動修正試行する。
@@ -151,10 +153,21 @@ agent:
   # default_decision: "deny" のみサポート (timeout 時の fail-closed)。"allow" は
   # 廃止され、起動時に config エラーで弾かれる。
   # timeout_seconds は required_tools 指定時に正の整数で必須 (起動時 validate)。
+  # chat では対話プロンプト (y/n)、serve では broker を自動で選ぶ。
+  # 選択方式を切り替える専用キーはない。fs_write / fs_edit の承認プロンプトには
+  # 適用前の unified diff が表示される。
   approval:
     required_tools: []
     timeout_seconds: 30
     default_decision: deny
+  # 会話履歴の自動圧縮。直近ターンの実測 input tokens が
+  # context_window_tokens * trigger_ratio 以上になると自動発火する。
+  # REPL の /compact で手動発火もできる。
+  compaction:
+    enabled: true
+    context_window_tokens: 32768
+    trigger_ratio: 0.7
+    keep_recent_turns: 4
   # 実行戦略の切替。react / planner_executor / reflection から選ぶ。
   strategy: react
   planner_executor:
@@ -176,6 +189,15 @@ agent:
   agents_md:
     enabled: true
     max_bytes: 32768
+
+# ツール実行の前後に外部コマンドを起動する。matcher に一致したツールだけが対象で
+# "*" は全ツールに一致する。stdin へ JSON を渡し (pre は {"tool","args"}、post は
+# {"tool","args","result":{"is_error","content","duration_ms"}})、exit 0 で許可、
+# exit 2 で拒否する (stderr が拒否理由)。timeout_seconds の既定は 10。
+hooks:
+  pre_tool_use: []
+  # 例: [{matcher: "shell", command: "./scripts/audit-hook.sh", timeout_seconds: 10}]
+  post_tool_use: []
 
 tools:
   fs:
