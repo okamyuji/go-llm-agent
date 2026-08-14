@@ -1,0 +1,44 @@
+# 変更行の生存 mutant のうち、裁定済みでゲートから除外するもの。
+# 形式: <リポジトリ相対パス>:<行>:<桁> <mutator>
+# 空行と # 始まりの行は無視する。
+#
+# 除外の根拠は docs/specs/2026-08-13-improvements/mutation-equivalents.md が持つ。
+# 項目を足すときは、その文書へ手動 kill の実測結果を必ず併記すること。
+
+# --- 真の等価 mutant (clamp イディオムの境界。境界値で両演算子が同値) ---
+internal/transport/cliui/lineedit/integrate.go:59:7 CONDITIONALS_BOUNDARY
+internal/transport/cliui/lineedit/integrate.go:68:18 CONDITIONALS_BOUNDARY
+internal/transport/cliui/lineedit/integrate.go:76:9 CONDITIONALS_BOUNDARY
+internal/transport/cliui/lineedit/integrate.go:79:9 CONDITIONALS_BOUNDARY
+internal/transport/cliui/lineedit/search.go:129:11 CONDITIONALS_BOUNDARY
+internal/transport/cliui/lineedit/width.go:16:7 CONDITIONALS_BOUNDARY
+internal/transport/cliui/lineedit/width.go:62:11 CONDITIONALS_BOUNDARY
+
+# --- gremlins の死角: タグなし switch の case 式 (テストは手動 kill 済み) ---
+internal/agent/agentsmd.go:36:16 CONDITIONALS_NEGATION
+internal/agent/agentsmd.go:38:16 CONDITIONALS_NEGATION
+internal/agent/agentsmd.go:78:15 CONDITIONALS_NEGATION
+internal/agent/agentsmd.go:78:50 CONDITIONALS_NEGATION
+internal/agent/agentsmd.go:80:15 CONDITIONALS_NEGATION
+internal/agent/agentsmd.go:82:15 CONDITIONALS_NEGATION
+internal/agent/agentsmd.go:85:15 CONDITIONALS_NEGATION
+internal/agent/compact.go:59:12 CONDITIONALS_BOUNDARY
+internal/agent/compact.go:59:12 CONDITIONALS_NEGATION
+internal/agent/compact.go:61:12 CONDITIONALS_BOUNDARY
+internal/agent/compact.go:61:12 CONDITIONALS_NEGATION
+internal/agent/diff.go:64:20 CONDITIONALS_NEGATION
+internal/agent/diff.go:68:16 ARITHMETIC_BASE
+internal/agent/diff.go:68:19 ARITHMETIC_BASE
+internal/agent/diff.go:68:25 ARITHMETIC_BASE
+internal/agent/diff.go:68:29 CONDITIONALS_BOUNDARY
+internal/agent/diff.go:68:29 CONDITIONALS_NEGATION
+internal/agent/diff.go:68:39 ARITHMETIC_BASE
+internal/agent/diff.go:68:45 ARITHMETIC_BASE
+internal/agent/diff.go:68:47 ARITHMETIC_BASE
+internal/transport/cliui/lineedit/integrate.go:42:10 CONDITIONALS_NEGATION
+internal/transport/cliui/lineedit/width.go:39:10 CONDITIONALS_NEGATION
+
+# --- gremlins の死角: パッケージレベル const/var 初期化式 (テストは手動 kill 済み) ---
+internal/agent/hooks.go:16:31 ARITHMETIC_BASE
+internal/transport/cliui/compact.go:16:25 ARITHMETIC_BASE
+internal/transport/cliui/lineedit/search.go:7:28 ARITHMETIC_BASE

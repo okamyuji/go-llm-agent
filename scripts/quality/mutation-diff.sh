@@ -30,6 +30,13 @@ if [ ! -s "$TMP/changed_lines" ]; then
   exit 0
 fi
 
+ALLOWLIST="$ROOT/scripts/quality/mutation-allowlist.txt"
+if [ -f "$ALLOWLIST" ]; then
+  sed 's/#.*//' "$ALLOWLIST" | sed 's/[[:space:]]*$//' | grep -v '^$' > "$TMP/allowlist"
+else
+  : > "$TMP/allowlist"
+fi
+
 fail=0
 for pkg in "$@"; do
   echo ">>> gremlins unleash $pkg"
@@ -47,10 +54,17 @@ for pkg in "$@"; do
   while IFS= read -r s; do
     [ -z "$s" ] && continue
     fl="${s%% *}"
-    if grep -qxF "$fl" "$TMP/changed_lines"; then
-      echo "SURVIVED ON CHANGED LINE: $s"
-      fail=1
+    grep -qxF "$fl" "$TMP/changed_lines" || continue
+    # 裁定済み mutant (真の等価 / gremlins 計測の死角) は除外する。
+    # 根拠は docs/specs/2026-08-13-improvements/mutation-equivalents.md
+    key="$(printf '%s %s' "${pkg#./}/${s##* at }" \
+      "$(printf '%s\n' "$s" | awk '{for (i=1; i<=NF; i++) if ($i == "at") print $(i-1)}')")"
+    if grep -qxF "$key" "$TMP/allowlist"; then
+      echo "ALLOWED (adjudicated): $key"
+      continue
     fi
+    echo "SURVIVED ON CHANGED LINE: $s"
+    fail=1
   done < "$TMP/survived"
 done
 
