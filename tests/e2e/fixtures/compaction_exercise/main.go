@@ -187,7 +187,11 @@ func parseCompactCounts(output string) (before, after int, ok bool) {
 		if !strings.Contains(line, compactedOK) {
 			continue
 		}
-		if _, err := fmt.Sscanf(line[strings.Index(line, "("):], "(%d件 -> %d件)", &before, &after); err != nil {
+		_, paren, found := strings.Cut(line, "(")
+		if !found {
+			return 0, 0, false
+		}
+		if _, err := fmt.Sscanf("("+paren, "(%d件 -> %d件)", &before, &after); err != nil {
 			return 0, 0, false
 		}
 		return before, after, true

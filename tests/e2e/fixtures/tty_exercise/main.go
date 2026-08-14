@@ -139,8 +139,8 @@ type errNoPTY struct{ err error }
 func (e errNoPTY) Error() string { return "pty を割り当てられません: " + e.err.Error() }
 
 // startSession 擬似端末を割り当てて agent chat を起動する
-func startSession(dir, bin string, cols int) (*session, error) {
-	cmd := exec.Command(bin, "chat", "-config", filepath.Join(dir, "config.yaml"), "-no-spinner") // #nosec G204 -- fixture が組み立てた一時パス
+func startSession(ctx context.Context, dir, bin string, cols int) (*session, error) {
+	cmd := exec.CommandContext(ctx, bin, "chat", "-config", filepath.Join(dir, "config.yaml"), "-no-spinner") // #nosec G204 -- fixture が組み立てた一時パス
 	cmd.Env = append(os.Environ(), "HOME="+dir, "TERM=xterm-256color")
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: uint16(cols)}) // #nosec G115 -- cols は定数
 	if err != nil {
@@ -272,7 +272,7 @@ func checkEditing(s *session, out io.Writer) error {
 		return err
 	}
 	if !strings.Contains(got, "語  ") {
-		return fmt.Errorf("Backspace の消去に空白 2 個が含まれない: %s", strconv.Quote(got))
+		return fmt.Errorf("消去のための空白 2 個が Backspace の出力に含まれない: %s", strconv.Quote(got))
 	}
 	fmt.Fprintln(out, "tty_backspace_erases_cells=true")
 	return nil
@@ -338,8 +338,8 @@ func checkQuit(s *session, out io.Writer) error {
 
 // checkWrap 検証項目 5。プロンプト 3 セルに続けて CJK 9 文字を送ると、
 // 9 文字目の前にパディング空白と改行が入り、折返し前の印字セル数が桁数を超えない
-func checkWrap(dir, bin string, out io.Writer) error {
-	s, err := startSession(dir, bin, narrowCols)
+func checkWrap(ctx context.Context, dir, bin string, out io.Writer) error {
+	s, err := startSession(ctx, dir, bin, narrowCols)
 	if err != nil {
 		return err
 	}
@@ -366,8 +366,8 @@ func checkWrap(dir, bin string, out io.Writer) error {
 }
 
 // runMainSession 折返し以外の検証項目を 1 つの子プロセスで順に確認する
-func runMainSession(dir, bin string, st *stub, out io.Writer) error {
-	s, err := startSession(dir, bin, wideCols)
+func runMainSession(ctx context.Context, dir, bin string, st *stub, out io.Writer) error {
+	s, err := startSession(ctx, dir, bin, wideCols)
 	if err != nil {
 		return err
 	}
@@ -400,10 +400,10 @@ func run(ctx context.Context, dir string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := runMainSession(dir, bin, st, out); err != nil {
+	if err := runMainSession(ctx, dir, bin, st, out); err != nil {
 		return err
 	}
-	return checkWrap(dir, bin, out)
+	return checkWrap(ctx, dir, bin, out)
 }
 
 // runInTempDir 一時ディレクトリを作って run を呼ぶ。
