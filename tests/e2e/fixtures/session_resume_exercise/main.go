@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,8 +112,71 @@ func countJSONLFiles(dir string) int {
 	return n
 }
 
+// checkSession1AndResume session1 を実行し記録・-resume 復元経路を検証する。
+// session2 実行に必要な sessionID / hist も返す
+func checkSession1AndResume(ctx context.Context, base string, w io.Writer) (sessionID string, hist []llm.Message) {
+	sessionsBase := filepath.Join(base, "sessions")
+	chatDir := cliui.ChatSessionsDir("", sessionsBase)
+
+	runRepl(ctx, cliui.Options{Model: "stub/model", SessionsDir: chatDir}, session1Prompt+"\n/quit\n")
+
+	fileCount := countJSONLFiles(chatDir)
+	fmt.Fprintf(w, "session1_file_created=%v\n", fileCount == 1)
+
+	wantChatDir := filepath.Join(sessionsBase, "chat")
+	fmt.Fprintf(w, "chat_dir_fallback_ok=%v\n", cliui.ChatSessionsDir("", sessionsBase) == wantChatDir)
+
+	latestID, ok, lerr := cliui.LatestSessionID(chatDir)
+	sessionID, hist, rerr := cliui.ResumeLatestSession(chatDir, true, func(string) {}, func(string) {})
+	resumeOK := lerr == nil && ok && rerr == nil && sessionID == latestID && len(hist) == 2
+	fmt.Fprintf(w, "resume_flag_path_ok=%v\n", resumeOK)
+	return sessionID, hist
+}
+
+// checkSession2SeesSession1 session2 を InitialHistory 付きで実行し、
+// stubProvider が resumed_ok を返すことを確認する
+func checkSession2SeesSession1(ctx context.Context, chatDir, sessionID string, hist []llm.Message, w io.Writer) {
+	out2 := runRepl(ctx, cliui.Options{
+		Model: "stub/model", SessionsDir: chatDir, SessionID: sessionID, InitialHistory: hist,
+	}, "hello-session2\n/quit\n")
+	fmt.Fprintf(w, "session2_sees_session1=%v\n", strings.Contains(out2, "resumed_ok"))
+}
+
+// checkResumeEmptyDir 復元対象が無い空ディレクトリでの ResumeLatestSession の挙動を検証する
+func checkResumeEmptyDir(base string, w io.Writer) {
+	emptyDir := filepath.Join(base, "empty-sessions")
+	eid, ehist, eerr := cliui.ResumeLatestSession(emptyDir, true, func(string) {}, func(string) {})
+	fmt.Fprintf(w, "resume_empty_dir_ok=%v\n", eerr == nil && eid == "" && ehist == nil)
+}
+
+// checkBrokenLineSkipped 壊れた行を含む jsonl が読み飛ばされ、警告が 1 回だけ呼ばれることを確認する
+func checkBrokenLineSkipped(base string, w io.Writer) error {
+	brokenDir := filepath.Join(base, "broken-sessions")
+	if err := os.MkdirAll(brokenDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir broken: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(brokenDir, "20260101T000000Z.jsonl"),
+		[]byte("{\"role\":\"user\",\"content\":\"a\"}\n{invalid json\n"), 0o600); err != nil {
+		return fmt.Errorf("write broken: %w", err)
+	}
+	var brokenWarned []string
+	_, bhist, berr := cliui.ResumeLatestSession(brokenDir, true, func(string) {}, func(s string) { brokenWarned = append(brokenWarned, s) })
+	fmt.Fprintf(w, "broken_line_skipped=%v\n", berr == nil && len(bhist) == 1 && len(brokenWarned) == 1)
+	return nil
+}
+
+// run 全チェックを順に実行し、標準出力へ key=value を書く。エラーがあれば返す
+func run(ctx context.Context, base string, w io.Writer) error {
+	sessionsBase := filepath.Join(base, "sessions")
+	chatDir := cliui.ChatSessionsDir("", sessionsBase)
+
+	sessionID, hist := checkSession1AndResume(ctx, base, w)
+	checkSession2SeesSession1(ctx, chatDir, sessionID, hist, w)
+	checkResumeEmptyDir(base, w)
+	return checkBrokenLineSkipped(base, w)
+}
+
 func main() {
-	ctx := context.Background()
 	base, err := os.MkdirTemp("", "session-resume-exercise-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "MkdirTemp err:", err)
@@ -120,53 +184,8 @@ func main() {
 	}
 	defer func() { _ = os.RemoveAll(base) }()
 
-	sessionsBase := filepath.Join(base, "sessions")
-	chatDir := cliui.ChatSessionsDir("", sessionsBase)
-
-	// 1. session1 実行
-	runRepl(ctx, cliui.Options{Model: "stub/model", SessionsDir: chatDir}, session1Prompt+"\n/quit\n")
-
-	// 2. ファイルが 1 つだけ作られていること
-	fileCount := countJSONLFiles(chatDir)
-	fmt.Printf("session1_file_created=%v\n", fileCount == 1)
-
-	// 3. ChatSessionsDir のフォールバック規則
-	wantChatDir := filepath.Join(sessionsBase, "chat")
-	fmt.Printf("chat_dir_fallback_ok=%v\n", cliui.ChatSessionsDir("", sessionsBase) == wantChatDir)
-
-	// 4. -resume の解釈経路
-	latestID, ok, lerr := cliui.LatestSessionID(chatDir)
-	var notified []string
-	var warned []string
-	notify := func(s string) { notified = append(notified, s) }
-	warn := func(s string) { warned = append(warned, s) }
-	sessionID, hist, rerr := cliui.ResumeLatestSession(chatDir, true, notify, warn)
-	resumeOK := lerr == nil && ok && rerr == nil && sessionID == latestID && len(hist) == 2
-	fmt.Printf("resume_flag_path_ok=%v\n", resumeOK)
-
-	// 5. session2 が session1 のやり取りを参照できること
-	out2 := runRepl(ctx, cliui.Options{
-		Model: "stub/model", SessionsDir: chatDir, SessionID: sessionID, InitialHistory: hist,
-	}, "hello-session2\n/quit\n")
-	fmt.Printf("session2_sees_session1=%v\n", strings.Contains(out2, "resumed_ok"))
-
-	// 6. 復元対象が無い空ディレクトリ
-	emptyDir := filepath.Join(base, "empty-sessions")
-	eid, ehist, eerr := cliui.ResumeLatestSession(emptyDir, true, func(string) {}, func(string) {})
-	fmt.Printf("resume_empty_dir_ok=%v\n", eerr == nil && eid == "" && ehist == nil)
-
-	// 7. 壊れた行を含む jsonl は読み飛ばして継続する
-	brokenDir := filepath.Join(base, "broken-sessions")
-	if err := os.MkdirAll(brokenDir, 0o755); err != nil {
-		fmt.Fprintln(os.Stderr, "mkdir broken err:", err)
+	if err := run(context.Background(), base, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "run err:", err)
 		os.Exit(1)
 	}
-	if err := os.WriteFile(filepath.Join(brokenDir, "20260101T000000Z.jsonl"),
-		[]byte("{\"role\":\"user\",\"content\":\"a\"}\n{invalid json\n"), 0o600); err != nil {
-		fmt.Fprintln(os.Stderr, "write broken err:", err)
-		os.Exit(1)
-	}
-	var brokenWarned []string
-	_, bhist, berr := cliui.ResumeLatestSession(brokenDir, true, func(string) {}, func(s string) { brokenWarned = append(brokenWarned, s) })
-	fmt.Printf("broken_line_skipped=%v\n", berr == nil && len(bhist) == 1 && len(brokenWarned) == 1)
 }
