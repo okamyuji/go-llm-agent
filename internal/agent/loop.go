@@ -15,7 +15,7 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/tool"
 )
 
-// defaultApprovalTimeout WithApprover で timeout 未指定 (0) のときの既定値
+// defaultApprovalTimeout WithApprovalDecider で timeout 未指定 (0) のときの既定値
 // 無期限待機 (apCtx = ctx の継承) は goroutine リークの原因になるため明示的なフォールバックを置く
 const defaultApprovalTimeout = 5 * time.Minute
 
