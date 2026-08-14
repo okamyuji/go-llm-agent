@@ -42,3 +42,9 @@ internal/transport/cliui/lineedit/width.go:39:10 CONDITIONALS_NEGATION
 internal/agent/hooks.go:16:31 ARITHMETIC_BASE
 internal/transport/cliui/compact.go:16:25 ARITHMETIC_BASE
 internal/transport/cliui/lineedit/search.go:7:28 ARITHMETIC_BASE
+
+# --- コンパイル不能な変異: パッケージレベル const の文字列連結 (実行可能な mutant が生成されない) ---
+cmd/agent/chat.go:111:67 ARITHMETIC_BASE
+cmd/agent/chat.go:112:122 ARITHMETIC_BASE
+cmd/agent/chat.go:113:116 ARITHMETIC_BASE
+cmd/agent/chat.go:114:125 ARITHMETIC_BASE
