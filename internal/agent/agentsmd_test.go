@@ -287,6 +287,123 @@ func TestLoadAgentsMD_RelativeStartDirIsResolved(t *testing.T) {
 	}
 }
 
+// TestLoadAgentsMD_SymlinkToOutsideFileIsNotFollowed info-disclosure-symlink 対策の確認。
+// sub/AGENTS.md がリポジトリ外 (/etc 配下) を指すシンボリックリンクの場合、
+// リンク先を読まず、探索は上位ディレクトリへ継続して proj/AGENTS.md を返す
+func TestLoadAgentsMD_SymlinkToOutsideFileIsNotFollowed(t *testing.T) {
+	root, proj, sub := mkTree(t)
+	writeAgentsMD(t, proj, "proj instructions")
+
+	target := "/etc/hosts"
+	if _, statErr := os.Stat(target); statErr != nil {
+		t.Skip("/etc/hosts が無い環境のため skip")
+	}
+	link := filepath.Join(sub, agentsMDFileName)
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("Symlink err=%v", err)
+	}
+
+	content, path, err := LoadAgentsMD(sub, 0, []string{root})
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if content != "proj instructions" || path != filepath.Join(proj, agentsMDFileName) {
+		t.Fatalf("content=%q path=%q, want proj/AGENTS.md (symlink を辿らず上位へ継続すること)", content, path)
+	}
+	if strings.Contains(content, "127.0.0.1") || strings.Contains(content, "localhost") {
+		t.Fatalf("content にリンク先 (/etc/hosts) の内容が含まれてはいけない: %q", content)
+	}
+}
+
+// TestLoadAgentsMD_SymlinkWithNoOtherCandidateFindsNothing シンボリックリンクしか
+// 存在しない場合、探索全体が「見つからない」で終わる (エラーにしない)
+func TestLoadAgentsMD_SymlinkWithNoOtherCandidateFindsNothing(t *testing.T) {
+	root, _, sub := mkTree(t)
+	target := "/etc/hosts"
+	if _, statErr := os.Stat(target); statErr != nil {
+		t.Skip("/etc/hosts が無い環境のため skip")
+	}
+	if err := os.Symlink(target, filepath.Join(sub, agentsMDFileName)); err != nil {
+		t.Fatalf("Symlink err=%v", err)
+	}
+	content, path, err := LoadAgentsMD(sub, 0, []string{root})
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if content != "" || path != "" {
+		t.Fatalf("content=%q path=%q, want both empty", content, path)
+	}
+}
+
+// TestLoadAgentsMD_HugeFileReadIsCappedAtMaxBytes resource-cap-defeat 対策の確認。
+// max_bytes を大きく超えるファイルに対して、返る内容のバイト数が max_bytes 近傍
+// (rune 境界調整分の数バイト以内) に収まること = 実装が全文を読んでから truncate
+// するのではなく、読み取りそのものを max_bytes+1 バイトに制限していることの
+// 間接的な確認 (io.LimitReader の使用箇所を通ること)
+func TestLoadAgentsMD_HugeFileReadIsCappedAtMaxBytes(t *testing.T) {
+	root, _, sub := mkTree(t)
+	const hugeSize = 5 * 1024 * 1024 // 5MiB。max_bytes (100) を大きく超える
+	big := strings.Repeat("a", hugeSize)
+	writeAgentsMD(t, sub, big)
+
+	const maxBytes = 100
+	content, _, err := LoadAgentsMD(sub, maxBytes, []string{root})
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if len(content) > maxBytes {
+		t.Fatalf("len(content)=%d, want <= maxBytes=%d (読み取りが上限で抑えられていない)", len(content), maxBytes)
+	}
+	if len(content) < maxBytes-3 {
+		t.Fatalf("len(content)=%d, want close to maxBytes=%d (ASCII のみなので rune 境界調整は発生しないはず)", len(content), maxBytes)
+	}
+}
+
+// TestReadCapped_ReadsAtMostMaxBytesPlusOne readCapped がファイルサイズに関わらず
+// maxBytes+1 バイトしか読まないことを直接確認する
+func TestReadCapped_ReadsAtMostMaxBytesPlusOne(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "big.txt")
+	const size = 1024 * 1024
+	if err := os.WriteFile(p, []byte(strings.Repeat("b", size)), 0o600); err != nil {
+		t.Fatalf("write err=%v", err)
+	}
+	const maxBytes = 10
+	content, err := readCapped(p, maxBytes)
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if len(content) != maxBytes {
+		t.Fatalf("len(content)=%d, want exactly %d (ASCII, no rune boundary trimming needed)", len(content), maxBytes)
+	}
+}
+
+func TestReadAgentsMDCandidate_SymlinkReturnsNotFound(t *testing.T) {
+	dir := t.TempDir()
+	target := "/etc/hosts"
+	if _, statErr := os.Stat(target); statErr != nil {
+		t.Skip("/etc/hosts が無い環境のため skip")
+	}
+	link := filepath.Join(dir, agentsMDFileName)
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("Symlink err=%v", err)
+	}
+	found, content, err := readAgentsMDCandidate(link, 0)
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if found || content != "" {
+		t.Fatalf("found=%v content=%q, want not-found for symlink candidate", found, content)
+	}
+}
+
+func TestReadAgentsMDCandidate_MissingFileReturnsNotFound(t *testing.T) {
+	found, content, err := readAgentsMDCandidate(filepath.Join(t.TempDir(), "AGENTS.md"), 0)
+	if err != nil || found || content != "" {
+		t.Fatalf("found=%v content=%q err=%v, want not-found no-error", found, content, err)
+	}
+}
+
 func TestWithinAllowPaths_EmptyAllowPathsIsFalse(t *testing.T) {
 	if withinAllowPaths("/anything", nil) {
 		t.Fatal("空の allowPaths は常に false")

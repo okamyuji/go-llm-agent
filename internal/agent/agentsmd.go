@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,12 +31,13 @@ func LoadAgentsMD(startDir string, maxBytes int, allowPaths []string) (content s
 			return "", "", nil
 		}
 		candidate := filepath.Join(dir, agentsMDFileName)
-		b, readErr := os.ReadFile(candidate)
+		found, content, readErr := readAgentsMDCandidate(candidate, maxBytes)
 		switch {
+		case readErr == nil && found:
+			return content, candidate, nil
 		case readErr == nil:
-			return truncateAtRuneBoundary(string(b), maxBytes), candidate, nil
-		case os.IsNotExist(readErr):
-			// このディレクトリには無い。1 段上へ
+			// このディレクトリには無い、またはシンボリックリンク/非通常ファイルで
+			// あるため信頼しない (info-disclosure-symlink 対策)。1 段上へ
 		default:
 			// 権限エラー等はサイレントに握りつぶさず起動時エラーとして報告する
 			// (fs 境界での検証は失敗を明示するという既存の engineering 方針に合わせる)
@@ -48,6 +50,70 @@ func LoadAgentsMD(startDir string, maxBytes int, allowPaths []string) (content s
 		}
 		dir = parent
 	}
+}
+
+// readAgentsMDCandidate candidate を検査し、信頼できる通常ファイルとして
+// 読める場合だけ found=true で内容を返す。
+//
+// セキュリティレビュー指摘への対応:
+//   - info-disclosure-symlink: candidate がシンボリックリンクの場合、リンク先を
+//     検証なしに読むとリポジトリ外の任意ファイル (例: /etc 配下) の内容を
+//     プロンプトへ流し込める。os.Lstat でシンボリックリンクを検出し、読まずに
+//     found=false を返す (探索は上位ディレクトリへ継続する。エラーにはしない —
+//     プロジェクトが意図せずシンボリックリンクを置いているだけの場合に
+//     探索全体を止めるのは過剰なため)。
+//   - resource-cap-defeat: os.ReadFile で全文を読んでから truncate する実装では
+//     巨大ファイルに対して max_bytes が効かず、ディスク上の全内容をメモリに
+//     読み込んでしまう。os.Open + io.LimitReader(f, maxBytes+1) で
+//     読み取りバイト数そのものを上限に抑える。maxBytes<=0 (切り詰め無効、
+//     関数単体の契約としてのみ許容。config 経由では届かない) のときは
+//     従来どおり全文を読む。
+//
+// candidate が存在しない場合は found=false, err=nil を返す (呼び出し元が
+// 上位ディレクトリへの継続に使う)。ディレクトリの場合はエラーを返す
+// (fs 境界の検証失敗を明示する既存方針に合わせる)。
+func readAgentsMDCandidate(candidate string, maxBytes int) (found bool, content string, err error) {
+	fi, statErr := os.Lstat(candidate)
+	switch {
+	case statErr == nil && fi.Mode()&os.ModeSymlink != 0:
+		return false, "", nil
+	case statErr == nil && fi.IsDir():
+		return false, "", fmt.Errorf("%s is a directory", candidate)
+	case statErr == nil && !fi.Mode().IsRegular():
+		// デバイスファイル・FIFO・ソケット等。通常ファイルではないため読まない
+		return false, "", nil
+	case statErr == nil:
+		c, rerr := readCapped(candidate, maxBytes)
+		if rerr != nil {
+			return false, "", rerr
+		}
+		return true, c, nil
+	case os.IsNotExist(statErr):
+		return false, "", nil
+	default:
+		return false, "", statErr
+	}
+}
+
+// readCapped path を開き、maxBytes > 0 のときは最大 maxBytes+1 バイトだけを
+// 読む (truncateAtRuneBoundary が境界判定できるよう 1 バイト多く読む)。
+// maxBytes <= 0 のときは全文を読む
+func readCapped(path string, maxBytes int) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+
+	var r io.Reader = f
+	if maxBytes > 0 {
+		r = io.LimitReader(f, int64(maxBytes)+1)
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	return truncateAtRuneBoundary(string(b), maxBytes), nil
 }
 
 // withinAllowPaths dir が allowPaths のいずれかの配下 (または一致) かを返す。
