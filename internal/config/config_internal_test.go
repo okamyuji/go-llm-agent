@@ -56,6 +56,58 @@ func TestValidateCompaction_NilEnabledIsSkipped(t *testing.T) {
 	}
 }
 
+// validateCompaction の境界値を直接表明する。enabled=true の各フィールドについて
+// 受理側と拒否側の両端を並べ、比較演算子の取り違えを検出できるようにする
+func TestValidateCompaction_Boundaries(t *testing.T) {
+	enabled := true
+	base := func() CompactionConfig {
+		return CompactionConfig{
+			Enabled:             &enabled,
+			ContextWindowTokens: 100,
+			TriggerRatio:        0.5,
+			KeepRecentTurns:     2,
+		}
+	}
+	tests := []struct {
+		name    string
+		mutate  func(*CompactionConfig)
+		wantErr bool
+	}{
+		{"context_window_tokens=1 は受理", func(c *CompactionConfig) { c.ContextWindowTokens = 1 }, false},
+		{"context_window_tokens=0 は拒否", func(c *CompactionConfig) { c.ContextWindowTokens = 0 }, true},
+		{"context_window_tokens=-1 は拒否", func(c *CompactionConfig) { c.ContextWindowTokens = -1 }, true},
+		{"trigger_ratio=1 は受理", func(c *CompactionConfig) { c.TriggerRatio = 1 }, false},
+		{"trigger_ratio=1.0001 は拒否", func(c *CompactionConfig) { c.TriggerRatio = 1.0001 }, true},
+		{"trigger_ratio=0.0001 は受理", func(c *CompactionConfig) { c.TriggerRatio = 0.0001 }, false},
+		{"trigger_ratio=0 は拒否", func(c *CompactionConfig) { c.TriggerRatio = 0 }, true},
+		{"trigger_ratio=-0.1 は拒否", func(c *CompactionConfig) { c.TriggerRatio = -0.1 }, true},
+		{"keep_recent_turns=0 は受理", func(c *CompactionConfig) { c.KeepRecentTurns = 0 }, false},
+		{"keep_recent_turns=-1 は拒否", func(c *CompactionConfig) { c.KeepRecentTurns = -1 }, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := base()
+			tt.mutate(&c)
+			err := validateCompaction(c)
+			if tt.wantErr && err == nil {
+				t.Fatalf("エラー期待だが nil (cfg=%+v)", c)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("nil 期待だが %v (cfg=%+v)", err, c)
+			}
+		})
+	}
+}
+
+// enabled=false のとき値が不正でも検査を通す挙動を表明する
+func TestValidateCompaction_DisabledSkipsValidation(t *testing.T) {
+	disabled := false
+	c := CompactionConfig{Enabled: &disabled, ContextWindowTokens: -5, TriggerRatio: -1, KeepRecentTurns: -3}
+	if err := validateCompaction(c); err != nil {
+		t.Fatalf("enabled=false は検査しない期待 got %v", err)
+	}
+}
+
 func TestApplyCompactionDefaults_KeepsExplicitFalse(t *testing.T) {
 	disabled := false
 	c := CompactionConfig{Enabled: &disabled}
