@@ -312,6 +312,35 @@ func TestReverseSearchKeyIsNotPrintable(t *testing.T) {
 	}
 }
 
+// 検索キーの値そのものを固定する。iota 起点や採番間隔が変わると
+// terminal.go 側の surrogate キー (0xd807 以降) と衝突しうるため、
+// 「surrogate 領域である」ではなく実値で押さえる。
+func TestSearchKeyConstantValues(t *testing.T) {
+	tests := []struct {
+		name string
+		got  rune
+		want rune
+	}{
+		{name: "keyReverseSearch", got: keyReverseSearch, want: 0xd830},
+		{name: "keyAbortSearch", got: keyAbortSearch, want: 0xd831},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("%s = %#x, want %#x", tt.name, tt.got, tt.want)
+			}
+		})
+	}
+	if keyAbortSearch-keyReverseSearch != 1 {
+		t.Errorf("採番間隔 = %d, want 1", keyAbortSearch-keyReverseSearch)
+	}
+	for _, key := range []rune{keyUnknown, keyPasteEnd} {
+		if key == keyReverseSearch || key == keyAbortSearch {
+			t.Errorf("terminal.go のキー %#x と衝突している", key)
+		}
+	}
+}
+
 // paste 中の 0x12 / 0x07 は制御キーではなく本文として行へ入る。
 func TestSearchKeysAreLiteralDuringPaste(t *testing.T) {
 	_, line, _, err := runSearch("\x1b[200~a\x12b\x07c\x1b[201~\r", newStubHistory())

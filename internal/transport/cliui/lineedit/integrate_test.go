@@ -160,6 +160,18 @@ func TestWriteLineCells(t *testing.T) {
 			name: "zero width rune consumes no cell", width: 20, prompt: "", line: "a\x00b",
 			wantOut: "a\x00b", wantX: 2, wantY: 0,
 		},
+		{
+			// エスケープ列はそのまま端末へ流すが桁は進めない。ESC の検出が
+			// 壊れると本文側が escape 扱いになり桁が 0 のままになる。
+			name: "escape sequence around cjk", width: 20, prompt: "", line: "\x1b[31m日本\x1b[0m",
+			wantOut: "\x1b[31m日本\x1b[0m", wantX: 4, wantY: 0,
+		},
+		{
+			// 逆に ESC 以外を escape 開始と誤認すると、本文が桁を進めず
+			// 折返しも起きなくなる。折返し込みで桁計算を押さえる。
+			name: "escape sequence before wrap", width: 5, prompt: "", line: "\x1b[1mab\x1b[0mcde",
+			wantOut: "\x1b[1mab\x1b[0mcde\r\n", wantX: 0, wantY: 1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
