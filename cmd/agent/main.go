@@ -355,6 +355,9 @@ func agentOptionsWithDecider(cfg *config.Config, tools tool.Registry, acc billin
 		approvalOpt, approver = approvalOption(cfg, decider)
 		opts = append(opts, approvalOpt)
 	}
+	if hr := hookRunner(cfg.Hooks); hr != nil {
+		opts = append(opts, agent.WithHooks(hr))
+	}
 	if e := enricher.New(enricher.Config{
 		Enabled:    cfg.Agent.Enricher.Enabled,
 		PromptsDir: cfg.Agent.Enricher.PromptsDir,
@@ -371,6 +374,27 @@ func agentOptionsWithDecider(cfg *config.Config, tools tool.Registry, acc billin
 		opts = append(opts, agent.WithContextEnricher(e))
 	}
 	return opts, approver, nil
+}
+
+// hookRunner hooks が 1 件も無ければ nil を返し、既存動作へ影響させない
+func hookRunner(h config.HooksConfig) *agent.HookRunner {
+	if len(h.PreToolUse) == 0 && len(h.PostToolUse) == 0 {
+		return nil
+	}
+	return agent.NewHookRunner(toHookSpecs(h.PreToolUse), toHookSpecs(h.PostToolUse))
+}
+
+// toHookSpecs config の hook 定義を agent の実行仕様へ変換する
+func toHookSpecs(cs []config.HookConfig) []agent.HookSpec {
+	out := make([]agent.HookSpec, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, agent.HookSpec{
+			Matcher: c.Matcher,
+			Command: c.Command,
+			Timeout: time.Duration(c.TimeoutSeconds) * time.Second,
+		})
+	}
+	return out
 }
 
 // buildScanner cfg.Safety.InputScanner から safety.Scanner を構築する

@@ -83,6 +83,7 @@ type service struct {
 	strategy                Strategy
 	enricher                ContextEnricher
 	toolResultLimitMaxChars int
+	hooks                   *HookRunner
 }
 
 // New Service を構築する。billing.Accumulator は nil 可で、その場合は集計を無効にする
@@ -142,6 +143,11 @@ func WithContextEnricher(e ContextEnricher) Option {
 // 00-overview 3.4 節が凍結しており、applyDefaults が適用する
 func WithToolResultLimit(maxChars int) Option {
 	return func(s *service) { s.toolResultLimitMaxChars = maxChars }
+}
+
+// WithHooks pre/post ツール実行フックを注入する。hr が nil の場合は既存動作 (フック無効)
+func WithHooks(hr *HookRunner) Option {
+	return func(s *service) { s.hooks = hr }
 }
 
 // WithApprovalDecider 承認判定を注入する。required ツールセットと timeout を合わせて指定する

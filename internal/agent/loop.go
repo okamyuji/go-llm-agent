@@ -368,6 +368,13 @@ func (s *service) handleToolCall(ctx context.Context, in Input, st *reactState, 
 	if aerr != nil || !approved {
 		return aerr
 	}
+	// 順序は「承認 → pre hook → 実行 → post hook」。承認を先に置くのは人間による
+	// 拒否が最も安価かつ確実な安全弁であり、拒否された呼び出しに対して副作用のある
+	// 外部コマンドを起動しないため (09 番設計書 3.3 節)
+	if allowed, reason := s.hooks.RunPre(ctx, call.Name, call.Arguments); !allowed {
+		st.appendToolError(out, call, "tool execution blocked by pre_tool_use hook: "+reason)
+		return nil
+	}
 	s.executeAndRecord(ctx, st, t, call, out)
 	return nil
 }
@@ -444,6 +451,10 @@ func (s *service) executeAndRecord(ctx context.Context, st *reactState, t tool.T
 	ok := terr == nil && !res.IsError
 	obs.RecordToolOutcome(execCtx, call.Name, ok, time.Since(start))
 	toolSpan.End()
+	// post hook へは untrusted マーカー付与前・redaction 前の生の結果を渡す。
+	// 監査ログ転送のように生の結果を必要とする用途があり、マーカーと redaction は
+	// モデルへ渡す履歴側の加工だから (09 番設計書 3.3 節)
+	s.hooks.RunPost(ctx, call.Name, call.Arguments, HookResult{IsError: !ok, Content: res.Content, Duration: time.Since(start)})
 	content := res.Content
 	if terr != nil {
 		content = terr.Error()

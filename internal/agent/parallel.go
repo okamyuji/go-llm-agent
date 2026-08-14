@@ -117,6 +117,10 @@ func (s *service) executeOne(ctx context.Context, sessionID string, call llm.Too
 	if !ok {
 		return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: "tool not found: " + call.Name, IsError: true}
 	}
+	// loop.go と同じ順序で「承認 → pre hook → 実行 → post hook」を適用する
+	if allowed, reason := s.hooks.RunPre(ctx, call.Name, call.Arguments); !allowed {
+		return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: "tool execution blocked by pre_tool_use hook: " + reason, IsError: true}
+	}
 	execCtx := context.WithValue(ctx, tool.CorrelationKey(), call.ID)
 	execCtx, span := obs.StartToolSpan(execCtx, call.Name, call.ID)
 	start := time.Now()
@@ -124,6 +128,7 @@ func (s *service) executeOne(ctx context.Context, sessionID string, call llm.Too
 	ok2 := terr == nil && !res.IsError
 	obs.RecordToolOutcome(execCtx, call.Name, ok2, time.Since(start))
 	span.End()
+	s.hooks.RunPost(ctx, call.Name, call.Arguments, HookResult{IsError: !ok2, Content: res.Content, Duration: time.Since(start)})
 	content := res.Content
 	if terr != nil {
 		content = terr.Error()

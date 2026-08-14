@@ -443,3 +443,49 @@ func TestLoad_CompactionDisabledSkipsValidation(t *testing.T) {
 		t.Fatal("enabled=false 期待")
 	}
 }
+
+func TestLoad_HooksValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{"matcher 空", "hooks:\n  pre_tool_use:\n    - command: \"exit 0\"\n", true},
+		{"command 空", "hooks:\n  pre_tool_use:\n    - matcher: \"*\"\n", true},
+		{"timeout 負", "hooks:\n  pre_tool_use:\n    - matcher: \"*\"\n      command: \"exit 0\"\n      timeout_seconds: -1\n", true},
+		{"post も検査する", "hooks:\n  post_tool_use:\n    - matcher: \"*\"\n", true},
+		{"timeout 未指定は許可", "hooks:\n  pre_tool_use:\n    - matcher: \"*\"\n      command: \"exit 0\"\n", false},
+		{"ワイルドカード許可", "hooks:\n  pre_tool_use:\n    - matcher: \"*\"\n      command: \"exit 0\"\n      timeout_seconds: 3\n", false},
+		{"未設定", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("default_model: test/m\n"+tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.Load(path)
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("wantErr=%v got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestLoad_HooksParsed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := "default_model: test/m\nhooks:\n  pre_tool_use:\n    - matcher: \"shell\"\n      command: \"lint\"\n      timeout_seconds: 5\n  post_tool_use:\n    - matcher: \"*\"\n      command: \"audit\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.PreToolUse) != 1 || cfg.Hooks.PreToolUse[0].Matcher != "shell" || cfg.Hooks.PreToolUse[0].TimeoutSeconds != 5 {
+		t.Fatalf("pre hook の解釈期待 got %+v", cfg.Hooks.PreToolUse)
+	}
+	if len(cfg.Hooks.PostToolUse) != 1 || cfg.Hooks.PostToolUse[0].Command != "audit" {
+		t.Fatalf("post hook の解釈期待 got %+v", cfg.Hooks.PostToolUse)
+	}
+}

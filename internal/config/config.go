@@ -22,6 +22,23 @@ type Config struct {
 	Logging       LoggingConfig             `yaml:"logging"`
 	Observability ObservabilityConfig       `yaml:"observability"`
 	Safety        SafetyConfig              `yaml:"safety"`
+	Hooks         HooksConfig               `yaml:"hooks"`
+}
+
+// HooksConfig ツール実行前後に外部コマンドを起動するライフサイクルフックの設定
+type HooksConfig struct {
+	PreToolUse  []HookConfig `yaml:"pre_tool_use"`
+	PostToolUse []HookConfig `yaml:"post_tool_use"`
+}
+
+// HookConfig 1 件の hook 定義
+// Matcher ツール名の完全一致、または任意ツールに一致する "*"
+// Command sh -c で実行するシェルコマンド文字列
+// TimeoutSeconds 0 または未指定なら既定 10 秒
+type HookConfig struct {
+	Matcher        string `yaml:"matcher"`
+	Command        string `yaml:"command"`
+	TimeoutSeconds int    `yaml:"timeout_seconds"`
 }
 
 // SafetyConfig 入出力フィルタとリダクタの設定
@@ -379,6 +396,9 @@ func Load(path string) (*Config, error) {
 	if err := validateCompaction(cfg.Agent.Compaction); err != nil {
 		return nil, err
 	}
+	if err := validateHooks(cfg.Hooks); err != nil {
+		return nil, err
+	}
 	if err := resolveSystemPromptFile(&cfg, path); err != nil {
 		return nil, err
 	}
@@ -501,6 +521,26 @@ func validateCompaction(c CompactionConfig) error {
 func validateToolResultLimit(c ToolResultLimitConfig) error {
 	if c.MaxChars < -1 {
 		return fmt.Errorf("config: agent.tool_result_limit.max_chars は -1 (無効) または 0 以上 (got %d)", c.MaxChars)
+	}
+	return nil
+}
+
+// validateHooks 起動時に hooks 設定の妥当性を検査する。
+// command 空文字は設定ミスとして起動時に fail-fast させる。timeout_seconds は
+// 0 (既定値を使う) を許可し、負数のみ拒否する
+func validateHooks(h HooksConfig) error {
+	for _, list := range [][]HookConfig{h.PreToolUse, h.PostToolUse} {
+		for _, hk := range list {
+			if hk.Matcher == "" {
+				return fmt.Errorf("config: hooks の matcher は空にできません")
+			}
+			if hk.Command == "" {
+				return fmt.Errorf("config: hooks.command は空にできません (matcher=%q)", hk.Matcher)
+			}
+			if hk.TimeoutSeconds < 0 {
+				return fmt.Errorf("config: hooks.timeout_seconds は 0 以上(0=既定10秒) (matcher=%q, got %d)", hk.Matcher, hk.TimeoutSeconds)
+			}
+		}
 	}
 	return nil
 }

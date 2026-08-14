@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/config"
@@ -285,5 +286,43 @@ func TestAgentOptions_InvalidRedactorPatternErrors(t *testing.T) {
 	cfg.Safety.OutputRedactor.Rules = []config.SafetyOutputRedactorRule{{ID: "bad", Regex: "(", Replacement: "x"}}
 	if _, _, err := agentOptionsWithDecider(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil); err == nil {
 		t.Fatal("不正な正規表現はエラー期待")
+	}
+}
+
+func TestHookRunner_NilWhenNoHooks(t *testing.T) {
+	if hr := hookRunner(config.HooksConfig{}); hr != nil {
+		t.Fatal("hooks 未設定なら nil 期待")
+	}
+}
+
+func TestHookRunner_BuiltFromConfig(t *testing.T) {
+	h := config.HooksConfig{
+		PreToolUse:  []config.HookConfig{{Matcher: "shell", Command: "exit 0", TimeoutSeconds: 3}},
+		PostToolUse: []config.HookConfig{{Matcher: "*", Command: "audit"}},
+	}
+	if hr := hookRunner(h); hr == nil {
+		t.Fatal("hooks 設定時は HookRunner 期待")
+	}
+}
+
+func TestToHookSpecs_ConvertsTimeout(t *testing.T) {
+	got := toHookSpecs([]config.HookConfig{{Matcher: "*", Command: "c", TimeoutSeconds: 7}})
+	if len(got) != 1 || got[0].Timeout != 7*time.Second || got[0].Matcher != "*" || got[0].Command != "c" {
+		t.Fatalf("変換結果期待 got %+v", got)
+	}
+	if len(toHookSpecs(nil)) != 0 {
+		t.Fatal("空入力は空出力期待")
+	}
+}
+
+func TestAgentOptions_HooksOptionAdded(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Hooks.PreToolUse = []config.HookConfig{{Matcher: "*", Command: "exit 0"}}
+	opts, _, err := agentOptionsWithDecider(cfg, tool.NewRegistry(nil, nil), nil, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(opts) != baselineOptionCount(t)+1 {
+		t.Fatalf("hooks オプションが 1 件増える期待 got %d", len(opts))
 	}
 }
