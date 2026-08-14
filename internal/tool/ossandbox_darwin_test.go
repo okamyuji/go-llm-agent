@@ -175,7 +175,7 @@ func TestDarwinRealBehavior_WriteInsideAllowPathsSucceeds(t *testing.T) {
 }
 
 func TestDarwinRealBehavior_MktempDirIsWritableViaAllowPaths(t *testing.T) {
-	mkOut, mkErr := exec.Command("mktemp", "-d").CombinedOutput()
+	mkOut, mkErr := exec.CommandContext(context.Background(), "mktemp", "-d").CombinedOutput()
 	if mkErr != nil {
 		t.Fatalf("mktemp -d 失敗: %v (%s)", mkErr, mkOut)
 	}
