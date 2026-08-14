@@ -21,7 +21,9 @@ git diff --unified=0 "$BASE"...HEAD -- '*.go' | awk '
     len = (a[2] == "" ? 1 : a[2] + 0);
     if (file !~ /_test\.go$/) for (i = 0; i < len; i++) print file ":" start + i;
   }
-' | sort -u > "$TMP/changed_lines"
+' | grep -v 'lineedit/terminal\.go:' | sort -u > "$TMP/changed_lines"
+# lineedit/terminal.go は x/term フォーク基底 (第三者由来) のためゲート対象外
+# (docs/specs/2026-08-13-improvements/00-overview.md 6 章の凍結事項)
 
 if [ ! -s "$TMP/changed_lines" ]; then
   echo "no changed lines"
