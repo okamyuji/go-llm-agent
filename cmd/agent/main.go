@@ -323,20 +323,11 @@ func agentOptionsWithDecider(cfg *config.Config, tools tool.Registry, acc billin
 	if cfg.Agent.ToolResultLimit.MaxChars > 0 {
 		opts = append(opts, agent.WithToolResultLimit(cfg.Agent.ToolResultLimit.MaxChars))
 	}
-	sc, err := buildScanner(cfg)
+	safety, err := safetyOptions(cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("build safety scanner: %w", err)
+		return nil, nil, err
 	}
-	if sc != nil {
-		opts = append(opts, agent.WithScanner(sc))
-	}
-	rd, err := buildRedactor(cfg)
-	if err != nil {
-		return nil, nil, fmt.Errorf("build safety redactor: %w", err)
-	}
-	if rd != nil {
-		opts = append(opts, agent.WithRedactor(rd))
-	}
+	opts = append(opts, safety...)
 	if cfg.Agent.Strategy != "" {
 		if st, ok := agent.NewStrategy(
 			cfg.Agent.Strategy,
@@ -395,6 +386,26 @@ func toHookSpecs(cs []config.HookConfig) []agent.HookSpec {
 		})
 	}
 	return out
+}
+
+// safetyOptions 入力スキャナと出力リダクタのオプションを組み立てる
+func safetyOptions(cfg *config.Config) ([]agent.Option, error) {
+	var opts []agent.Option
+	sc, err := buildScanner(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build safety scanner: %w", err)
+	}
+	if sc != nil {
+		opts = append(opts, agent.WithScanner(sc))
+	}
+	rd, err := buildRedactor(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build safety redactor: %w", err)
+	}
+	if rd != nil {
+		opts = append(opts, agent.WithRedactor(rd))
+	}
+	return opts, nil
 }
 
 // buildScanner cfg.Safety.InputScanner から safety.Scanner を構築する
