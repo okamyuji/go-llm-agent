@@ -152,22 +152,10 @@ func (t *ShellTool) Execute(ctx context.Context, raw json.RawMessage) (Result, e
 	defer cancel()
 	start := time.Now()
 
-	var cmd *exec.Cmd
-	if osSandboxEnabled(t.cfg.OSSandbox) {
-		// struct literal で組み立てた ShellTool でも nil panic にしないための保険。
-		// NewShell 経由なら常に非 nil であり、この分岐は踏まない
-		wrap := t.wrapFn
-		if wrap == nil {
-			wrap = wrapWithOSSandbox
-		}
-		sandboxed, werr := wrap(cctx, t.fsAllowPaths, resolved, a.Args)
-		if werr != nil {
-			t.audit(ctx, base, a.Args, 0, false, "os_sandbox_wrap_failed")
-			return Result{IsError: true, Content: fmt.Sprintf("shell: %v", werr)}, nil
-		}
-		cmd = sandboxed
-	} else {
-		cmd = exec.CommandContext(cctx, resolved, a.Args...)
+	cmd, werr := t.buildCommand(cctx, resolved, a.Args)
+	if werr != nil {
+		t.audit(ctx, base, a.Args, 0, false, "os_sandbox_wrap_failed")
+		return Result{IsError: true, Content: fmt.Sprintf("shell: %v", werr)}, nil
 	}
 	out, runErr := cmd.CombinedOutput()
 	elapsed := time.Since(start)
@@ -179,6 +167,24 @@ func (t *ShellTool) Execute(ctx context.Context, raw json.RawMessage) (Result, e
 		return Result{IsError: true, Content: fmt.Sprintf("shell: %v\n%s", runErr, string(out))}, nil
 	}
 	return Result{Content: string(out)}, nil
+}
+
+// buildCommand os_sandbox の実効設定に従い実行コマンドを組み立てる。
+// os_sandbox が無効なら素の exec.CommandContext を、有効なら t.wrapFn (既定
+// wrapWithOSSandbox) で sandbox-exec ラップしたコマンドを返す。ラップが
+// 失敗した場合はエラーを返し、呼び出し側はコマンドを実行しない
+// (フェイルオープン禁止、08-os-sandbox.md 2節)
+func (t *ShellTool) buildCommand(ctx context.Context, resolved string, args []string) (*exec.Cmd, error) {
+	if !osSandboxEnabled(t.cfg.OSSandbox) {
+		return exec.CommandContext(ctx, resolved, args...), nil
+	}
+	// struct literal で組み立てた ShellTool でも nil panic にしないための保険。
+	// NewShell 経由なら常に非 nil であり、この分岐は踏まない
+	wrap := t.wrapFn
+	if wrap == nil {
+		wrap = wrapWithOSSandbox
+	}
+	return wrap(ctx, t.fsAllowPaths, resolved, args)
 }
 
 func (t *ShellTool) audit(ctx context.Context, binary string, args []string, elapsed time.Duration, ok bool, reason string) {
