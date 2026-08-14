@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -489,6 +491,199 @@ func TestRepl_ClearCommandResetsHistory(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "履歴") {
 		t.Errorf("clear feedback missing: %q", out.String())
+	}
+}
+
+// TestRepl_SessionsDirRecordsUserAndAssistant SessionsDir を設定すると 1 ターンで
+// user/assistant の 2 行が JSONL に記録される
+func TestRepl_SessionsDirRecordsUserAndAssistant(t *testing.T) {
+	svc := &inputCapturingSvc{}
+	dir := t.TempDir()
+	in := strings.NewReader("q1\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true, SessionsDir: dir})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir err=%v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("want exactly 1 session file, got %d", len(entries))
+	}
+	b, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile err=%v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 recorded lines (user+assistant), got %d: %q", len(lines), string(b))
+	}
+}
+
+// TestRepl_SessionsDirUnsetRecordsNothing SessionsDir 未設定 (既存デフォルト) では
+// ファイルが一切作られない
+func TestRepl_SessionsDirUnsetRecordsNothing(t *testing.T) {
+	svc := &inputCapturingSvc{}
+	dir := t.TempDir()
+	in := strings.NewReader("q1\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir err=%v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("want no files created, got %d", len(entries))
+	}
+}
+
+// TestRepl_InitialHistoryIsSeenByFirstTurn InitialHistory に設定したメッセージが
+// 最初のターンで agent.Input.Messages の先頭に含まれる
+func TestRepl_InitialHistoryIsSeenByFirstTurn(t *testing.T) {
+	svc := &inputCapturingSvc{}
+	initial := []llm.Message{
+		{Role: llm.RoleUser, Content: "past1"},
+		{Role: llm.RoleAssistant, Content: "past2"},
+	}
+	in := strings.NewReader("q1\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true, InitialHistory: initial})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	if len(svc.inputs) != 1 {
+		t.Fatalf("inputs=%d, want 1", len(svc.inputs))
+	}
+	got := svc.inputs[0].Messages
+	if len(got) < 3 || got[0].Content != "past1" || got[1].Content != "past2" {
+		t.Fatalf("Messages=%+v, want InitialHistory を先頭に含む", got)
+	}
+}
+
+// TestRepl_SessionIDIsPassedToAgentInput SessionID を明示指定すると
+// agent.Input.SessionID がその値と一致する
+func TestRepl_SessionIDIsPassedToAgentInput(t *testing.T) {
+	svc := &inputCapturingSvc{}
+	in := strings.NewReader("q1\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true, SessionID: "fixed-session-id"})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	if len(svc.inputs) != 1 || svc.inputs[0].SessionID != "fixed-session-id" {
+		t.Fatalf("inputs=%+v", svc.inputs)
+	}
+}
+
+// TestRepl_ClearRotatesSessionFile /clear 後の新ターンは rotate 後の新しいファイルにのみ
+// 記録され、rotate 前のファイルの内容は変わらない
+func TestRepl_ClearRotatesSessionFile(t *testing.T) {
+	svc := &inputCapturingSvc{}
+	dir := t.TempDir()
+	in := strings.NewReader("q1\n/clear\nq2\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true, SessionsDir: dir})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir err=%v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("want 2 session files after /clear rotate, got %d", len(entries))
+	}
+	for _, e := range entries {
+		b, rerr := os.ReadFile(filepath.Join(dir, e.Name()))
+		if rerr != nil {
+			t.Fatalf("ReadFile err=%v", rerr)
+		}
+		content := string(b)
+		if strings.Contains(content, "q1") && strings.Contains(content, "q2") {
+			t.Fatalf("file %s contains both turns; rotate should isolate them: %q", e.Name(), content)
+		}
+	}
+}
+
+// TestRepl_ClearDiscardsInitialHistoryFromRecording /clear は InitialHistory 由来の
+// メッセージも破棄する。以後のターンで agent.Input.Messages にそれらが含まれない
+func TestRepl_ClearDiscardsInitialHistoryFromRecording(t *testing.T) {
+	svc := &inputCapturingSvc{}
+	initial := []llm.Message{{Role: llm.RoleUser, Content: "past1"}, {Role: llm.RoleAssistant, Content: "past2"}}
+	in := strings.NewReader("/clear\nq1\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true, InitialHistory: initial})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	if len(svc.inputs) != 1 {
+		t.Fatalf("inputs=%d, want 1", len(svc.inputs))
+	}
+	for _, m := range svc.inputs[0].Messages {
+		if m.Content == "past1" || m.Content == "past2" {
+			t.Fatalf("InitialHistory leaked after /clear: %+v", svc.inputs[0].Messages)
+		}
+	}
+}
+
+// TestRepl_InterruptedTurnLeavesNoUserLineInSessionFile ターンが中断され
+// turnMessages が空になる場合、JSONL に user 行が 1 件も残らない
+func TestRepl_InterruptedTurnLeavesNoUserLineInSessionFile(t *testing.T) {
+	svc := scriptedSvc{events: []agent.Event{
+		{Kind: agent.EventError, Err: context.Canceled},
+	}}
+	dir := t.TempDir()
+	in := strings.NewReader("q1\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true, SessionsDir: dir})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir err=%v", err)
+	}
+	for _, e := range entries {
+		b, rerr := os.ReadFile(filepath.Join(dir, e.Name()))
+		if rerr != nil {
+			t.Fatalf("ReadFile err=%v", rerr)
+		}
+		if strings.Contains(string(b), "q1") {
+			t.Fatalf("中断されたターンの user 行が記録されている: %s", string(b))
+		}
+	}
+}
+
+// TestRepl_SessionWriteFailureShowsErrorAndContinues 書込み不可なディレクトリでは
+// ターンは正常に完了し、出力に記録失敗のエラーが含まれる (Unix 環境限定)
+func TestRepl_SessionWriteFailureShowsErrorAndContinues(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root では chmod 0o000 が効かない")
+	}
+	svc := &inputCapturingSvc{}
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "readonly")
+	if err := os.Mkdir(dir, 0o500); err != nil {
+		t.Fatalf("mkdir err=%v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	sessionsDir := filepath.Join(dir, "sub")
+	in := strings.NewReader("q1\n/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true, SessionsDir: sessionsDir})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	if len(svc.inputs) != 1 {
+		t.Fatalf("ターンは正常完了するはず: inputs=%d", len(svc.inputs))
+	}
+	if !strings.Contains(out.String(), "[session] 記録に失敗しました") {
+		t.Fatalf("記録失敗メッセージが出力に含まれること: %q", out.String())
 	}
 }
 

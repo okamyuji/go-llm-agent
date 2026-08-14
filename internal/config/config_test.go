@@ -522,6 +522,38 @@ func TestLoad_ShellOSSandboxExplicitOffKept(t *testing.T) {
 	}
 }
 
+func TestLoad_StorageChatSessionsDirParsed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\nstorage:\n  sessions_dir: /tmp/s\n  chat_sessions_dir: /tmp/s/chat\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Storage.ChatSessionsDir != "/tmp/s/chat" {
+		t.Fatalf("got %q", cfg.Storage.ChatSessionsDir)
+	}
+}
+
+func TestLoad_StorageChatSessionsDirDefaultsToEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Storage.ChatSessionsDir != "" {
+		t.Fatalf("got %q, want empty (applyDefaults はこのキーに触れない)", cfg.Storage.ChatSessionsDir)
+	}
+}
+
 func TestLoad_ShellOSSandboxRejectsInvalidValue(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

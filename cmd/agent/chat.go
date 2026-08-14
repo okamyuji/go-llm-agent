@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ type chatSessionParams struct {
 	ConfigPath string
 	Model      string
 	NoSpinner  bool
+	Resume     bool
 	In         io.Reader
 	Out        io.Writer
 }
@@ -43,6 +45,19 @@ func runChatSession(ctx context.Context, p chatSessionParams) error {
 		return optsErr
 	}
 	svc := agent.New(reg, tools, opts...)
+
+	outW := p.Out
+	if outW == nil {
+		outW = os.Stdout
+	}
+	chatDir := chatSessionsDir(cfg)
+	sessionID, initialHistory, rerr := cliui.ResumeLatestSession(chatDir, p.Resume,
+		func(msg string) { fmt.Fprintln(outW, msg) },
+		func(msg string) { fmt.Fprintln(os.Stderr, msg) })
+	if rerr != nil {
+		return rerr
+	}
+
 	r := cliui.NewREPL(svc, cliui.Options{
 		Model:            m,
 		SystemPrompt:     cfg.Agent.SystemPrompt,
@@ -60,8 +75,18 @@ func runChatSession(ctx context.Context, p chatSessionParams) error {
 			TriggerRatio:        cfg.Agent.Compaction.TriggerRatio,
 			KeepRecentTurns:     cfg.Agent.Compaction.KeepRecentTurns,
 		},
+		SessionsDir:    chatDir,
+		SessionID:      sessionID,
+		InitialHistory: initialHistory,
 	})
 	return r.Run(ctx)
+}
+
+// chatSessionsDir cfg から chat セッションの保存先を解決する。
+// expand は main パッケージのヘルパーのため、パス解決の本体は
+// cliui.ChatSessionsDir に置き、ここは expand を掛けて渡すだけにする
+func chatSessionsDir(cfg *config.Config) string {
+	return cliui.ChatSessionsDir(expand(cfg.Storage.ChatSessionsDir), expand(cfg.Storage.SessionsDir))
 }
 
 // chatApprovalWiring 承認が必要な構成のときだけ対話プロンプタを生成する。

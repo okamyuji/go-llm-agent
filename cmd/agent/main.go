@@ -496,6 +496,7 @@ func cmdChat(ctx context.Context, args []string) error {
 	configPath := fs.String("config", "config.yaml", "config file path")
 	model := fs.String("model", "", "model id (provider/name)")
 	noSpinner := fs.Bool("no-spinner", false, "disable progress indicator and turn summary")
+	resume := fs.Bool("resume", false, "resume the most recent chat session")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -503,6 +504,7 @@ func cmdChat(ctx context.Context, args []string) error {
 		ConfigPath: *configPath,
 		Model:      *model,
 		NoSpinner:  *noSpinner,
+		Resume:     *resume,
 	})
 }
 

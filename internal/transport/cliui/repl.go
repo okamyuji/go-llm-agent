@@ -34,6 +34,14 @@ type Options struct {
 	Registry llm.Registry
 	// Compaction agent.compaction の値をそのまま運ぶ
 	Compaction CompactionOptions
+	// SessionsDir チャットセッション JSONL の保存先ディレクトリ。
+	// 空文字列なら記録・再開のいずれも行わない (既存の RunOneShot 等は未設定のままでよい)
+	SessionsDir string
+	// SessionID 開始時に使うセッション ID。空文字列なら新規 ID を生成する。
+	// -resume 時は cmd/agent が読み込んだ最新セッションの ID を渡す
+	SessionID string
+	// InitialHistory -resume で復元した既存メッセージ列。空なら通常の新規セッション
+	InitialHistory []llm.Message
 }
 
 // CompactionOptions agent.compaction の値をそのまま運ぶ。
@@ -63,6 +71,9 @@ type REPL struct {
 	sp  *Spinner
 	// model 実行時のモデル文字列。圧縮の要約呼び出しもこの値で解決する
 	model string
+	// sessionID 現在のアクティブなセッション ID。runTurn が agent.Input.SessionID
+	// として使う (billing のセッション単位集計とキーを合わせるため)
+	sessionID string
 }
 
 // NewREPL Service とオプションから REPL を生成する
@@ -95,7 +106,9 @@ func (r *REPL) Run(ctx context.Context) error {
 
 	pump := newBytePump(r.in)
 	r.model = r.opt.Model
-	st := &replState{history: []llm.Message{}}
+	st := &replState{history: append([]llm.Message{}, r.opt.InitialHistory...)}
+
+	rec := r.newSessionRecorder()
 
 	out, editor, closeEditor := r.setupEditor(ctx, pump)
 	defer closeEditor()
@@ -114,21 +127,28 @@ func (r *REPL) Run(ctx context.Context) error {
 		// タイプミス (/tool on 等) を質問として送ると、モデルが架空のツール実行計画
 		// テキストを回答して履歴が汚染され、以後の回答がその書式を真似続けるため。
 		if strings.HasPrefix(line, "/") {
-			if r.handleSlashCommand(ctx, pump, line, st, out) {
+			if r.handleSlashCommand(ctx, pump, line, st, out, rec) {
 				return nil
 			}
 			continue
 		}
-		st.history = append(st.history, llm.Message{Role: llm.RoleUser, Content: line})
+		userMsg := llm.Message{Role: llm.RoleUser, Content: line}
+		st.history = append(st.history, userMsg)
 
 		turnMessages, quit, usage := r.runTurn(ctx, pump, append([]llm.Message{}, st.history...), st.toolChoice)
 		if len(turnMessages) == 0 {
 			// 中断やエラーで何も生成されなかったターンは user 入力ごと巻き戻す。
 			// content 空の assistant や user 連続を履歴に残すと、以後の全リクエストが
-			// llama-server の履歴検証 (400) で失敗し続けるため。
+			// llama-server の履歴検証 (400) で失敗し続けるため。記録もこのターン
+			// 全体について行わない (巻き戻された user 行が JSONL に孤立して残ると、
+			// 次回 -resume でその行が新規発話と連続し、同じ 400 連鎖に載るため)
 			st.history = st.history[:len(st.history)-1]
 		} else {
 			st.history = append(st.history, turnMessages...)
+			r.recordSession(rec, out, userMsg)
+			for _, m := range turnMessages {
+				r.recordSession(rec, out, m)
+			}
 		}
 		if quit {
 			return nil
@@ -140,6 +160,33 @@ func (r *REPL) Run(ctx context.Context) error {
 		if r.shouldCompact(usage.LastIn) {
 			st.history = r.compactHistory(ctx, pump, st.history, out)
 		}
+	}
+}
+
+// newSessionRecorder r.opt.SessionsDir が設定されていれば sessionWriter を
+// 構築し r.sessionID を初期化する。空文字列 (記録無効) なら nil を返す
+func (r *REPL) newSessionRecorder() *sessionWriter {
+	sessionID := r.opt.SessionID
+	if r.opt.SessionsDir == "" {
+		r.sessionID = sessionID
+		return nil
+	}
+	if sessionID == "" {
+		sessionID = newSessionID(r.opt.SessionsDir)
+	}
+	r.sessionID = sessionID
+	return newSessionWriter(r.opt.SessionsDir, sessionID)
+}
+
+// recordSession rec が nil でなければ m を記録する。記録に失敗しても
+// ターンの実行は継続し、out へエラーを表示するだけに留める
+// (ディスク容量不足等でチャット自体が使えなくなることを避けるため)
+func (r *REPL) recordSession(rec *sessionWriter, out io.Writer, m llm.Message) {
+	if rec == nil {
+		return
+	}
+	if err := rec.append(m); err != nil {
+		fmt.Fprintf(out, "[session] 記録に失敗しました: %v\n", err)
 	}
 }
 
@@ -221,16 +268,24 @@ func (r *REPL) endSession(ctx context.Context, err error, out io.Writer) error {
 }
 
 // handleSlashCommand スラッシュコマンドを処理する。戻り値 true はセッション終了を意味する
-func (r *REPL) handleSlashCommand(ctx context.Context, pump *bytePump, line string, st *replState, out io.Writer) bool {
+func (r *REPL) handleSlashCommand(ctx context.Context, pump *bytePump, line string, st *replState, out io.Writer, rec *sessionWriter) bool {
 	name, arg, _ := strings.Cut(line, " ")
 	arg = strings.TrimSpace(arg)
 	switch name {
 	case "/quit", "/exit":
 		return true
 	case "/clear":
-		// 汚染された履歴からセッション再起動なしで復旧する手段
+		// 汚染された履歴からセッション再起動なしで復旧する手段。-resume で復元した
+		// InitialHistory 由来のメッセージも破棄対象に含める (残す分岐は設けない。
+		// /clear は「ここから新しい会話を始める」という単一の意味を持つ)
 		st.history = st.history[:0]
-		fmt.Fprintln(out, "[clear] 会話履歴を破棄しました")
+		if rec != nil {
+			newID := rec.rotate()
+			r.sessionID = newID
+			fmt.Fprintf(out, "[clear] 会話履歴を破棄しました。新しいセッション %s を開始します\n", newID)
+		} else {
+			fmt.Fprintln(out, "[clear] 会話履歴を破棄しました")
+		}
 	case "/compact":
 		if r.opt.Registry == nil {
 			fmt.Fprintln(out, "[compact] Registry が未設定のため圧縮できません")
@@ -288,6 +343,7 @@ func (r *REPL) runTurn(ctx context.Context, pump *bytePump, hist []llm.Message, 
 			Messages:     hist,
 			MaxToolHops:  r.opt.MaxToolHops,
 			ToolChoice:   toolChoice,
+			SessionID:    r.sessionID,
 		}, ch); err != nil {
 			ch <- agent.Event{Kind: agent.EventError, Err: err}
 		}

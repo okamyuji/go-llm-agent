@@ -352,7 +352,11 @@ type ServerCORS struct {
 // StrictNotesInit true のとき memory.NewFileNoteStore 失敗を起動エラーに昇格させる
 // 既定 (false) では degraded mode (note_add / note_search 無効) で agent を継続させる
 type StorageConfig struct {
-	SessionsDir     string `yaml:"sessions_dir"`
+	SessionsDir string `yaml:"sessions_dir"`
+	// ChatSessionsDir chat セッション JSONL の保存先。空文字なら
+	// <sessions_dir>/chat を使う。この解決は cliui.ChatSessionsDir だけが行う
+	// (applyDefaults はこのキーに触れない。00-overview 3.4 節)
+	ChatSessionsDir string `yaml:"chat_sessions_dir"`
 	NotesPath       string `yaml:"notes_path"`
 	StrictNotesInit bool   `yaml:"strict_notes_init"`
 }

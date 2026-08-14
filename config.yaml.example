@@ -250,6 +250,9 @@ storage:
   sessions_dir: ~/.local/state/go-llm-agent/sessions
   # ノート保存先 JSONL。空のときは sessions_dir/notes.jsonl を使う。
   notes_path: ""
+  # chat セッション JSONL (agent chat -resume で読む) の保存先。
+  # 空文字がデフォルトで、その場合は <sessions_dir>/chat を使う。
+  chat_sessions_dir: ""
 
 logging:
   format: text
