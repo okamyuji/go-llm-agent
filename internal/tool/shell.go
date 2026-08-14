@@ -30,16 +30,22 @@ var DefaultShellArgDenyPatterns = []string{
 	`\bbash\s+-c\b`,
 }
 
+// wrapCmdFunc sandbox-exec でコマンドをラップする関数の型。
+// ShellTool のフィールドとして保持し、テストから失敗経路を差し替えられるようにする
+type wrapCmdFunc func(ctx context.Context, allowPaths []string, name string, args []string) (*exec.Cmd, error)
+
 // ShellTool shell ツールの実装
 type ShellTool struct {
-	cfg     config.ShellToolConfig
-	logger  *slog.Logger
-	allow   map[string]struct{}
-	argDeny []*regexp.Regexp
+	cfg          config.ShellToolConfig
+	logger       *slog.Logger
+	allow        map[string]struct{}
+	argDeny      []*regexp.Regexp
+	fsAllowPaths []string
+	wrapFn       wrapCmdFunc
 }
 
-// NewShell config と logger を受け取り ShellTool を生成する
-func NewShell(cfg config.ShellToolConfig, logger *slog.Logger) *ShellTool {
+// NewShell config と logger と fs allow_paths を受け取り ShellTool を生成する
+func NewShell(cfg config.ShellToolConfig, logger *slog.Logger, fsAllowPaths []string) *ShellTool {
 	if cfg.TimeoutSeconds <= 0 {
 		cfg.TimeoutSeconds = 30
 	}
@@ -59,7 +65,26 @@ func NewShell(cfg config.ShellToolConfig, logger *slog.Logger) *ShellTool {
 			denies = append(denies, re)
 		}
 	}
-	return &ShellTool{cfg: cfg, logger: logger, allow: allow, argDeny: denies}
+	return &ShellTool{
+		cfg: cfg, logger: logger, allow: allow, argDeny: denies,
+		fsAllowPaths: fsAllowPaths, wrapFn: wrapWithOSSandbox,
+	}
+}
+
+// osSandboxEnabled 実行時プラットフォームと config 値から os_sandbox の実効有効性を判定する。
+// sandbox-exec の存在確認はここで行わない。存在確認を有効性判定に含めると、
+// sandbox-exec 不在の darwin で false となり、ラップなしでコマンドが実行される
+// フェイルオープンになる (08-os-sandbox.md 2 節がこれを禁止している)。不在の検出は
+// wrapWithOSSandbox のエラー経路に一本化し、そこで IsError を返す
+func osSandboxEnabled(setting string) bool {
+	switch setting {
+	case "off":
+		return false
+	case "auto":
+		return osSandboxPlatformSupported()
+	default:
+		return false
+	}
 }
 
 // Spec ツール定義を返す
@@ -126,7 +151,24 @@ func (t *ShellTool) Execute(ctx context.Context, raw json.RawMessage) (Result, e
 	cctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 	start := time.Now()
-	cmd := exec.CommandContext(cctx, resolved, a.Args...)
+
+	var cmd *exec.Cmd
+	if osSandboxEnabled(t.cfg.OSSandbox) {
+		// struct literal で組み立てた ShellTool でも nil panic にしないための保険。
+		// NewShell 経由なら常に非 nil であり、この分岐は踏まない
+		wrap := t.wrapFn
+		if wrap == nil {
+			wrap = wrapWithOSSandbox
+		}
+		sandboxed, werr := wrap(cctx, t.fsAllowPaths, resolved, a.Args)
+		if werr != nil {
+			t.audit(ctx, base, a.Args, 0, false, "os_sandbox_wrap_failed")
+			return Result{IsError: true, Content: fmt.Sprintf("shell: %v", werr)}, nil
+		}
+		cmd = sandboxed
+	} else {
+		cmd = exec.CommandContext(cctx, resolved, a.Args...)
+	}
 	out, runErr := cmd.CombinedOutput()
 	elapsed := time.Since(start)
 	t.audit(ctx, base, a.Args, elapsed, runErr == nil, fmt.Sprintf("exit=%v", runErr))

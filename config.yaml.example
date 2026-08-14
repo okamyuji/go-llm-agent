@@ -188,6 +188,9 @@ tools:
     # 既定の deny 正規表現 (`config --global`, `bash -c`, `core.sshCommand`, `env -w`,
     # `install`, `--exec`, `-c <code>` 等) は常に有効。追加で deny したいパターンを記述する。
     arg_deny_patterns: []
+    # sandbox-exec (Seatbelt) による OS 層の書込み制限。auto|off の 2 値。
+    # auto は darwin 上でのみ有効化され、他 OS では no-op と等価。
+    os_sandbox: auto
   http_fetch:
     deny_private_networks: true
     timeout_seconds: 15

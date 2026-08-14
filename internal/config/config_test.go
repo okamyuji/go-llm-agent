@@ -489,3 +489,47 @@ func TestLoad_HooksParsed(t *testing.T) {
 		t.Fatalf("post hook の解釈期待 got %+v", cfg.Hooks.PostToolUse)
 	}
 }
+
+func TestLoad_ShellOSSandboxDefaultsToAuto(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Tools.Shell.OSSandbox != "auto" {
+		t.Fatalf("got %q, want \"auto\" (coded default)", cfg.Tools.Shell.OSSandbox)
+	}
+}
+
+func TestLoad_ShellOSSandboxExplicitOffKept(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\ntools:\n  shell:\n    os_sandbox: off\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Tools.Shell.OSSandbox != "off" {
+		t.Fatalf("got %q, want \"off\" (explicit value not overwritten)", cfg.Tools.Shell.OSSandbox)
+	}
+}
+
+func TestLoad_ShellOSSandboxRejectsInvalidValue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\ntools:\n  shell:\n    os_sandbox: yolo\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "os_sandbox") {
+		t.Fatalf("want os_sandbox error, got %v", err)
+	}
+}

@@ -262,7 +262,7 @@ func loadDeps(ctx context.Context, configPath string, isServe bool) (*config.Con
 		tool.NewFSReadWithLogger(sb, cfg.Tools.FS.MaxReadBytes, logger, reg),
 		tool.NewFSWriteWithLogger(sb, logger, reg),
 		tool.NewFSEdit(sb, reg, logger),
-		tool.NewShell(cfg.Tools.Shell, logger),
+		tool.NewShell(cfg.Tools.Shell, logger, cfg.Tools.FS.AllowPaths),
 		tool.NewHTTPFetchWithLogger(cfg.Tools.HTTPFetch, logger),
 		tool.NewSearchFiles(sb, cfg.Tools.SearchFiles),
 		tool.NewWebSearch(cfg.Tools.WebSearch),

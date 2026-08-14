@@ -19,7 +19,7 @@ func newShell(t *testing.T, allow []string) *tool.ShellTool {
 	return tool.NewShell(config.ShellToolConfig{
 		TimeoutSeconds: 5, MaxTimeoutSeconds: 5,
 		AllowBinaries: allow,
-	}, logger)
+	}, logger, nil)
 }
 
 func TestShell_AllowedCommandRuns(t *testing.T) {
@@ -90,7 +90,7 @@ func TestShell_ArgDeny_GoEnvWrite(t *testing.T) {
 func TestShell_AuditLog(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	sh := tool.NewShell(config.ShellToolConfig{TimeoutSeconds: 5, MaxTimeoutSeconds: 5, AllowBinaries: []string{"echo"}}, logger)
+	sh := tool.NewShell(config.ShellToolConfig{TimeoutSeconds: 5, MaxTimeoutSeconds: 5, AllowBinaries: []string{"echo"}}, logger, nil)
 	_, _ = sh.Execute(context.Background(), json.RawMessage(`{"command":"echo","args":["audit-test"]}`))
 	if !strings.Contains(buf.String(), `tool=shell`) {
 		t.Fatalf("audit ログに tool=shell が含まれること: %s", buf.String())

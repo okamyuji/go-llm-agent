@@ -287,6 +287,7 @@ type ShellToolConfig struct {
 	MaxTimeoutSeconds int      `yaml:"max_timeout_seconds"`
 	AllowBinaries     []string `yaml:"allow_binaries"`
 	ArgDenyPatterns   []string `yaml:"arg_deny_patterns"`
+	OSSandbox         string   `yaml:"os_sandbox"`
 }
 
 // HTTPFetchToolConfig http_fetch の設定
@@ -390,6 +391,9 @@ func Load(path string) (*Config, error) {
 	if err := validateWebTools(cfg.Tools); err != nil {
 		return nil, err
 	}
+	if err := validateShellOSSandbox(cfg.Tools); err != nil {
+		return nil, err
+	}
 	if err := validateToolResultLimit(cfg.Agent.ToolResultLimit); err != nil {
 		return nil, err
 	}
@@ -476,6 +480,9 @@ func applyDefaults(cfg *Config) {
 		cfg.Agent.ToolResultLimit.MaxChars = defaultToolResultLimitMaxChars
 	}
 	applyCompactionDefaults(&cfg.Agent.Compaction)
+	if cfg.Tools.Shell.OSSandbox == "" {
+		cfg.Tools.Shell.OSSandbox = "auto"
+	}
 }
 
 // applyCompactionDefaults 未指定の compaction キーへコード既定値を適用する。
@@ -560,6 +567,16 @@ func validateWebTools(t ToolsConfig) error {
 		return fmt.Errorf("config: tools.web_fetch.max_chars は 100 以上 (got %d)", v)
 	}
 	return nil
+}
+
+// validateShellOSSandbox 起動時に tools.shell.os_sandbox の値を検査する
+func validateShellOSSandbox(t ToolsConfig) error {
+	switch t.Shell.OSSandbox {
+	case "", "auto", "off":
+		return nil
+	default:
+		return fmt.Errorf("config: tools.shell.os_sandbox は \"auto\" または \"off\" のみサポート (got %q)", t.Shell.OSSandbox)
+	}
 }
 
 // validateFallbackChains providers の fallback_to から有向グラフを作り、サイクルが存在しないことを確認する
