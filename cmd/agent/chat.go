@@ -80,12 +80,28 @@ func runChatSession(ctx context.Context, p chatSessionParams) error {
 			TriggerRatio:        cfg.Agent.Compaction.TriggerRatio,
 			KeepRecentTurns:     cfg.Agent.Compaction.KeepRecentTurns,
 		},
-		SessionsDir:    chatDir,
-		SessionID:      sessionID,
-		InitialHistory: initialHistory,
-		AgentsMDPath:   agentsMDPath,
+		SessionsDir:     chatDir,
+		SessionID:       sessionID,
+		InitialHistory:  initialHistory,
+		AgentsMDPath:    agentsMDPath,
+		AvailableModels: availableModels(cfg),
+		Billing:         acc,
 	})
 	return r.Run(ctx)
+}
+
+// availableModels /model の一覧表示用に、プロバイダー名 → allow_models の
+// 対応を作る。表示側の書き換えが config へ波及しないようスライスは複製する
+func availableModels(cfg *config.Config) map[string][]string {
+	avail := make(map[string][]string, len(cfg.Providers))
+	for name, pc := range cfg.Providers {
+		if pc.AllowModels == nil {
+			avail[name] = nil
+			continue
+		}
+		avail[name] = append([]string{}, pc.AllowModels...)
+	}
+	return avail
 }
 
 // agentsMDHeader / agentsMDFooter AGENTS.md 由来テキストの信頼境界マーカー。
