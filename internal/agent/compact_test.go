@@ -213,3 +213,105 @@ func TestCompactMessages_ToolMessagesInTranscript(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactMessages_OnlySystemMessagesWithZeroKeep_SkipsSummarizer(t *testing.T) {
+	prov := &summarizer{summary: "s"}
+	msgs := []llm.Message{{Role: llm.RoleSystem, Content: "sys"}}
+	got, err := agent.CompactMessages(context.Background(), prov, "m", msgs, agent.CompactOptions{KeepRecentTurns: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Content != "sys" {
+		t.Fatalf("原文をそのまま返す期待 got %+v", got)
+	}
+	if prov.calls != 0 {
+		t.Fatalf("要約対象区間が空なら要約器を呼ばない期待 got %d", prov.calls)
+	}
+}
+
+func TestCompactMessages_NoSystemAndNoKeptTurns_SummaryOnly(t *testing.T) {
+	prov := &summarizer{summary: "要約本文"}
+	msgs := []llm.Message{
+		{Role: llm.RoleUser, Content: "q0"},
+		{Role: llm.RoleAssistant, Content: "a0"},
+	}
+	got, err := agent.CompactMessages(context.Background(), prov, "m", msgs, agent.CompactOptions{KeepRecentTurns: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("要約 1 件のみ期待 got %d (%+v)", len(got), got)
+	}
+	if got[0].Role != llm.RoleUser {
+		t.Fatalf("独立した user メッセージ期待 got %v", got[0].Role)
+	}
+	if got[0].Content != "[過去の会話の要約]\n\n要約本文" {
+		t.Fatalf("見出し付き要約期待 got %q", got[0].Content)
+	}
+}
+
+// 結果スライスの容量が sysEnd+1+(len(msgs)-cutIdx) ちょうどであることを表明する。
+// この事前確保が崩れると append が再確保を起こす。容量式の演算子取り違えは
+// 戻り値の内容には現れないため、cap を直接見る以外に観測手段がない
+func TestCompactMessages_ResultCapacityIsExact(t *testing.T) {
+	prov := &summarizer{summary: "要約本文"}
+	msgs := []llm.Message{
+		{Role: llm.RoleSystem, Content: "sys"},
+		{Role: llm.RoleUser, Content: "q0"},
+		{Role: llm.RoleAssistant, Content: "a0"},
+		{Role: llm.RoleUser, Content: "q1"},
+		{Role: llm.RoleAssistant, Content: "a1"},
+		{Role: llm.RoleUser, Content: "q2"},
+		{Role: llm.RoleAssistant, Content: "a2"},
+	}
+	// sysEnd=1, turnStarts=[1,3,5], keep=1 なので cutIdx=5。
+	// 期待容量 = sysEnd(1) + 1 + (len(msgs)(7) - cutIdx(5)) = 4
+	got, err := agent.CompactMessages(context.Background(), prov, "m", msgs, agent.CompactOptions{KeepRecentTurns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("sys 1 + 要約結合済み user 1 + 残り 1 の計 3 件期待 got %d (%+v)", len(got), got)
+	}
+	if cap(got) != 4 {
+		t.Fatalf("再確保なしの厳密容量 4 期待 got %d", cap(got))
+	}
+}
+
+// keep がターン数とちょうど等しいとき圧縮不要と判定する境界を表明する。
+// 先頭 system の直後に assistant を挟み、最初の user ターンを sysEnd より
+// 後ろへずらす。こうしないと圧縮に入っても要約区間が空になり境界が観測できない
+func TestCompactMessages_KeepEqualsTurnCount_NoCompaction(t *testing.T) {
+	tests := []struct {
+		name      string
+		keep      int
+		wantLen   int
+		wantCalls int
+	}{
+		{"keep がターン数と等しければ圧縮しない", 2, 6, 0},
+		{"keep がターン数を 1 下回れば圧縮する", 1, 3, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prov := &summarizer{summary: "要約本文"}
+			msgs := []llm.Message{
+				{Role: llm.RoleSystem, Content: "sys"},
+				{Role: llm.RoleAssistant, Content: "preamble"},
+				{Role: llm.RoleUser, Content: "q0"},
+				{Role: llm.RoleAssistant, Content: "a0"},
+				{Role: llm.RoleUser, Content: "q1"},
+				{Role: llm.RoleAssistant, Content: "a1"},
+			}
+			got, err := agent.CompactMessages(context.Background(), prov, "m", msgs, agent.CompactOptions{KeepRecentTurns: tt.keep})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != tt.wantLen {
+				t.Fatalf("件数 %d 期待 got %d (%+v)", tt.wantLen, len(got), got)
+			}
+			if prov.calls != tt.wantCalls {
+				t.Fatalf("要約器呼び出し %d 回期待 got %d", tt.wantCalls, prov.calls)
+			}
+		})
+	}
+}

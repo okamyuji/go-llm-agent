@@ -924,3 +924,45 @@ func TestRun_FinalIncludesTurnMessages(t *testing.T) {
 		t.Errorf("third turn message=%+v, want final assistant", final.TurnMessages[2])
 	}
 }
+
+func TestRun_AutomaticWebFlowStopsRetryingAtLimit(t *testing.T) {
+	rawToolCall := ` [TOOL_CALLS][{"name":"web_fetch","arguments":{"url":"https://example.com/other"}}] `
+	prov := &fakeProvider{streams: [][]llm.StreamEvent{
+		{{DeltaText: rawToolCall}},
+		{{DeltaText: rawToolCall}},
+		{{DeltaText: rawToolCall}},
+		{{DeltaText: rawToolCall}},
+	}}
+	tools := tool.NewRegistry([]tool.Tool{
+		namedTool{name: "web_search", content: `{"results":[{"url":"https://go.dev/"}]}`},
+		namedTool{name: "web_fetch", content: "Go release information"},
+	}, []string{"web_search", "web_fetch"})
+	svc := agent.New(fakeReg{p: prov}, tools)
+
+	out := make(chan agent.Event, 32)
+	err := svc.Run(context.Background(), agent.Input{
+		Model:       "fake/m",
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: "Goの最新安定版をWeb検索して"}},
+		MaxToolHops: 3,
+	}, out)
+	close(out)
+	if err != nil {
+		t.Fatalf("run err=%v", err)
+	}
+	var final *llm.Message
+	for ev := range out {
+		if ev.Kind == agent.EventFinal {
+			final = ev.Final
+		}
+	}
+	// 初回 + 再生成 3 回 = 4 回で打ち切る
+	if len(prov.requests) != 4 {
+		t.Fatalf("requests=%d, want 4", len(prov.requests))
+	}
+	if final == nil {
+		t.Fatal("EventFinal not emitted")
+	}
+	if final.Content != "Web取得結果から完全な回答を生成できませんでした。質問を具体化して再実行してください。" {
+		t.Fatalf("再生成の上限で代替文言を返す期待 got %q", final.Content)
+	}
+}

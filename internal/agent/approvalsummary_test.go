@@ -190,3 +190,46 @@ func TestBuildApprovalSummary_DoesNotPolluteReadRegistry(t *testing.T) {
 		t.Fatalf("未読エラー期待 got %q", msg)
 	}
 }
+
+func TestTruncateSummaryLines(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		s        string
+		maxLines int
+		want     string
+	}{
+		{
+			name:     "行数がちょうど maxLines なら原文をそのまま返す",
+			s:        "a\nb\nc\n",
+			maxLines: 3,
+			want:     "a\nb\nc\n",
+		},
+		{
+			name:     "1 行超過なら omitted は 1",
+			s:        "a\nb\nc\n",
+			maxLines: 2,
+			want:     "a\nb\n…[truncated: 1 further lines omitted]…\n",
+		},
+		{
+			name:     "2 行超過なら omitted は 2",
+			s:        "a\nb\nc\n",
+			maxLines: 1,
+			want:     "a\n…[truncated: 2 further lines omitted]…\n",
+		},
+		{
+			name:     "maxLines 未満なら原文をそのまま返す",
+			s:        "a\n",
+			maxLines: 3,
+			want:     "a\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := truncateSummaryLines(tc.s, tc.maxLines); got != tc.want {
+				t.Fatalf("want %q got %q", tc.want, got)
+			}
+		})
+	}
+}

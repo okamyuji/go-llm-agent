@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -222,5 +224,116 @@ func TestHookMatches(t *testing.T) {
 		if got := hookMatches(tc.matcher, tc.tool); got != tc.want {
 			t.Fatalf("matcher=%q tool=%q: want %v got %v", tc.matcher, tc.tool, tc.want, got)
 		}
+	}
+}
+
+// recordingHandler slog レコードの message と tool 属性だけを集める最小ハンドラ
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []recordedLog
+}
+
+type recordedLog struct {
+	msg  string
+	tool string
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	rec := recordedLog{msg: r.Message}
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == "tool" {
+			rec.tool = a.Value.String()
+		}
+		return true
+	})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, rec)
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+// messagesFor 指定ツール名のレコードの message を出現順で返す
+func (h *recordingHandler) messagesFor(tool string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []string
+	for _, r := range h.records {
+		if r.tool == tool {
+			out = append(out, r.msg)
+		}
+	}
+	return out
+}
+
+// captureLogs 既定 logger を差し替え、テスト終了時に元へ戻す。
+// slog.Default はプロセス全体で共有されるため t.Parallel とは併用しない
+func captureLogs(t *testing.T) *recordingHandler {
+	t.Helper()
+	h := &recordingHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return h
+}
+
+func TestHookRunner_RunPost_LogsOnlyExitCodeWarning(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		command  string
+		want     []string
+	}{
+		{
+			name:     "非 0 終了は exited non-zero だけを警告する",
+			toolName: "post_log_probe_nonzero",
+			command:  "exit 3",
+			want:     []string{"post_tool_use hook exited non-zero"},
+		},
+		{
+			name:     "正常終了なら警告を出さない",
+			toolName: "post_log_probe_zero",
+			command:  "exit 0",
+			want:     nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := captureLogs(t)
+			postRunner(HookSpec{Matcher: tc.toolName, Command: tc.command}).
+				RunPost(context.Background(), tc.toolName, json.RawMessage(`{}`), HookResult{})
+			got := h.messagesFor(tc.toolName)
+			if len(got) != len(tc.want) {
+				t.Fatalf("want %v got %v", tc.want, got)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("want %v got %v", tc.want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestRunHook_ParentCancelReportsExitCodeMinusOne(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	out, err := runHook(ctx, HookSpec{Matcher: "*", Command: "sleep 5", Timeout: 10 * time.Second}, hookPayload{Tool: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.parentCanceled {
+		t.Fatalf("親キャンセル期待 got %+v", out)
+	}
+	if out.exitCode != -1 {
+		t.Fatalf("exitCode=-1 期待 got %d", out.exitCode)
+	}
+	if out.stderr != "canceled by parent context" {
+		t.Fatalf("親キャンセルの stderr 期待 got %q", out.stderr)
 	}
 }

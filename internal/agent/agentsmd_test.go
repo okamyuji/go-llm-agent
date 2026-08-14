@@ -421,3 +421,58 @@ func TestTruncateAtRuneBoundary_NegativeMaxBytesNoTruncation(t *testing.T) {
 		t.Fatalf("got=%q", got)
 	}
 }
+
+func TestTruncateAtRuneBoundary(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		s        string
+		maxBytes int
+		want     string
+	}{
+		{
+			name:     "maxBytes ちょうどなら不完全な末尾バイトも削らない",
+			s:        "ab\xe3",
+			maxBytes: 3,
+			want:     "ab\xe3",
+		},
+		{
+			name:     "超過分を切ると末尾が不完全になるため開始バイトごと落とす",
+			s:        "ab\xe3d",
+			maxBytes: 3,
+			want:     "ab",
+		},
+		{
+			name:     "全バイトが不完全な開始バイトなら空文字になる",
+			s:        "\xe3\xe3\xe3",
+			maxBytes: 2,
+			want:     "",
+		},
+		{
+			name:     "マルチバイト文字の途中で切らない",
+			s:        "あい",
+			maxBytes: 4,
+			want:     "あ",
+		},
+		{
+			name:     "maxBytes が 0 なら切り詰めない",
+			s:        "abc",
+			maxBytes: 0,
+			want:     "abc",
+		},
+		{
+			name:     "maxBytes が負なら切り詰めない",
+			s:        "abc",
+			maxBytes: -1,
+			want:     "abc",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := truncateAtRuneBoundary(tc.s, tc.maxBytes); got != tc.want {
+				t.Fatalf("want %q got %q", tc.want, got)
+			}
+		})
+	}
+}

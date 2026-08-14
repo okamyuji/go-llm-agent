@@ -178,3 +178,31 @@ func TestRunReAct_ApprovalDeniedSkipsPreHook(t *testing.T) {
 		t.Fatal("承認拒否のとき pre hook は実行されない期待 (順序 R6)")
 	}
 }
+
+func TestRunReAct_PostHookReceivesSuccessResult(t *testing.T) {
+	calls := 0
+	logPath := filepath.Join(t.TempDir(), "post.json")
+	hr := agent.NewHookRunner(nil, []agent.HookSpec{{Matcher: "*", Command: "cat > " + logPath}})
+	if _, err := collectRun(t, hookToolService(t, hr, &calls, false), hookInput()); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("post hook が 1 回呼ばれる期待 err=%v", err)
+	}
+	var payload struct {
+		Result struct {
+			IsError bool   `json:"is_error"`
+			Content string `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		t.Fatalf("payload=%q err=%v", b, err)
+	}
+	if payload.Result.IsError {
+		t.Fatalf("成功結果は is_error=false 期待 got %+v", payload.Result)
+	}
+	if payload.Result.Content != "tool output" {
+		t.Fatalf("生のツール結果期待 got %q", payload.Result.Content)
+	}
+}
