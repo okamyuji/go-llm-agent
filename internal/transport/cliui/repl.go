@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"golang.org/x/term"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
+	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/transport/cliui/lineedit"
 )
@@ -45,6 +47,11 @@ type Options struct {
 	// AgentsMDPath 読み込んだ AGENTS.md の絶対パス。空文字列なら未読込
 	// (起動バナーに表示しない)
 	AgentsMDPath string
+	// AvailableModels /model の一覧表示に使う、プロバイダー名 → allow_models の対応。
+	// allow_models が空スライスのプロバイダーは「制限なし」として表示する
+	AvailableModels map[string][]string
+	// Billing 構成済みの billing.Accumulator。nil なら /cost はトークン数のみ表示する
+	Billing billing.Accumulator
 }
 
 // CompactionOptions agent.compaction の値をそのまま運ぶ。
@@ -77,6 +84,9 @@ type REPL struct {
 	// sessionID 現在のアクティブなセッション ID。runTurn が agent.Input.SessionID
 	// として使う (billing のセッション単位集計とキーを合わせるため)
 	sessionID string
+	// totalIn / totalOut このセッションの累計 input / output トークン (/cost 用)
+	totalIn  int
+	totalOut int
 }
 
 // NewREPL Service とオプションから REPL を生成する
@@ -152,6 +162,10 @@ func (r *REPL) executeTurn(ctx context.Context, pump *bytePump, line string, st 
 	st.history = append(st.history, userMsg)
 
 	turnMessages, quit, usage := r.runTurn(ctx, pump, append([]llm.Message{}, st.history...), st.toolChoice)
+	// 中断されたターンでも、届いた usage 分は実際に課金済みなので累計へ積む。
+	// 積まないと /cost が実際の請求より過小に表示される
+	r.totalIn += usage.In
+	r.totalOut += usage.Out
 	r.commitTurn(st, turnMessages, userMsg, out, rec)
 	if quit {
 		return true
@@ -301,6 +315,9 @@ func (r *REPL) handleSlashCommand(ctx context.Context, pump *bytePump, line stri
 		// InitialHistory 由来のメッセージも破棄対象に含める (残す分岐は設けない。
 		// /clear は「ここから新しい会話を始める」という単一の意味を持つ)
 		st.history = st.history[:0]
+		// 累計もリセットして、Billing の有無によらず /cost が「現在のセッションの
+		// 累計」を指すようにする (Billing 経路は rotate 後の新 ID がゼロ値を返す)
+		r.totalIn, r.totalOut = 0, 0
 		if rec != nil {
 			newID := rec.rotate()
 			r.sessionID = newID
@@ -316,10 +333,80 @@ func (r *REPL) handleSlashCommand(ctx context.Context, pump *bytePump, line stri
 		st.history = r.compactHistory(ctx, pump, st.history, out)
 	case "/tools", "/tool":
 		r.handleToolsCommand(arg, st, out)
+	case "/help":
+		fmt.Fprint(out, helpText())
+	case "/model":
+		r.handleModelCommand(out, arg)
+	case "/cost":
+		r.handleCostCommand(out)
 	default:
-		fmt.Fprintf(out, "[コマンド] %s は未定義です。利用可能: /quit /exit /clear /compact /tools off|on\n", name)
+		fmt.Fprintf(out, "[コマンド] %s は未定義です。利用可能: /quit /exit /clear /tools off|on /help /model /compact /cost\n", name)
 	}
 	return false
+}
+
+// helpText 全スラッシュコマンドの一覧と一行説明を返す
+func helpText() string {
+	return `[help] 利用可能なコマンド:
+  /help                   このヘルプを表示します
+  /model [provider/name]  現在のモデルを表示、または指定したモデルへ切り替えます
+  /compact                会話履歴を要約に置き換えて圧縮します
+  /cost                   このセッションの累計トークン数と費用を表示します
+  /clear                  会話履歴を破棄し、新しいセッションを開始します
+  /tools off|on           ツール定義の送信を無効化/有効化します
+  /quit, /exit            REPL を終了します
+`
+}
+
+// handleModelCommand arg が空なら現在のモデルと利用可能モデル一覧を表示する。
+// arg が "provider/name" 形式なら r.model を差し替える。実際にそのモデルが
+// 解決可能かどうかの検証は行わない (D-18: 次ターンの通常経路に委ねる)
+func (r *REPL) handleModelCommand(out io.Writer, arg string) {
+	if arg == "" {
+		fmt.Fprintf(out, "[model] 現在のモデル: %s\n", r.model)
+		r.printAvailableModels(out)
+		return
+	}
+	provider, name, ok := strings.Cut(arg, "/")
+	if !ok || provider == "" || name == "" {
+		fmt.Fprintf(out, "[model] %q は provider/name 形式ではありません（例: openai/gpt-4.1-mini）\n", arg)
+		return
+	}
+	r.model = arg
+	fmt.Fprintf(out, "[model] 次のターンから %s を使用します\n", arg)
+}
+
+// printAvailableModels プロバイダー名の昇順で allow_models を表示する。
+// AvailableModels 未設定なら何も表示しない
+func (r *REPL) printAvailableModels(out io.Writer) {
+	if len(r.opt.AvailableModels) == 0 {
+		return
+	}
+	fmt.Fprintln(out, "[model] 利用可能:")
+	names := make([]string, 0, len(r.opt.AvailableModels))
+	for name := range r.opt.AvailableModels {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		models := r.opt.AvailableModels[name]
+		if len(models) == 0 {
+			fmt.Fprintf(out, "  %s: (allow_models 未設定 — 任意のモデル名を指定可能)\n", name)
+			continue
+		}
+		fmt.Fprintf(out, "  %s: %s\n", name, strings.Join(models, ", "))
+	}
+}
+
+// handleCostCommand セッション累計トークン数と、billing が構成されていれば
+// 円換算コストを表示する
+func (r *REPL) handleCostCommand(out io.Writer) {
+	if r.opt.Billing == nil {
+		fmt.Fprintf(out, "[cost] このセッション: in %d / out %d tok（価格設定が無いため円換算はできません）\n", r.totalIn, r.totalOut)
+		return
+	}
+	snap := r.opt.Billing.SessionTotal(r.sessionID)
+	fmt.Fprintf(out, "[cost] このセッション: in %d / out %d tok ・ ¥%.2f\n", snap.InputTokens, snap.OutputTokens, snap.CostJPY)
 }
 
 // handleToolsCommand ツール定義をリクエストに含めるかをセッション中に切り替える。
