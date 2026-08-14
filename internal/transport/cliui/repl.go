@@ -138,34 +138,50 @@ func (r *REPL) Run(ctx context.Context) error {
 			}
 			continue
 		}
-		userMsg := llm.Message{Role: llm.RoleUser, Content: line}
-		st.history = append(st.history, userMsg)
+		if r.executeTurn(ctx, pump, line, st, out, rec) {
+			return nil
+		}
+	}
+}
 
-		turnMessages, quit, usage := r.runTurn(ctx, pump, append([]llm.Message{}, st.history...), st.toolChoice)
-		if len(turnMessages) == 0 {
-			// 中断やエラーで何も生成されなかったターンは user 入力ごと巻き戻す。
-			// content 空の assistant や user 連続を履歴に残すと、以後の全リクエストが
-			// llama-server の履歴検証 (400) で失敗し続けるため。記録もこのターン
-			// 全体について行わない (巻き戻された user 行が JSONL に孤立して残ると、
-			// 次回 -resume でその行が新規発話と連続し、同じ 400 連鎖に載るため)
-			st.history = st.history[:len(st.history)-1]
-		} else {
-			st.history = append(st.history, turnMessages...)
-			r.recordSession(rec, out, userMsg)
-			for _, m := range turnMessages {
-				r.recordSession(rec, out, m)
-			}
-		}
-		if quit {
-			return nil
-		}
-		if ctx.Err() != nil {
-			fmt.Fprintln(out, "\nシグナルを受信したため終了します")
-			return nil
-		}
-		if r.shouldCompact(usage.LastIn) {
-			st.history = r.compactHistory(ctx, pump, st.history, out)
-		}
+// executeTurn 1 行のユーザー入力に対する 1 ターンを実行し、履歴・セッション累計・
+// セッション記録・圧縮判定までを行う。戻り値 true は REPL の終了を意味する
+// (ユーザーの Ctrl-C か シグナル受信)
+func (r *REPL) executeTurn(ctx context.Context, pump *bytePump, line string, st *replState, out io.Writer, rec *sessionWriter) bool {
+	userMsg := llm.Message{Role: llm.RoleUser, Content: line}
+	st.history = append(st.history, userMsg)
+
+	turnMessages, quit, usage := r.runTurn(ctx, pump, append([]llm.Message{}, st.history...), st.toolChoice)
+	r.commitTurn(st, turnMessages, userMsg, out, rec)
+	if quit {
+		return true
+	}
+	if ctx.Err() != nil {
+		fmt.Fprintln(out, "\nシグナルを受信したため終了します")
+		return true
+	}
+	if r.shouldCompact(usage.LastIn) {
+		st.history = r.compactHistory(ctx, pump, st.history, out)
+	}
+	return false
+}
+
+// commitTurn ターンの生成結果を履歴とセッション記録へ反映する。
+// 生成が空のターンは user 入力ごと巻き戻す
+func (r *REPL) commitTurn(st *replState, turnMessages []llm.Message, userMsg llm.Message, out io.Writer, rec *sessionWriter) {
+	if len(turnMessages) == 0 {
+		// 中断やエラーで何も生成されなかったターンは user 入力ごと巻き戻す。
+		// content 空の assistant や user 連続を履歴に残すと、以後の全リクエストが
+		// llama-server の履歴検証 (400) で失敗し続けるため。記録もこのターン
+		// 全体について行わない (巻き戻された user 行が JSONL に孤立して残ると、
+		// 次回 -resume でその行が新規発話と連続し、同じ 400 連鎖に載るため)
+		st.history = st.history[:len(st.history)-1]
+		return
+	}
+	st.history = append(st.history, turnMessages...)
+	r.recordSession(rec, out, userMsg)
+	for _, m := range turnMessages {
+		r.recordSession(rec, out, m)
 	}
 }
 
