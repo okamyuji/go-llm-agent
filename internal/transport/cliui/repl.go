@@ -42,6 +42,9 @@ type Options struct {
 	SessionID string
 	// InitialHistory -resume で復元した既存メッセージ列。空なら通常の新規セッション
 	InitialHistory []llm.Message
+	// AgentsMDPath 読み込んだ AGENTS.md の絶対パス。空文字列なら未読込
+	// (起動バナーに表示しない)
+	AgentsMDPath string
 }
 
 // CompactionOptions agent.compaction の値をそのまま運ぶ。
@@ -113,6 +116,9 @@ func (r *REPL) Run(ctx context.Context) error {
 	out, editor, closeEditor := r.setupEditor(ctx, pump)
 	defer closeEditor()
 	fmt.Fprintln(out, "go-llm-agent REPL  /quit で終了（生成中は ESC で中断、複数行ペーストは Enter で送信、/tools off でツール無効化）")
+	if r.opt.AgentsMDPath != "" {
+		fmt.Fprintf(out, "AGENTS.md: %s を読み込みました\n", r.opt.AgentsMDPath)
+	}
 
 	for {
 		line, err := r.readPromptLine(ctx, editor, pump, out)

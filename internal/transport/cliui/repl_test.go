@@ -687,6 +687,36 @@ func TestRepl_SessionWriteFailureShowsErrorAndContinues(t *testing.T) {
 	}
 }
 
+// TestRepl_AgentsMDPathShowsInBanner Options.AgentsMDPath を設定すると
+// 起動バナーに読み込んだファイルパスが表示される
+func TestRepl_AgentsMDPathShowsInBanner(t *testing.T) {
+	svc := fakeSvc{}
+	in := strings.NewReader("/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true, AgentsMDPath: "/repo/AGENTS.md"})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	if !strings.Contains(out.String(), "AGENTS.md: /repo/AGENTS.md を読み込みました") {
+		t.Fatalf("banner missing AGENTS.md path: %q", out.String())
+	}
+}
+
+// TestRepl_AgentsMDPathEmptyOmitsBannerLine AgentsMDPath 未設定 (既定) では
+// バナーにその行が出力されない
+func TestRepl_AgentsMDPathEmptyOmitsBannerLine(t *testing.T) {
+	svc := fakeSvc{}
+	in := strings.NewReader("/quit\n")
+	var out bytes.Buffer
+	r := cliui.NewREPL(svc, cliui.Options{Model: "test/m", In: in, Out: &out, DisableSpinner: true})
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatalf("Run err=%v", err)
+	}
+	if strings.Contains(out.String(), "AGENTS.md:") {
+		t.Fatalf("banner should not mention AGENTS.md: %q", out.String())
+	}
+}
+
 // TestRepl_ExitsWhenContextCanceledAtPrompt SIGINT で root context がキャンセルされたら、
 // プロンプト待ちでブロックしていても REPL は即座にきれいに終了する。
 // 従来はループが回り続け、以後の全ターンが即失敗するゾンビセッションになっていた。

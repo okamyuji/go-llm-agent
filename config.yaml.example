@@ -170,6 +170,12 @@ agent:
     enabled: false
     max_concurrency: 4
     fail_fast: false
+  # agent chat 起動時、カレントディレクトリから祖先へ向けて AGENTS.md を探索し
+  # 見つかればシステムプロンプト末尾へ信頼境界マーカー付きで合成する
+  # (agent run / agent serve は対象外)。探索は tools.fs.allow_paths 配下に限る。
+  agents_md:
+    enabled: true
+    max_bytes: 32768
 
 tools:
   fs:

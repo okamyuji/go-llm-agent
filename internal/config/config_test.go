@@ -554,6 +554,41 @@ func TestLoad_StorageChatSessionsDirDefaultsToEmpty(t *testing.T) {
 	}
 }
 
+func TestLoad_AgentsMDDefaultsWhenUnspecified(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Agent.AgentsMD.Enabled == nil || !*cfg.Agent.AgentsMD.Enabled {
+		t.Fatalf("Enabled = %v, want true (coded default)", cfg.Agent.AgentsMD.Enabled)
+	}
+	if cfg.Agent.AgentsMD.MaxBytes != 32768 {
+		t.Fatalf("MaxBytes = %d, want 32768 (coded default)", cfg.Agent.AgentsMD.MaxBytes)
+	}
+}
+
+func TestLoad_AgentsMDExplicitFalseStaysFalse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\nagent:\n  agents_md:\n    enabled: false\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Agent.AgentsMD.Enabled == nil || *cfg.Agent.AgentsMD.Enabled {
+		t.Fatalf("Enabled = %v, want false (明示値は上書きされない)", cfg.Agent.AgentsMD.Enabled)
+	}
+}
+
 func TestLoad_ShellOSSandboxRejectsInvalidValue(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

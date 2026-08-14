@@ -159,6 +159,19 @@ type AgentConfig struct {
 	Enricher         EnricherConfig        `yaml:"enricher"`
 	ToolResultLimit  ToolResultLimitConfig `yaml:"tool_result_limit"`
 	Compaction       CompactionConfig      `yaml:"compaction"`
+	AgentsMD         AgentsMDConfig        `yaml:"agents_md"`
+}
+
+// AgentsMDConfig AGENTS.md 自動読込の設定。
+// 実効既定値は 00-overview 3.4 節が凍結しており、applyDefaults が適用する。
+// Enabled は yaml 未指定 (nil) と enabled: false を区別するため *bool とする。
+// applyDefaults が nil のとき true を指すポインタを代入するため、Load を
+// 通過した値では常に非 nil であり、利用側は *cfg.Enabled を読む。
+// *Enabled が false の場合は探索自体を行わない (ファイルシステムへのアクセスも
+// 発生させない)。
+type AgentsMDConfig struct {
+	Enabled  *bool `yaml:"enabled"`
+	MaxBytes int   `yaml:"max_bytes"`
 }
 
 // CompactionConfig 会話履歴圧縮の設定。
@@ -476,6 +489,9 @@ const (
 	defaultCompactionKeepRecentTurns     = 4
 )
 
+// defaultAgentsMDMaxBytes agent.agents_md.max_bytes の実効既定値 (00-overview 3.4 節が凍結)
+const defaultAgentsMDMaxBytes = 32768
+
 // applyDefaults decode 直後・各 validateXxx の前に 1 回呼び、yaml で明示されなかった
 // キーへコード既定値を適用する (00-overview 3.4 節)。数値キーはゼロ値 (未指定) の
 // ときだけ既定値を代入する。切り詰めを明示的に無効化したい利用者は -1 を指定する
@@ -486,6 +502,20 @@ func applyDefaults(cfg *Config) {
 	applyCompactionDefaults(&cfg.Agent.Compaction)
 	if cfg.Tools.Shell.OSSandbox == "" {
 		cfg.Tools.Shell.OSSandbox = "auto"
+	}
+	applyAgentsMDDefaults(&cfg.Agent.AgentsMD)
+}
+
+// applyAgentsMDDefaults 未指定の agents_md キーへコード既定値を適用する。
+// Enabled は nil (yaml に enabled 行が無い) のときだけ true を代入し、
+// enabled: false の明示は上書きしない
+func applyAgentsMDDefaults(c *AgentsMDConfig) {
+	if c.Enabled == nil {
+		enabled := true
+		c.Enabled = &enabled
+	}
+	if c.MaxBytes == 0 {
+		c.MaxBytes = defaultAgentsMDMaxBytes
 	}
 }
 
