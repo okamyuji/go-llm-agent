@@ -6,10 +6,10 @@ Go 1.25製のCGOなし単一バイナリAIエージェントです。OpenAI、An
 
 - 単一バイナリで配布できます。CGO不要で Linux、macOS、Windowsのamd64とarm64に対応します
 - 5プロバイダー (OpenAI、Anthropic、Google Gemini、Ollama、llama.cpp) を統一した抽象層として扱えます
-- ストリーミングとtool callingを初期サポートします
-- 内蔵ツールはfs_read、fs_write、shell、http_fetch、search_files、web_search、web_fetchの7種類です (ほかにRAG用のnote_add / note_search)
+- ストリーミングとtool callingに対応します
+- 内蔵ツールはfs_read、fs_write、fs_edit、shell、http_fetch、search_files、web_search、web_fetchの8種類です (ほかにRAG用のnote_add / note_search)
 - 対話REPL、ワンショットrun、OpenAI互換HTTP APIの3種類のインターフェースを提供します
-- pre-commitとCIでgofmt、go vet、staticcheck、golangci-lint、govulncheck、go test --count=1 --shuffle=on、gitleaksを全部通します
+- pre-commitとCIでgofmt、go vet、staticcheck、golangci-lint、govulncheck、race・coverage付きGoテスト、release build、gitleaksを実行します
 
 ## クイックスタート
 
@@ -36,12 +36,32 @@ make build
 `agent.enabled_tools` を空または未指定にすると、Registryは`fs_read` / `search_files` / `http_fetch` の **readonly セット**のみを有効にします(`tool.DefaultReadonlyTools`)。
 `fs_write` と `shell` を有効にする場合は意図して明示列挙してください。
 
+### 部分編集 (fs_edit)
+
+`fs_edit` はファイル全文を書き直さずに一部だけを置き換えるツールです。`old_string` に完全一致する部分文字列を `new_string` へ置換します。`replace_all` を指定しないときは一致がちょうど 1 件のときだけ実行し、0 件または複数件のときはエラーを返します。
+
+対象ファイルは同一プロセス内で直前に `fs_read` 済みでなければ拒否します。読まずに書き換えて既存内容を失う事故を防ぐためです。ファイル全体を新しい内容へ置き換えるときは `fs_write` を使います。
+
+`fs_edit` はプロセス単位の既読レジストリに依存するため、複数リクエストが混在する `agent serve` では自動的に無効化されます。
+
 ### サンドボックスとセンシティブパス
 
 `tool.NewSandboxWithDeny` はシンボリックリンク解決済みのパスを `allow_paths` と照合し、`..` による上位ディレクトリ参照を拒否します。さらに、以下のセンシティブなパターンは**設定で外せない強制 deny** として常に拒否されます。
 
 `.git`、`.env`、`.env.*`、`.ssh`、`.aws`、`.gnupg`、`.npmrc`、`.netrc`、`.pypirc`、`id_rsa*`、`id_dsa*`、`id_ecdsa*`、`id_ed25519*`。
 追加でdenyしたいパターンは `tools.fs.deny_paths` に列挙します。
+
+### OS サンドボックス (macOS sandbox-exec)
+
+`tools.shell.os_sandbox: auto` を設定すると、macOS では `shell` ツールの実行を `sandbox-exec` でラップし、`tools.fs.allow_paths` の外への書き込みを OS 層でも拒否します。プロファイルは `allow_paths` から生成します。macOS 以外のプラットフォームでは何もしません。`off` を指定するとラップしません。
+
+これはアプリ層の `allow_paths` 検証を置き換えるものではなく、その外側に重ねる追加の防御層です。子プロセスがサンドボックス外のパスへ書き込もうとした場合、アプリ層を通り抜けても OS 層で失敗します。
+
+```yaml
+tools:
+  shell:
+    os_sandbox: auto   # auto | off
+```
 
 ### Shell の引数 deny
 
@@ -88,7 +108,7 @@ bash scripts/verify-hardening.sh
 
 | コマンド | 説明 |
 |---------|------|
-| `agent chat`   | 対話 REPL を起動します（`-no-spinner` で進捗インジケータとターン要約を無効化） |
+| `agent chat`   | 対話 REPL を起動します（`-no-spinner` で進捗インジケータとターン要約を無効化、`-resume` で直近セッションを再開） |
 | `agent run -p` | ワンショットでプロンプトを1回送信します |
 | `agent serve`  | OpenAI互換HTTP APIを起動します |
 | `agent tools`  | 有効な内蔵ツールを一覧表示します |
@@ -97,19 +117,41 @@ bash scripts/verify-hardening.sh
 
 ### REPL の入力と履歴
 
-`agent chat` は行エディタを内蔵しています（rlwrap は不要です。むしろ rlwrap で包むと「rlwrap appears to do nothing」の警告が出て履歴機能が無効になるため、包まずに直接起動してください）。
+`agent chat` は行エディタを内蔵しています。外部の rlwrap で包まずに直接起動してください。
 
 - **履歴**: ↑/↓ キーで呼び出し。`~/.agent_history` へ 1 行 1 エントリで永続化します（rlwrap `-H` と同形式のため既存ファイルをそのまま引き継げます）
+- **履歴検索**: Ctrl-R で後方インクリメンタル検索に入ります。入力した文字列を部分一致で遡り、Enter で確定、Ctrl-C または ESC で取り消します
+- **日本語入力**: 全角文字の表示幅を go-runewidth で計算するため、日本語の行を矢印キーで戻って編集してもカーソル描画がずれません
 - **貼り付け**: bracketed paste 対応。改行を含む長文を貼り付けると 1 つのプロンプトにまとまり、Enter で送信します。1 行が 1024 バイトを超える長文も詰まりません
 - **中断と終了**: 生成中は ESC でそのターンを中断、Ctrl-C でセッションを終了します
+- **/help**: 利用できるスラッシュコマンドの一覧を表示します
+- **/model [provider/name]**: 引数なしで現在のモデルと `allow_models` に基づく候補を表示し、引数ありでセッション中のモデルを切り替えます
+- **/compact**: 会話履歴を手動で圧縮します（下記「会話履歴の圧縮 (compaction)」参照）
+- **/cost**: セッション累計の入出力トークン数と、pricing 設定があれば概算コストを表示します
 - **/tools off | on**: ツール定義をリクエストに含めるかをセッション中に切り替えます。翻訳・要約など純粋な対話は off が安定します（下記「注意: ツール定義が小型モデルの指示追従を壊す」参照）。`/tool` でも可
-- **/clear**: 会話履歴を破棄します。モデルの回答が変な書式や話題に固定化したときの復旧手段です
+- **/clear**: 会話履歴を破棄し、セッション累計トークンをリセットして新しいセッションファイルへ切り替えます。モデルの回答が変な書式や話題に固定化したときの復旧手段です
+- **/quit** と **/exit**: セッションを終了します
 - `/` で始まる未知の入力はコマンド一覧を表示し、LLM へは送りません（タイプミスした行が質問として履歴に入り、以後の回答を汚染する事故を防ぐため）
-- **既知の制約**: 行エディタ（golang.org/x/term）は全角文字の表示幅を考慮しないため、日本語の行を矢印キーで戻って編集するとカーソル描画がずれることがあります（入力内容自体は正しく保持されます）
 
 ```bash
 ./bin/agent chat -config /path/to/config.yaml
 ```
+
+### セッション記録と再開
+
+`agent chat` の会話は 1 セッション 1 ファイルの JSONL として `storage.chat_sessions_dir` に記録されます。このキーが空のときは `<sessions_dir>/chat` を使います。ファイル名は開始時刻の UTC タイムスタンプです。
+
+`-resume` を付けると同じディレクトリで最も新しいセッションを読み込み、その履歴を引き継いで再開します。対象が 1 件も無い場合は新規セッションとして起動します。
+
+```bash
+./bin/agent chat -resume
+```
+
+### AGENTS.md 自動読み込み
+
+起動時のカレントディレクトリから親方向へ探索し、最初に見つかった `AGENTS.md` の内容をシステムプロンプト末尾へ付加します。探索範囲は `tools.fs.allow_paths` の配下に限ります。内容は信頼境界マーカーで囲み、上位の指示や安全上の制約を上書きしない参考情報として渡します。
+
+`agent.agents_md.max_bytes` を超えるファイルは先頭で切り詰めます。`agent.agents_md.enabled: false` で読み込みを無効化できます。
 
 ## 評価フレームワーク
 
@@ -211,7 +253,7 @@ agent:
 
 ## プロンプトテンプレート版管理
 
-`internal/prompt` パッケージで `<name>@<version>.tmpl` 形式のテンプレートをファイルからロードできます。`Renderer` は `text/template` の安全なサブセットを使い、許可リスト外の変数キーや欠落キーはrenderエラーとして弾きます。OTel spanの `prompt.version` 属性に乗せてA/B比較する想定です。
+`internal/prompt` パッケージで `<name>@<version>.tmpl` 形式のテンプレートをファイルからロードできます。`Renderer` は `text/template` の安全なサブセットを使い、許可リスト外の変数キーや欠落キーはrenderエラーとして弾きます。OTel spanの `prompt.version` 属性に乗せるとA/B比較ができます。
 
 E2Eスクリプトは `tests/e2e/13-prompt-template.sh` で TestLoader_* と TestRenderer_* を -race付きで実行します。設計の詳細は `docs/design/13-prompt-template-versioning.md` を参照してください。
 
@@ -243,7 +285,7 @@ E2Eスクリプトは `tests/e2e/10-parallel-tools.sh` で、`go test -race` 付
 
 ## 実行戦略の切替
 
-`agent.strategy` で実行戦略を選べます。`react` (既定) は従来通り、`planner_executor` はシステムプロンプトに計画指示を注入して executor_modelでツール呼び出しを行い、`reflection` は self-checkヒントを差し込みます。
+`agent.strategy` で実行戦略を選べます。`react` (既定) はツール呼び出しの標準ループで、`planner_executor` はシステムプロンプトに計画指示を注入して executor_modelでツール呼び出しを行い、`reflection` は self-checkヒントを差し込みます。
 
 ```yaml
 agent:
@@ -262,17 +304,43 @@ E2Eスクリプトは `tests/e2e/09-planner-executor.sh` です。fixtures/strat
 
 ## HITL ツール承認
 
-`agent.approval.required_tools` に含まれるツールは、実行前に承認が必要になります。HTTPモードでは `/v1/runs/<runID>/approve` にJSONで `{call_id, allowed, reason, reviewer}` をPOSTすると該当の承認待ちが解放されます。timeoutを過ぎると `default_decision` (`deny` または `allow`) に従います。
+`agent.approval.required_tools` に含まれるツールは、実行前に承認が必要になります。承認の求め方はサブコマンドごとに自動で決まり、切り替えるための専用キーはありません。
+
+- `agent chat` では対話プロンプトを表示し、`y` で実行、`n` で拒否します。`fs_write` と `fs_edit` の承認プロンプトには、適用前の unified diff を表示します。
+- `agent serve` では既存の broker を使います。`/v1/runs/<runID>/approve` にJSONで `{call_id, allowed, reason, reviewer}` をPOSTすると該当の承認待ちが解放されます。
+
+`timeout_seconds` を過ぎた承認待ちは常に拒否されます。`default_decision` は `deny` のみを受け付け、それ以外の値は起動時にエラーになります。fail-open になる設定はありません。
 
 ```yaml
 agent:
   approval:
-    required_tools: [shell, fs_write]
+    required_tools: [shell, fs_write, fs_edit]
     timeout_seconds: 30
     default_decision: deny
 ```
 
-E2Eスクリプトは `tests/e2e/08-hitl-approval.sh` です。fixtures / approval_exercise がRequest / Submit / timeoutの挙動を確認します。設計の詳細は `docs/design/08-hitl-approval.md` を参照してください。
+E2Eスクリプトは `tests/e2e/08-hitl-approval.sh` と `tests/e2e/22-approval.sh` です。fixtures / approval_exercise がRequest / Submit / timeoutの挙動を確認します。設計の詳細は `docs/design/08-hitl-approval.md` を参照してください。
+
+## hooks (pre_tool_use / post_tool_use)
+
+`hooks.pre_tool_use` と `hooks.post_tool_use` で、ツール実行の前後に外部コマンドを起動できます。契約は Claude Code の hooks と同じです。
+
+- `matcher` に一致したツールのときだけ起動します。`*` はすべてのツールに一致します。
+- stdin に JSON を渡します。pre は `{"tool","args"}`、post は `{"tool","args","result":{"is_error","content","duration_ms"}}` です。
+- exit 0 で許可、exit 2 で拒否します。拒否のときは stderr の内容を拒否理由として扱います。
+- `timeout_seconds` の既定は 10 秒です。タイムアウトやコマンド起動の失敗はツール実行を止めません。
+- hook command は `sh -c` で実行します。LinuxとmacOSではタイムアウト時にprocess group全体を停止します。その他のOSでは直接のhook processを停止して待機時間を制限し、子processの停止はOSの挙動に従います。
+
+```yaml
+hooks:
+  pre_tool_use:
+    - matcher: shell
+      command: ./scripts/audit-hook.sh
+      timeout_seconds: 10
+  post_tool_use: []
+```
+
+E2Eスクリプトは `tests/e2e/26-hooks.sh` で、pre hook の deny と allow、タイムアウト時の続行を検証します。設計の詳細は `docs/specs/2026-08-13-improvements/09-hooks.md` を参照してください。
 
 ## PII 出力リダクション
 
@@ -300,7 +368,7 @@ safety:
         replacement: "[REDACTED:OPENAI]"
 ```
 
-DeltaText / Final / ツール出力のすべての経路で同じRedactorが適用されます。14番設計書で追加予定のPII Redactorは `ChainRedactor` で本Redactorの後段に組み合わせる想定です。
+DeltaText / Final / ツール出力のすべての経路で同じRedactorが適用されます。PII Redactorは `ChainRedactor` で本Redactorの後段に組み合わされます。
 
 E2Eスクリプトは `tests/e2e/06-injection-and-redact.sh` です。fixtures/safety_exerciseがScannerとRedactorの動作を検証します。設計の詳細は `docs/design/06-input-output-filter.md` を参照してください。
 
@@ -395,7 +463,7 @@ E2Eスクリプトは `tests/e2e/03-llm-retry.sh` です。`tests/e2e/fixtures/r
 
 ## 推論オプション (temperature / think)
 
-`providers.ollama` の `temperature` と `think` で推論パラメータを制御できます。どちらもポインタ型で、未指定なら一切リクエストに含めず Ollama の既定値に従います (既存挙動からの変更なし)。
+`providers.ollama` の `temperature` と `think` で推論パラメータを制御できます。どちらもポインタ型で、未指定なら一切リクエストに含めず Ollama の既定値に従います。
 
 ```yaml
 providers:
@@ -518,6 +586,37 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.llama-server.plist
 
 登録後は手動で llama-server を起動しないでください (ポートが衝突します)。
 
+## 会話履歴の圧縮 (compaction)
+
+長い対話でコンテキスト長を超えないように、古い会話を要約へ置き換えます。直近ターンの実測 input tokens が `context_window_tokens × trigger_ratio` 以上になると自動で発火します。判定には推定値ではなく LLM 呼び出しが返した実測値を使います。
+
+`keep_recent_turns` 件の直近ターンとシステムメッセージは保持し、それより前の区間を同じモデルで要約した 1 件のメッセージへ置き換えます。REPL で `/compact` を打つと同じ処理を手動で実行できます。圧縮対象が無い場合は何もしません。
+
+```yaml
+agent:
+  compaction:
+    enabled: true
+    context_window_tokens: 32768
+    trigger_ratio: 0.7
+    keep_recent_turns: 4
+```
+
+E2Eスクリプトは `tests/e2e/19-compaction.sh` です。設計の詳細は `docs/specs/2026-08-13-improvements/01-compaction.md` を参照してください。
+
+## ツール結果の切詰め
+
+`agent.tool_result_limit.max_chars` を超えるツール出力は、会話履歴へ積む直前に切り詰めます。先頭 60% と末尾 40% を残し、中央を `…[truncated: N chars omitted]…` に置き換えます。末尾に出る終了コードやエラーメッセージを残すための方式です。
+
+`max_chars: -1` で切り詰めを無効化できます。0 は未指定と区別できないため、既定値が適用されます。既定値を変える場合は、ツールを 1 回使っただけで圧縮の閾値に達しないよう、`context_window_tokens × trigger_ratio` の 40% 以下に保ってください。
+
+```yaml
+agent:
+  tool_result_limit:
+    max_chars: 8000
+```
+
+E2Eスクリプトは `tests/e2e/20-truncation.sh` です。設計の詳細は `docs/specs/2026-08-13-improvements/02-truncation.md` を参照してください。
+
 ## トークンとコストの集計
 
 `providers.<name>.pricing` を設定すると、LLM呼び出しごとの入出力トークン数からJPYコストを算出し、セッション単位と日次単位で集計します。集計結果は `storage.sessions_dir/billing.jsonl` に追記され、`agent.Event` の `Usage` と `Cost` フィールド経由でリアルタイムに観測できます。
@@ -536,7 +635,7 @@ agent:
 
 予算上限を超える呼び出しは `billing.ErrBudgetExceeded` で停止します。0は無制限の指定です。
 
-HTTP APIには `/v1/usage` エンドポイントを追加しました。`?session=<id>` でセッション単位、`?date=YYYY-MM-DD`（UTC）で日次の集計をJSONで返します。
+HTTP API は `/v1/usage` エンドポイントを提供します。`?session=<id>` でセッション単位、`?date=YYYY-MM-DD`（UTC）で日次の集計をJSONで返します。
 
 ```bash
 curl http://127.0.0.1:14000/v1/usage?session=sess-1
@@ -580,12 +679,21 @@ bash tests/e2e/01-otel-trace.sh
 ```bash
 make precommit-install   # pre-commit フックを有効化
 make quality             # 品質ゲートをローカル実行（CI と同一フロー）
+RUN_E2E=1 make quality   # 品質ゲートに27本のE2Eスクリプトを追加
 make build-all           # 6 バイナリへクロスコンパイル
 ```
 
-`scripts/quality-gate.sh` は **pre-commit と CI で同一コマンド** を実行する単一エントリです。gofmt / go vet / staticcheck / golangci-lint / govulncheck / `go test
---count=1 --shuffle=on -race -cover` / `gitleaks detect --no-git --source .` を順に走らせます。
-gitleaks は作業ツリーを直接スキャンする方式に統一しており、pre-commit でもステージ済み・未ステージのファイルを検査します。`.gitleaks.toml` で明示したローカル専用ファイルと、コミット対象外のGGUF保存先 `models/` は検査から除外します。
+`scripts/quality-gate.sh` はpre-commitとCIが共有する品質確認の入口です。mutation対象packageの除外テスト、gofmt、go vet、staticcheck、golangci-lint、govulncheck、`go test --count=1 --shuffle=on -race -cover`、release build、機密ファイルのstage防止、`gitleaks detect --no-git --source .` を順に実行します。`RUN_E2E=1`では27本の`tests/e2e/*.sh`も実行します。gitleaksはstage状態にかかわらず作業ツリーを検査し、`.gitleaks.toml`のallowlistに列挙したpathとマスク済みplaceholderを対象外にします。
+
+変更行のmutation testingは、比較元commitと1つ以上のGo packageを指定して実行します。
+
+```bash
+bash scripts/quality/mutation-diff.sh <base-ref> <go-package> [<go-package> ...]
+```
+
+各引数は`go list`で単一のGo packageへ解決されます。`tests/e2e/`配下はgremlinsを起動せず、E2Eスクリプトで検証します。`.gremlins.yaml`は、x/termフォーク基底の`terminal.go`と、リポジトリルートを対象にしたgremlins実行時の`tests/e2e/`を変異対象から除外します。
+
+gremlinsは作業ツリー全体をworkerごとの一時ディレクトリへコピーします。GGUF、checkpoint、生成動画などの大容量ファイルはリポジトリ外に保存してください。中断後に`$TMPDIR/gremlins-*`が残った場合は、gremlinsプロセスが動いていないことを確認してから削除してください。
 
 ## ライセンス
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/term"
+	"github.com/okamyuji/go-llm-agent/internal/transport/cliui/lineedit"
 )
 
 type fakeTermConn struct {
@@ -15,8 +15,8 @@ type fakeTermConn struct {
 	io.Writer
 }
 
-func newEditorForTest(input string) *term.Terminal {
-	return term.NewTerminal(fakeTermConn{strings.NewReader(input), &bytes.Buffer{}}, ">> ")
+func newEditorForTest(input string) *lineedit.Terminal {
+	return lineedit.NewTerminal(fakeTermConn{strings.NewReader(input), &bytes.Buffer{}}, ">> ")
 }
 
 func TestReadEditorPromptSingleLine(t *testing.T) {

@@ -330,3 +330,273 @@ func TestLoad_WebSearchRejectsHostlessEndpoint(t *testing.T) {
 		t.Fatalf("want hostless endpoint error, got %v", err)
 	}
 }
+
+func TestLoad_ToolResultLimitDefaultsWhenUnspecified(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Agent.ToolResultLimit.MaxChars != 8000 {
+		t.Fatalf("got %d, want 8000 (coded default)", cfg.Agent.ToolResultLimit.MaxChars)
+	}
+}
+
+func TestLoad_ToolResultLimitMinusOneDisablesTruncation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "agent:\n  tool_result_limit:\n    max_chars: -1\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Agent.ToolResultLimit.MaxChars != -1 {
+		t.Fatalf("got %d, want -1 (kept, not overwritten by default)", cfg.Agent.ToolResultLimit.MaxChars)
+	}
+}
+
+func TestLoad_ToolResultLimitRejectsBelowMinusOne(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "agent:\n  tool_result_limit:\n    max_chars: -2\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "max_chars") {
+		t.Fatalf("want max_chars error, got %v", err)
+	}
+}
+
+func loadCompactionConfig(t *testing.T, body string) *config.Config {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("default_model: test/m\n"+body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	return cfg
+}
+
+func TestLoad_CompactionDefaultsWhenUnspecified(t *testing.T) {
+	cfg := loadCompactionConfig(t, "")
+	c := cfg.Agent.Compaction
+	if c.Enabled == nil || !*c.Enabled {
+		t.Fatalf("未指定なら enabled=true 期待 got %v", c.Enabled)
+	}
+	if c.ContextWindowTokens != 32768 || c.TriggerRatio != 0.7 || c.KeepRecentTurns != 4 {
+		t.Fatalf("コード既定値期待 got %+v", c)
+	}
+}
+
+func TestLoad_CompactionEnabledExplicitFalse_StaysFalse(t *testing.T) {
+	cfg := loadCompactionConfig(t, "agent:\n  compaction:\n    enabled: false\n")
+	if cfg.Agent.Compaction.Enabled == nil || *cfg.Agent.Compaction.Enabled {
+		t.Fatalf("明示 false は上書きしない期待 got %v", cfg.Agent.Compaction.Enabled)
+	}
+}
+
+func TestLoad_CompactionExplicitValuesKept(t *testing.T) {
+	cfg := loadCompactionConfig(t, "agent:\n  compaction:\n    context_window_tokens: 8192\n    trigger_ratio: 0.5\n    keep_recent_turns: 2\n")
+	c := cfg.Agent.Compaction
+	if c.ContextWindowTokens != 8192 || c.TriggerRatio != 0.5 || c.KeepRecentTurns != 2 {
+		t.Fatalf("明示値を保持する期待 got %+v", c)
+	}
+}
+
+func TestLoad_CompactionRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"trigger_ratio 過大", "agent:\n  compaction:\n    trigger_ratio: 1.5\n"},
+		{"trigger_ratio 負", "agent:\n  compaction:\n    trigger_ratio: -0.1\n"},
+		{"keep_recent_turns 負", "agent:\n  compaction:\n    keep_recent_turns: -1\n"},
+		{"context_window_tokens 負", "agent:\n  compaction:\n    context_window_tokens: -1\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("default_model: test/m\n"+tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := config.Load(path); err == nil {
+				t.Fatal("エラー期待")
+			}
+		})
+	}
+}
+
+func TestLoad_CompactionDisabledSkipsValidation(t *testing.T) {
+	cfg := loadCompactionConfig(t, "agent:\n  compaction:\n    enabled: false\n    trigger_ratio: 1.5\n")
+	if *cfg.Agent.Compaction.Enabled {
+		t.Fatal("enabled=false 期待")
+	}
+}
+
+func TestLoad_HooksValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{"matcher 空", "hooks:\n  pre_tool_use:\n    - command: \"exit 0\"\n", true},
+		{"command 空", "hooks:\n  pre_tool_use:\n    - matcher: \"*\"\n", true},
+		{"timeout 負", "hooks:\n  pre_tool_use:\n    - matcher: \"*\"\n      command: \"exit 0\"\n      timeout_seconds: -1\n", true},
+		{"post も検査する", "hooks:\n  post_tool_use:\n    - matcher: \"*\"\n", true},
+		{"timeout 未指定は許可", "hooks:\n  pre_tool_use:\n    - matcher: \"*\"\n      command: \"exit 0\"\n", false},
+		{"ワイルドカード許可", "hooks:\n  pre_tool_use:\n    - matcher: \"*\"\n      command: \"exit 0\"\n      timeout_seconds: 3\n", false},
+		{"未設定", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("default_model: test/m\n"+tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.Load(path)
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("wantErr=%v got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestLoad_HooksParsed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := "default_model: test/m\nhooks:\n  pre_tool_use:\n    - matcher: \"shell\"\n      command: \"lint\"\n      timeout_seconds: 5\n  post_tool_use:\n    - matcher: \"*\"\n      command: \"audit\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.PreToolUse) != 1 || cfg.Hooks.PreToolUse[0].Matcher != "shell" || cfg.Hooks.PreToolUse[0].TimeoutSeconds != 5 {
+		t.Fatalf("pre hook の解釈期待 got %+v", cfg.Hooks.PreToolUse)
+	}
+	if len(cfg.Hooks.PostToolUse) != 1 || cfg.Hooks.PostToolUse[0].Command != "audit" {
+		t.Fatalf("post hook の解釈期待 got %+v", cfg.Hooks.PostToolUse)
+	}
+}
+
+func TestLoad_ShellOSSandboxDefaultsToAuto(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Tools.Shell.OSSandbox != "auto" {
+		t.Fatalf("got %q, want \"auto\" (coded default)", cfg.Tools.Shell.OSSandbox)
+	}
+}
+
+func TestLoad_ShellOSSandboxExplicitOffKept(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\ntools:\n  shell:\n    os_sandbox: off\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Tools.Shell.OSSandbox != "off" {
+		t.Fatalf("got %q, want \"off\" (explicit value not overwritten)", cfg.Tools.Shell.OSSandbox)
+	}
+}
+
+func TestLoad_StorageChatSessionsDirParsed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\nstorage:\n  sessions_dir: /tmp/s\n  chat_sessions_dir: /tmp/s/chat\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Storage.ChatSessionsDir != "/tmp/s/chat" {
+		t.Fatalf("got %q", cfg.Storage.ChatSessionsDir)
+	}
+}
+
+func TestLoad_StorageChatSessionsDirDefaultsToEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Storage.ChatSessionsDir != "" {
+		t.Fatalf("got %q, want empty (applyDefaults はこのキーに触れない)", cfg.Storage.ChatSessionsDir)
+	}
+}
+
+func TestLoad_AgentsMDDefaultsWhenUnspecified(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Agent.AgentsMD.Enabled == nil || !*cfg.Agent.AgentsMD.Enabled {
+		t.Fatalf("Enabled = %v, want true (coded default)", cfg.Agent.AgentsMD.Enabled)
+	}
+	if cfg.Agent.AgentsMD.MaxBytes != 32768 {
+		t.Fatalf("MaxBytes = %d, want 32768 (coded default)", cfg.Agent.AgentsMD.MaxBytes)
+	}
+}
+
+func TestLoad_AgentsMDExplicitFalseStaysFalse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\nagent:\n  agents_md:\n    enabled: false\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load err=%v", err)
+	}
+	if cfg.Agent.AgentsMD.Enabled == nil || *cfg.Agent.AgentsMD.Enabled {
+		t.Fatalf("Enabled = %v, want false (明示値は上書きされない)", cfg.Agent.AgentsMD.Enabled)
+	}
+}
+
+func TestLoad_ShellOSSandboxRejectsInvalidValue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "default_model: test/m\ntools:\n  shell:\n    os_sandbox: yolo\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.Load(path); err == nil || !strings.Contains(err.Error(), "os_sandbox") {
+		t.Fatalf("want os_sandbox error, got %v", err)
+	}
+}

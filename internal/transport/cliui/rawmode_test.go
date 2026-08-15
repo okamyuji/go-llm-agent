@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -187,5 +188,117 @@ func TestCRLFWriterCRLFSplitAcrossWrites(t *testing.T) {
 	_, _ = w.Write([]byte("\ny"))
 	if buf.String() != "x\r\ny" {
 		t.Errorf("got %q, want x\\r\\ny", buf.String())
+	}
+}
+
+func TestBytePump_ReadAnswerLine_ConsumesPendingFirst(t *testing.T) {
+	p := newBytePump(strings.NewReader("second\n"))
+	for _, b := range []byte("y\n") {
+		p.pushback(b)
+	}
+	got, err := p.readAnswerLine(context.Background())
+	if err != nil || got != "y" {
+		t.Fatalf("pushback 済みを先に消費する期待 got %q err=%v", got, err)
+	}
+	got, err = p.readAnswerLine(context.Background())
+	if err != nil || got != "second" {
+		t.Fatalf("残りは channel から読む期待 got %q err=%v", got, err)
+	}
+}
+
+func TestBytePump_ReadAnswerLine_CtrlC(t *testing.T) {
+	p := newBytePump(strings.NewReader("\x03"))
+	if _, err := p.readAnswerLine(context.Background()); !errors.Is(err, errCtrlC) {
+		t.Fatalf("errCtrlC 期待 got %v", err)
+	}
+}
+
+func TestBytePump_ReadAnswerLine_CtrlCInPending(t *testing.T) {
+	p := newBytePump(strings.NewReader(""))
+	for _, b := range []byte("ab\x03") {
+		p.pushback(b)
+	}
+	if _, err := p.readAnswerLine(context.Background()); !errors.Is(err, errCtrlC) {
+		t.Fatalf("pushback 途中の Ctrl-C も検出する期待 got %v", err)
+	}
+}
+
+func TestBytePump_ReadAnswerLine_ESC(t *testing.T) {
+	p := newBytePump(strings.NewReader("\x1b"))
+	if _, err := p.readAnswerLine(context.Background()); !errors.Is(err, errESC) {
+		t.Fatalf("errESC 期待 got %v", err)
+	}
+}
+
+func TestBytePump_ReadAnswerLine_ESCInPending(t *testing.T) {
+	p := newBytePump(strings.NewReader(""))
+	for _, b := range []byte("ab\x1b") {
+		p.pushback(b)
+	}
+	if _, err := p.readAnswerLine(context.Background()); !errors.Is(err, errESC) {
+		t.Fatalf("pushback 途中の ESC も検出する期待 got %v", err)
+	}
+}
+
+func TestBytePump_ReadAnswerLine_EOF(t *testing.T) {
+	p := newBytePump(strings.NewReader(""))
+	if _, err := p.readAnswerLine(context.Background()); err == nil {
+		t.Fatal("入力終端でエラー期待")
+	}
+	p2 := newBytePump(strings.NewReader("no newline"))
+	got, err := p2.readAnswerLine(context.Background())
+	if err != nil || got != "no newline" {
+		t.Fatalf("改行なしの残りは 1 行として返る期待 got %q err=%v", got, err)
+	}
+}
+
+func TestBytePump_ReadAnswerLine_CtxDone(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+	p := newBytePump(pr)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.readAnswerLine(ctx)
+		done <- err
+	}()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("context.Canceled 期待 got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("readAnswerLine が ctx キャンセルで返らない")
+	}
+}
+
+func TestREPL_TerminalFD_NonFileAndNonTTY(t *testing.T) {
+	r := &REPL{in: strings.NewReader("")}
+	if _, ok := r.terminalFD(); ok {
+		t.Fatal("io.Reader は端末ではない期待")
+	}
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	r2 := &REPL{in: f}
+	if _, ok := r2.terminalFD(); ok {
+		t.Fatal("/dev/null は端末ではない期待")
+	}
+}
+
+func TestREPL_SetupEditor_NonTerminalReturnsNoEditor(t *testing.T) {
+	var buf bytes.Buffer
+	r := &REPL{in: strings.NewReader(""), out: &buf}
+	pump := newBytePump(strings.NewReader(""))
+	out, editor, closeEditor := r.setupEditor(context.Background(), pump)
+	defer closeEditor()
+	if editor != nil {
+		t.Fatal("端末でなければ行エディタは作らない期待")
+	}
+	if out != io.Writer(&buf) {
+		t.Fatal("出力先はそのまま期待")
 	}
 }

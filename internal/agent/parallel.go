@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
@@ -87,7 +86,7 @@ func (s *service) executeConcurrent(ctx context.Context, sessionID string, calls
 
 // executeOne 単一 ToolCall を承認・実行・観測の全プロセスで処理する
 func (s *service) executeOne(ctx context.Context, sessionID string, call llm.ToolCall) ParallelOutcome {
-	if s.approver != nil && s.approvalRequired[call.Name] {
+	if s.decider != nil && s.approvalRequired[call.Name] {
 		// loop.go の runReAct と同じ正規化を適用する (runID の lookup を一致させる)
 		// 空 sessionID で発行された承認待ちが parallel 経路と sequential 経路で異なるキーに
 		// 振り分けられると、Submit が空振りして deadlock 経路に入る
@@ -99,21 +98,28 @@ func (s *service) executeOne(ctx context.Context, sessionID string, call llm.Too
 		if timeout <= 0 {
 			timeout = defaultApprovalTimeout
 		}
+		summary := BuildApprovalSummary(ctx, s.tools, call.Name, call.Arguments)
 		apCtx, apCancel := context.WithTimeout(ctx, timeout)
-		d, aerr := s.approver.Request(apCtx, ApprovalRequest{RunID: runID, CallID: call.ID, ToolName: call.Name, Arguments: call.Arguments})
+		allowed, reason, derr := s.decider.Decide(apCtx, ApprovalRequest{
+			RunID: runID, CallID: call.ID, ToolName: call.Name, Arguments: call.Arguments, Summary: summary,
+		})
 		apCancel()
-		// loop.go の runReAct と同じ判定 (errors.Is(aerr, ErrApprovalTimeout)) を使う
-		// timeout 以外のエラーは Approver 自体の致命的失敗として拒否扱い
-		if aerr != nil && !errors.Is(aerr, ErrApprovalTimeout) {
-			return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: "approver failure: " + aerr.Error(), IsError: true}
+		// loop.go の runReAct と同じ規約。derr は承認機構自体の致命的失敗のみで、
+		// タイムアウトは decider 側が default_decision へ解決済み
+		if derr != nil {
+			return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: "approver failure: " + derr.Error(), IsError: true}
 		}
-		if !d.Allowed {
-			return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: "tool execution denied: " + d.Reason, IsError: true}
+		if !allowed {
+			return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: "tool execution denied: " + reason, IsError: true}
 		}
 	}
 	t, ok := s.tools.Lookup(call.Name)
 	if !ok {
 		return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: "tool not found: " + call.Name, IsError: true}
+	}
+	// loop.go と同じ順序で「承認 → pre hook → 実行 → post hook」を適用する
+	if allowed, reason := s.hooks.RunPre(ctx, call.Name, call.Arguments); !allowed {
+		return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: "tool execution blocked by pre_tool_use hook: " + reason, IsError: true}
 	}
 	execCtx := context.WithValue(ctx, tool.CorrelationKey(), call.ID)
 	execCtx, span := obs.StartToolSpan(execCtx, call.Name, call.ID)
@@ -122,6 +128,7 @@ func (s *service) executeOne(ctx context.Context, sessionID string, call llm.Too
 	ok2 := terr == nil && !res.IsError
 	obs.RecordToolOutcome(execCtx, call.Name, ok2, time.Since(start))
 	span.End()
+	s.hooks.RunPost(ctx, call.Name, call.Arguments, HookResult{IsError: !ok2, Content: res.Content, Duration: time.Since(start)})
 	content := res.Content
 	if terr != nil {
 		content = terr.Error()

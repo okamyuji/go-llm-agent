@@ -32,7 +32,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version-file: go.mod
           cache: true
 
       - name: Set up Python
@@ -67,7 +67,7 @@ jobs:
         run: bash scripts/verify-hardening.sh
 
   e2e:
-    name: e2e (16 scripts)
+    name: e2e (27 scripts)
     runs-on: ubuntu-latest
     env:
       GITLEAKS_VERSION: "8.30.1"
@@ -79,7 +79,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version-file: go.mod
           cache: true
 
       - name: Install staticcheck

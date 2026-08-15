@@ -7,16 +7,104 @@ import (
 	"time"
 )
 
-func TestAutoApprover_ReturnsConfiguredDecision(t *testing.T) {
+func TestAutoDecider_AllowAndDeny(t *testing.T) {
 	t.Parallel()
-	a := AutoApprover{Allow: true}
-	d, err := a.Request(context.Background(), ApprovalRequest{RunID: "r", CallID: "c", ToolName: "shell"})
+	allowed, reason, err := AutoDecider{Allow: true}.Decide(context.Background(), ApprovalRequest{})
+	if !allowed || reason != "" || err != nil {
+		t.Fatalf("Allow=true は (true,\"\",nil) 期待 got (%v,%q,%v)", allowed, reason, err)
+	}
+	allowed, reason, err = AutoDecider{Allow: false, Reason: "x"}.Decide(context.Background(), ApprovalRequest{})
+	if allowed || reason != "x" || err != nil {
+		t.Fatalf("Allow=false は (false,\"x\",nil) 期待 got (%v,%q,%v)", allowed, reason, err)
+	}
+}
+
+func TestBrokerDecider_Allow(t *testing.T) {
+	t.Parallel()
+	a := NewHTTPApprover()
+	d := NewBrokerDecider(a)
+	go func() {
+		for !a.Submit(ApprovalDecision{RunID: "r", CallID: "c", Allowed: true}) {
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	allowed, reason, err := d.Decide(context.Background(), ApprovalRequest{RunID: "r", CallID: "c"})
+	if !allowed || reason != "" || err != nil {
+		t.Fatalf("(true,\"\",nil) 期待 got (%v,%q,%v)", allowed, reason, err)
+	}
+}
+
+func TestBrokerDecider_ExplicitDeny(t *testing.T) {
+	t.Parallel()
+	a := NewHTTPApprover()
+	d := NewBrokerDecider(a)
+	go func() {
+		for !a.Submit(ApprovalDecision{RunID: "r", CallID: "c", Allowed: false, Reason: "x"}) {
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	allowed, reason, err := d.Decide(context.Background(), ApprovalRequest{RunID: "r", CallID: "c"})
+	if allowed || reason != "x" {
+		t.Fatalf("(false,\"x\") 期待 got (%v,%q)", allowed, reason)
+	}
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("明示的な拒否は致命的失敗ではない got %v", err)
 	}
-	if !d.Allowed {
-		t.Error("auto approver with Allow=true must return Allowed=true")
+}
+
+func TestBrokerDecider_TimeoutDefaultsToDeny(t *testing.T) {
+	t.Parallel()
+	d := NewBrokerDecider(NewHTTPApprover())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	allowed, reason, err := d.Decide(ctx, ApprovalRequest{RunID: "r", CallID: "c"})
+	if allowed {
+		t.Fatal("タイムアウトは拒否期待")
 	}
+	if err != nil {
+		t.Fatalf("タイムアウトは err にしない got %v", err)
+	}
+	if reason != approvalTimedOutReason {
+		t.Fatalf("default_decision 解決の理由期待 got %q", reason)
+	}
+}
+
+func TestBrokerDecider_PropagatesFatalError(t *testing.T) {
+	t.Parallel()
+	a := NewHTTPApprover()
+	d := NewBrokerDecider(a)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, _ = a.Request(ctx, ApprovalRequest{RunID: "r", CallID: "c"})
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		a.mu.Lock()
+		_, pending := a.pending[approvalKey{RunID: "r", CallID: "c"}]
+		a.mu.Unlock()
+		if pending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first Request did not register as pending")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// 同一キーの併走 Request は ErrApprovalAlreadyPending になる
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	allowed, reason, err := d.Decide(ctx, ApprovalRequest{RunID: "r", CallID: "c"})
+	if err == nil || !errors.Is(err, ErrApprovalAlreadyPending) {
+		t.Fatalf("致命的失敗の伝播期待 got %v", err)
+	}
+	if allowed || reason != "" {
+		t.Fatalf("err 非 nil のとき (false,\"\") 期待 got (%v,%q)", allowed, reason)
+	}
+	a.Submit(ApprovalDecision{RunID: "r", CallID: "c", Allowed: false})
+	<-done
 }
 
 func TestHTTPApprover_SubmitReleasesPendingRequest(t *testing.T) {

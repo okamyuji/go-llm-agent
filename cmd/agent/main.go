@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -16,22 +15,11 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/config"
 	"github.com/okamyuji/go-llm-agent/internal/enricher"
-	"github.com/okamyuji/go-llm-agent/internal/eval"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
-	"github.com/okamyuji/go-llm-agent/internal/llm/anthropic"
-	"github.com/okamyuji/go-llm-agent/internal/llm/gemini"
-	"github.com/okamyuji/go-llm-agent/internal/llm/llamacpp"
-	"github.com/okamyuji/go-llm-agent/internal/llm/ollama"
-	"github.com/okamyuji/go-llm-agent/internal/llm/openai"
 	"github.com/okamyuji/go-llm-agent/internal/llm/retry"
-	"github.com/okamyuji/go-llm-agent/internal/memory"
 	"github.com/okamyuji/go-llm-agent/internal/obs"
 	"github.com/okamyuji/go-llm-agent/internal/safety"
-	"github.com/okamyuji/go-llm-agent/internal/secret"
-	"github.com/okamyuji/go-llm-agent/internal/storage"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
-	"github.com/okamyuji/go-llm-agent/internal/transport/cliui"
-	"github.com/okamyuji/go-llm-agent/internal/transport/httpapi"
 )
 
 var version = "dev"
@@ -104,7 +92,53 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage: agent {chat|run|serve|tools|config|eval|version} [flags]")
 }
 
-// cmdEval suite ディレクトリの YAML を読み込み agent.Service で実行してレポートを書く
+func cmdChat(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("chat", flag.ExitOnError)
+	configPath := fs.String("config", "config.yaml", "config file path")
+	model := fs.String("model", "", "model id (provider/name)")
+	noSpinner := fs.Bool("no-spinner", false, "disable progress indicator and turn summary")
+	resume := fs.Bool("resume", false, "resume the most recent chat session")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	return runChatSession(ctx, chatSessionParams{
+		ConfigPath: *configPath,
+		Model:      *model,
+		NoSpinner:  *noSpinner,
+		Resume:     *resume,
+	})
+}
+
+func cmdRun(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	configPath := fs.String("config", "config.yaml", "config file path")
+	model := fs.String("model", "", "model id (provider/name)")
+	prompt := fs.String("p", "", "prompt")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	return runOneShot(ctx, oneShotParams{ConfigPath: *configPath, Model: *model, Prompt: *prompt})
+}
+
+func cmdServe(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	configPath := fs.String("config", "config.yaml", "config file path")
+	addr := fs.String("addr", "", "listen address")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	return runServer(ctx, serveParams{ConfigPath: *configPath, Addr: *addr})
+}
+
+func cmdTools(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("tools", flag.ExitOnError)
+	configPath := fs.String("config", "config.yaml", "config file path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	return listTools(ctx, *configPath, os.Stdout)
+}
+
 func cmdEval(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("eval", flag.ExitOnError)
 	configPath := fs.String("config", "config.yaml", "config file path")
@@ -114,179 +148,40 @@ func cmdEval(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, reg, tools, _, err := loadDeps(ctx, *configPath)
-	if err != nil {
-		return err
-	}
-	m := *model
-	if m == "" {
-		m = cfg.DefaultModel
-	}
-	acc, err := buildBillingAccumulator(cfg)
-	if err != nil {
-		return err
-	}
-	opts, _, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath))
-	if optsErr != nil {
-		return optsErr
-	}
-	svc := agent.New(reg, tools, opts...)
-	cases, err := eval.LoadSuite(*suite)
-	if err != nil {
-		return err
-	}
-	if len(cases) == 0 {
-		return fmt.Errorf("no eval cases found under %s", *suite)
-	}
-	results, err := eval.RunSuite(ctx, svc, cases, m, cfg.Agent.MaxToolHops)
-	if err != nil {
-		return err
-	}
-	scores := make([]eval.Scores, len(cases))
-	for i := range cases {
-		scores[i] = eval.Score(cases[i], results[i])
-	}
-	if err := eval.WriteReport(*report, cases, results, scores); err != nil {
-		return err
-	}
-	var passed int
-	for _, s := range scores {
-		if s.Passed {
-			passed++
-		}
-	}
-	fmt.Printf("eval report: %d/%d passed (report: %s)\n", passed, len(cases), *report)
-	if passed != len(cases) {
-		return fmt.Errorf("%d eval case(s) failed", len(cases)-passed)
-	}
-	return nil
+	return runEvalSuite(ctx, evalParams{
+		ConfigPath: *configPath,
+		Suite:      *suite,
+		Report:     *report,
+		Model:      *model,
+	})
 }
 
-func loadDeps(ctx context.Context, configPath string) (*config.Config, llm.Registry, tool.Registry, storage.SessionStore, error) {
-	cfg, err := config.Load(configPath)
+func cmdConfig(args []string) error {
+	fs := flag.NewFlagSet("config", flag.ExitOnError)
+	configPath := fs.String("config", "config.yaml", "config file path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.Load(*configPath)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return err
 	}
-	if cfg.Observability.OTel.Enabled {
-		sd, terr := obs.InitTelemetry(ctx, obs.TelemetryConfig{
-			Enabled:                cfg.Observability.OTel.Enabled,
-			Endpoint:               cfg.Observability.OTel.Endpoint,
-			Insecure:               cfg.Observability.OTel.Insecure,
-			SampleRatio:            cfg.Observability.OTel.SampleRatio,
-			ServiceName:            cfg.Observability.OTel.ServiceName,
-			MetricsIntervalSeconds: cfg.Observability.OTel.MetricsIntervalSeconds,
-		}, nil)
-		if terr != nil {
-			return nil, nil, nil, nil, fmt.Errorf("init telemetry: %w", terr)
-		}
-		shutdownTelemetry = sd
-	}
-	resolver := secret.NewResolver(".env")
-	provs := map[string]llm.Provider{}
-	// resolveAPIKey APIKeyEnv が未設定または resolver で解決失敗した場合に error を返す
-	// 起動時に明示的に失敗を呼び出し側へ伝え、サイレント空キーでの実呼び出しを避ける
-	resolveAPIKey := func(name string, envKeys ...string) (string, error) {
-		key, usedEnv, err := secret.ResolveAny(resolver, envKeys...)
-		if err != nil {
-			return "", fmt.Errorf("provider %q: resolve api key from %v: %w", name, envKeys, err)
-		}
-		if key == "" {
-			return "", fmt.Errorf("provider %q: api key from env %q resolved to empty value", name, usedEnv)
-		}
-		return key, nil
-	}
-	if pc, ok := cfg.Providers["openai"]; ok {
-		key, err := resolveAPIKey("openai", pc.APIKeyEnv)
-		if err != nil {
-			return nil, nil, nil, nil, err
-		}
-		provs["openai"] = wrapWithRetry("openai", openai.New(openai.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
-	}
-	if pc, ok := cfg.Providers["anthropic"]; ok {
-		key, err := resolveAPIKey("anthropic", pc.APIKeyEnv, "CLAUDE_API_KEY")
-		if err != nil {
-			return nil, nil, nil, nil, err
-		}
-		provs["anthropic"] = wrapWithRetry("anthropic", anthropic.New(anthropic.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
-	}
-	if pc, ok := cfg.Providers["gemini"]; ok {
-		key, err := resolveAPIKey("gemini", pc.APIKeyEnv)
-		if err != nil {
-			return nil, nil, nil, nil, err
-		}
-		provs["gemini"] = wrapWithRetry("gemini", gemini.New(gemini.Options{BaseURL: pc.BaseURL, APIKey: key, RequestTimeoutSeconds: pc.RequestTimeoutSeconds}), pc.Retry)
-	}
-	if pc, ok := cfg.Providers["ollama"]; ok {
-		provs["ollama"] = wrapWithRetry("ollama", ollama.New(ollama.Options{
-			BaseURL:               pc.BaseURL,
-			RequestTimeoutSeconds: pc.RequestTimeoutSeconds,
-			Temperature:           pc.Temperature,
-			Think:                 pc.Think,
-		}), pc.Retry)
-	}
-	if pc, ok := cfg.Providers["llamacpp"]; ok {
-		provs["llamacpp"] = wrapWithRetry("llamacpp", llamacpp.New(llamacpp.Options{
-			BaseURL:               pc.BaseURL,
-			RequestTimeoutSeconds: pc.RequestTimeoutSeconds,
-			Temperature:           pc.Temperature,
-			MaxTokens:             pc.MaxTokens,
-			RepeatPenalty:         pc.RepeatPenalty,
-			Think:                 pc.Think,
-			ToolCallIDFormat:      pc.ToolCallIDFormat,
-		}), pc.Retry)
-	}
-	allowModels := map[string][]string{}
-	fallbackMap := map[string]string{}
-	for name, pc := range cfg.Providers {
-		if len(pc.AllowModels) > 0 {
-			allowModels[name] = pc.AllowModels
-		}
-		if pc.FallbackTo != "" {
-			fallbackMap[name] = pc.FallbackTo
-		}
-	}
-	llmReg := llm.NewRegistryWithFallback(provs, allowModels, fallbackMap)
-
-	logger := obs.NewLogger(obs.LoggerOptions{Format: cfg.Logging.Format, Level: cfg.Logging.Level})
-	sb := tool.NewSandboxWithDeny(cfg.Tools.FS.AllowPaths, cfg.Tools.FS.DenyPaths)
-	webFetch := tool.NewWebFetch(cfg.Tools.WebFetch, logger)
-	if slices.Contains(cfg.Agent.EnabledTools, "web_fetch") {
-		webFetch.WarnIfWebgrabMissing()
-	}
-	tools := []tool.Tool{
-		tool.NewFSReadWithLogger(sb, cfg.Tools.FS.MaxReadBytes, logger),
-		tool.NewFSWriteWithLogger(sb, logger),
-		tool.NewShell(cfg.Tools.Shell, logger),
-		tool.NewHTTPFetchWithLogger(cfg.Tools.HTTPFetch, logger),
-		tool.NewSearchFiles(sb, cfg.Tools.SearchFiles),
-		tool.NewWebSearch(cfg.Tools.WebSearch),
-		webFetch,
-	}
-	notesPath := cfg.Storage.NotesPath
-	if notesPath == "" {
-		notesPath = filepath.Join(expand(cfg.Storage.SessionsDir), "notes.jsonl")
-	} else {
-		notesPath = expand(notesPath)
-	}
-	if ns, err := memory.NewFileNoteStore(notesPath); err == nil {
-		tools = append(tools, &tool.NoteAddTool{Store: ns}, &tool.NoteSearchTool{Store: ns})
-	} else {
-		// strict_notes_init=true なら起動エラーで fast-fail
-		// false (既定) では degraded mode で agent を継続させ、ツール 2 つが無効化される
-		if cfg.Storage.StrictNotesInit {
-			return nil, nil, nil, nil, fmt.Errorf("notes store init failed (strict_notes_init=true): %w", err)
-		}
-		logger.Error("degraded mode: notes store init failed; note_add and note_search are disabled but agent continues to start", "path", notesPath, "err", err)
-	}
-	toolReg := tool.NewRegistry(tools, cfg.Agent.EnabledTools)
-	store := storage.NewSessionStore(expand(cfg.Storage.SessionsDir))
-	return cfg, llmReg, toolReg, store, nil
+	fmt.Printf("default_model: %s\n", cfg.DefaultModel)
+	fmt.Printf("providers: %d 件\n", len(cfg.Providers))
+	fmt.Printf("enabled_tools: %v\n", cfg.Agent.EnabledTools)
+	return nil
 }
 
 // agentOptions config に基づき agent.Service のオプション集合を組み立てる
 // safety / billing / strategy などの構築でエラーになった場合、呼び出し側に伝播する
 // HTTPApprover を生成した場合、第 2 戻り値で返す。chat/run サブコマンドでは捨ててよい
 func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulator, configDir string) ([]agent.Option, *agent.HTTPApprover, error) {
+	return agentOptionsWithDecider(cfg, tools, acc, configDir, nil)
+}
+
+// agentOptionsWithDecider agentOptions に承認 decider の注入を加えた形。
+// chat は対話プロンプタを渡し、serve・run・eval は nil を渡して broker を使う
+func agentOptionsWithDecider(cfg *config.Config, tools tool.Registry, acc billing.Accumulator, configDir string, decider agent.ApprovalDecider) ([]agent.Option, *agent.HTTPApprover, error) {
 	var opts []agent.Option
 	var approver *agent.HTTPApprover
 	if acc != nil {
@@ -303,20 +198,14 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 	if cfg.Agent.ToolChoice.Mode != "" {
 		opts = append(opts, agent.WithDefaultToolChoice(&llm.ToolChoice{Mode: cfg.Agent.ToolChoice.Mode, Name: cfg.Agent.ToolChoice.Name}))
 	}
-	sc, err := buildScanner(cfg)
+	if cfg.Agent.ToolResultLimit.MaxChars > 0 {
+		opts = append(opts, agent.WithToolResultLimit(cfg.Agent.ToolResultLimit.MaxChars))
+	}
+	safety, err := safetyOptions(cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("build safety scanner: %w", err)
+		return nil, nil, err
 	}
-	if sc != nil {
-		opts = append(opts, agent.WithScanner(sc))
-	}
-	rd, err := buildRedactor(cfg)
-	if err != nil {
-		return nil, nil, fmt.Errorf("build safety redactor: %w", err)
-	}
-	if rd != nil {
-		opts = append(opts, agent.WithRedactor(rd))
-	}
+	opts = append(opts, safety...)
 	if cfg.Agent.Strategy != "" {
 		if st, ok := agent.NewStrategy(
 			cfg.Agent.Strategy,
@@ -331,11 +220,12 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 		}
 	}
 	if len(cfg.Agent.Approval.RequiredTools) > 0 {
-		// default_decision と timeout_seconds は config.Load 側の validateApproval で
-		// 既に検証済みのため、ここでは値をそのまま使う。fail-open 経路は存在しない
-		approver = agent.NewHTTPApprover()
-		timeout := time.Duration(cfg.Agent.Approval.TimeoutSeconds) * time.Second
-		opts = append(opts, agent.WithApprover(approver, cfg.Agent.Approval.RequiredTools, timeout))
+		var approvalOpt agent.Option
+		approvalOpt, approver = approvalOption(cfg, decider)
+		opts = append(opts, approvalOpt)
+	}
+	if hr := hookRunner(cfg.Hooks); hr != nil {
+		opts = append(opts, agent.WithHooks(hr))
 	}
 	if e := enricher.New(enricher.Config{
 		Enabled:    cfg.Agent.Enricher.Enabled,
@@ -353,6 +243,47 @@ func agentOptions(cfg *config.Config, tools tool.Registry, acc billing.Accumulat
 		opts = append(opts, agent.WithContextEnricher(e))
 	}
 	return opts, approver, nil
+}
+
+// hookRunner hooks が 1 件も無ければ nil を返し、既存動作へ影響させない
+func hookRunner(h config.HooksConfig) *agent.HookRunner {
+	if len(h.PreToolUse) == 0 && len(h.PostToolUse) == 0 {
+		return nil
+	}
+	return agent.NewHookRunner(toHookSpecs(h.PreToolUse), toHookSpecs(h.PostToolUse))
+}
+
+// toHookSpecs config の hook 定義を agent の実行仕様へ変換する
+func toHookSpecs(cs []config.HookConfig) []agent.HookSpec {
+	out := make([]agent.HookSpec, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, agent.HookSpec{
+			Matcher: c.Matcher,
+			Command: c.Command,
+			Timeout: time.Duration(c.TimeoutSeconds) * time.Second,
+		})
+	}
+	return out
+}
+
+// safetyOptions 入力スキャナと出力リダクタのオプションを組み立てる
+func safetyOptions(cfg *config.Config) ([]agent.Option, error) {
+	var opts []agent.Option
+	sc, err := buildScanner(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build safety scanner: %w", err)
+	}
+	if sc != nil {
+		opts = append(opts, agent.WithScanner(sc))
+	}
+	rd, err := buildRedactor(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build safety redactor: %w", err)
+	}
+	if rd != nil {
+		opts = append(opts, agent.WithRedactor(rd))
+	}
+	return opts, nil
 }
 
 // buildScanner cfg.Safety.InputScanner から safety.Scanner を構築する
@@ -387,6 +318,17 @@ func buildRedactor(cfg *config.Config) (safety.Redactor, error) {
 		return nil, err
 	}
 	return safety.ChainRedactor(out, pii), nil
+}
+
+// excludeTool tools から name を除いた新しいスライスを返す (元スライスは変更しない)
+func excludeTool(tools []string, name string) []string {
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if t != name {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // wrapWithRetry RetryConfig を retry.Config に変換して Provider をラップする
@@ -425,142 +367,6 @@ func buildBillingAccumulator(cfg *config.Config) (billing.Accumulator, error) {
 		return nil, fmt.Errorf("billing store: %w", err)
 	}
 	return billing.NewAccumulator(billing.Config{Pricing: pricing, Budget: budget}, store), nil
-}
-
-func cmdChat(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("chat", flag.ExitOnError)
-	configPath := fs.String("config", "config.yaml", "config file path")
-	model := fs.String("model", "", "model id (provider/name)")
-	noSpinner := fs.Bool("no-spinner", false, "disable progress indicator and turn summary")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cfg, reg, tools, _, err := loadDeps(ctx, *configPath)
-	if err != nil {
-		return err
-	}
-	m := *model
-	if m == "" {
-		m = cfg.DefaultModel
-	}
-	acc, err := buildBillingAccumulator(cfg)
-	if err != nil {
-		return err
-	}
-	opts, _, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath))
-	if optsErr != nil {
-		return optsErr
-	}
-	svc := agent.New(reg, tools, opts...)
-	// 入力履歴は rlwrap -H と同形式で永続化する (既存の ~/.agent_history を引き継ぐ)
-	historyFile := ""
-	if home, homeErr := os.UserHomeDir(); homeErr == nil {
-		historyFile = filepath.Join(home, ".agent_history")
-	}
-	r := cliui.NewREPL(svc, cliui.Options{
-		Model:          m,
-		SystemPrompt:   cfg.Agent.SystemPrompt,
-		MaxToolHops:    cfg.Agent.MaxToolHops,
-		DisableSpinner: *noSpinner,
-		HistoryFile:    historyFile,
-	})
-	return r.Run(ctx)
-}
-
-func cmdRun(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	configPath := fs.String("config", "config.yaml", "config file path")
-	model := fs.String("model", "", "model id (provider/name)")
-	prompt := fs.String("p", "", "prompt")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cfg, reg, tools, _, err := loadDeps(ctx, *configPath)
-	if err != nil {
-		return err
-	}
-	m := *model
-	if m == "" {
-		m = cfg.DefaultModel
-	}
-	acc, err := buildBillingAccumulator(cfg)
-	if err != nil {
-		return err
-	}
-	opts, _, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath))
-	if optsErr != nil {
-		return optsErr
-	}
-	svc := agent.New(reg, tools, opts...)
-	return cliui.RunOneShot(ctx, svc, m, cfg.Agent.SystemPrompt, *prompt, cfg.Agent.MaxToolHops, os.Stdout)
-}
-
-func cmdServe(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	configPath := fs.String("config", "config.yaml", "config file path")
-	addr := fs.String("addr", "", "listen address")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cfg, reg, tools, _, err := loadDeps(ctx, *configPath)
-	if err != nil {
-		return err
-	}
-	a := *addr
-	if a == "" {
-		a = cfg.Server.Addr
-	}
-	acc, err := buildBillingAccumulator(cfg)
-	if err != nil {
-		return err
-	}
-	opts, approver, optsErr := agentOptions(cfg, tools, acc, filepath.Dir(*configPath))
-	if optsErr != nil {
-		return optsErr
-	}
-	svc := agent.New(reg, tools, opts...)
-	// serve のみ HTTPApprover を /v1/runs/<id>/approve に渡す
-	// chat/run/eval は approver を保持せず必要に応じて捨てる
-	// non-stream の最終 content に再適用する Redactor も渡す
-	// (loop の chunk-by-chunk redact だけだと PII が chunk 境界を跨いで取りこぼされる)
-	rd, err := buildRedactor(cfg)
-	if err != nil {
-		return fmt.Errorf("build safety redactor: %w", err)
-	}
-	return httpapi.ListenAndServe(ctx, a, svc, cfg, acc, approver, rd)
-}
-
-func cmdTools(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("tools", flag.ExitOnError)
-	configPath := fs.String("config", "config.yaml", "config file path")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	// telemetry / 親 ctx の cancellation を伝搬させるため、サブコマンド受領 ctx をそのまま渡す
-	_, _, tools, _, err := loadDeps(ctx, *configPath)
-	if err != nil {
-		return err
-	}
-	for _, s := range tools.List() {
-		fmt.Printf("- %s  %s\n", s.Name, s.Description)
-	}
-	return nil
-}
-
-func cmdConfig(args []string) error {
-	fs := flag.NewFlagSet("config", flag.ExitOnError)
-	configPath := fs.String("config", "config.yaml", "config file path")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("default_model: %s\n", cfg.DefaultModel)
-	fmt.Printf("providers: %d 件\n", len(cfg.Providers))
-	fmt.Printf("enabled_tools: %v\n", cfg.Agent.EnabledTools)
-	return nil
 }
 
 func expand(p string) string {

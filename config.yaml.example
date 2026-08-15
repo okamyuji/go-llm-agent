@@ -85,6 +85,11 @@ agent:
   max_tool_hops: 8
   # 既定は readonly のみ。fs_write / shell を有効にしたい場合は意図して追記する。
   # enabled_tools を空または未指定にすると Registry が DefaultReadonlyTools を採用する。
+  # fs_edit (old_string 完全一致による部分編集) も既定では無効。有効化する場合は
+  # 追記する。専用の config キーはなく tools.fs の sandbox 設定を fs_read/fs_write
+  # と共有する。fs_read で読んでいないファイルへの fs_edit は拒否される。
+  # agent serve では read registry がプロセス単位のため fs_edit は自動的に無効化され、
+  # enabled_tools に含めても起動時に警告が出るだけで有効化されない。
   enabled_tools: [fs_read, search_files, http_fetch]
   # system_prompt と system_prompt_file は排他。両方指定するとエラーになる。
   # system_prompt_file は config.yaml からの相対パスでプロンプトファイルを参照する。
@@ -132,6 +137,14 @@ agent:
   tool_choice:
     mode: auto
     name: ""
+  # ツール結果を履歴へ積む直前の切り詰め設定。max_chars は rune 数の上限で、
+  # 超過時は head 60% + tail 40% を残し中央を省略マーカーへ置換する。
+  # ユーザーへ表示する結果本文 (EventToolResult) は切り詰めない。
+  # 未指定 (0) はこの既定値が適用される。無効化する場合は -1 を指定する。
+  # max_chars は agent.compaction の context_window_tokens * trigger_ratio の
+  # 40% 以下に保つ (ツール 1 回の使用で圧縮の閾値に達しないようにするため)。
+  tool_result_limit:
+    max_chars: 8000
   # ツール引数の JSON Schema 検証。max_retries 回まで自動修正試行する。
   tool_validation:
     enabled: true
@@ -140,10 +153,21 @@ agent:
   # default_decision: "deny" のみサポート (timeout 時の fail-closed)。"allow" は
   # 廃止され、起動時に config エラーで弾かれる。
   # timeout_seconds は required_tools 指定時に正の整数で必須 (起動時 validate)。
+  # chat では対話プロンプト (y/n)、serve では broker を自動で選ぶ。
+  # 選択方式を切り替える専用キーはない。fs_write / fs_edit の承認プロンプトには
+  # 適用前の unified diff が表示される。
   approval:
     required_tools: []
     timeout_seconds: 30
     default_decision: deny
+  # 会話履歴の自動圧縮。直近ターンの実測 input tokens が
+  # context_window_tokens * trigger_ratio 以上になると自動発火する。
+  # REPL の /compact で手動発火もできる。
+  compaction:
+    enabled: true
+    context_window_tokens: 32768
+    trigger_ratio: 0.7
+    keep_recent_turns: 4
   # 実行戦略の切替。react / planner_executor / reflection から選ぶ。
   strategy: react
   planner_executor:
@@ -159,6 +183,21 @@ agent:
     enabled: false
     max_concurrency: 4
     fail_fast: false
+  # agent chat 起動時、カレントディレクトリから祖先へ向けて AGENTS.md を探索し
+  # 見つかればシステムプロンプト末尾へ信頼境界マーカー付きで合成する
+  # (agent run / agent serve は対象外)。探索は tools.fs.allow_paths 配下に限る。
+  agents_md:
+    enabled: true
+    max_bytes: 32768
+
+# ツール実行の前後に外部コマンドを起動する。matcher に一致したツールだけが対象で
+# "*" は全ツールに一致する。stdin へ JSON を渡し (pre は {"tool","args"}、post は
+# {"tool","args","result":{"is_error","content","duration_ms"}})、exit 0 で許可、
+# exit 2 で拒否する (stderr が拒否理由)。timeout_seconds の既定は 10。
+hooks:
+  pre_tool_use: []
+  # 例: [{matcher: "shell", command: "./scripts/audit-hook.sh", timeout_seconds: 10}]
+  post_tool_use: []
 
 tools:
   fs:
@@ -177,6 +216,9 @@ tools:
     # 既定の deny 正規表現 (`config --global`, `bash -c`, `core.sshCommand`, `env -w`,
     # `install`, `--exec`, `-c <code>` 等) は常に有効。追加で deny したいパターンを記述する。
     arg_deny_patterns: []
+    # sandbox-exec (Seatbelt) による OS 層の書込み制限。auto|off の 2 値。
+    # auto は darwin 上でのみ有効化され、他 OS では no-op と等価。
+    os_sandbox: auto
   http_fetch:
     deny_private_networks: true
     timeout_seconds: 15
@@ -236,6 +278,9 @@ storage:
   sessions_dir: ~/.local/state/go-llm-agent/sessions
   # ノート保存先 JSONL。空のときは sessions_dir/notes.jsonl を使う。
   notes_path: ""
+  # chat セッション JSONL (agent chat -resume で読む) の保存先。
+  # 空文字がデフォルトで、その場合は <sessions_dir>/chat を使う。
+  chat_sessions_dir: ""
 
 logging:
   format: text

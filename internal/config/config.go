@@ -22,6 +22,23 @@ type Config struct {
 	Logging       LoggingConfig             `yaml:"logging"`
 	Observability ObservabilityConfig       `yaml:"observability"`
 	Safety        SafetyConfig              `yaml:"safety"`
+	Hooks         HooksConfig               `yaml:"hooks"`
+}
+
+// HooksConfig ツール実行前後に外部コマンドを起動するライフサイクルフックの設定
+type HooksConfig struct {
+	PreToolUse  []HookConfig `yaml:"pre_tool_use"`
+	PostToolUse []HookConfig `yaml:"post_tool_use"`
+}
+
+// HookConfig 1 件の hook 定義
+// Matcher ツール名の完全一致、または任意ツールに一致する "*"
+// Command sh -c で実行するシェルコマンド文字列
+// TimeoutSeconds 0 または未指定なら既定 10 秒
+type HookConfig struct {
+	Matcher        string `yaml:"matcher"`
+	Command        string `yaml:"command"`
+	TimeoutSeconds int    `yaml:"timeout_seconds"`
 }
 
 // SafetyConfig 入出力フィルタとリダクタの設定
@@ -140,6 +157,39 @@ type AgentConfig struct {
 	Reflection       ReflectionConfig      `yaml:"reflection"`
 	ParallelTools    ParallelToolsConfig   `yaml:"parallel_tools"`
 	Enricher         EnricherConfig        `yaml:"enricher"`
+	ToolResultLimit  ToolResultLimitConfig `yaml:"tool_result_limit"`
+	Compaction       CompactionConfig      `yaml:"compaction"`
+	AgentsMD         AgentsMDConfig        `yaml:"agents_md"`
+}
+
+// AgentsMDConfig AGENTS.md 自動読込の設定。
+// 実効既定値は 00-overview 3.4 節が凍結しており、applyDefaults が適用する。
+// Enabled は yaml 未指定 (nil) と enabled: false を区別するため *bool とする。
+// applyDefaults が nil のとき true を指すポインタを代入するため、Load を
+// 通過した値では常に非 nil であり、利用側は *cfg.Enabled を読む。
+// *Enabled が false の場合は探索自体を行わない (ファイルシステムへのアクセスも
+// 発生させない)。
+type AgentsMDConfig struct {
+	Enabled  *bool `yaml:"enabled"`
+	MaxBytes int   `yaml:"max_bytes"`
+}
+
+// CompactionConfig 会話履歴圧縮の設定。
+// Enabled は yaml 未指定 (nil) と enabled: false を区別するため *bool とする。
+// applyDefaults が nil のとき true を指すポインタを代入するため、Load を
+// 通過した値では常に非 nil であり、利用側は *c.Enabled を読む
+type CompactionConfig struct {
+	Enabled             *bool   `yaml:"enabled"`
+	ContextWindowTokens int     `yaml:"context_window_tokens"`
+	TriggerRatio        float64 `yaml:"trigger_ratio"`
+	KeepRecentTurns     int     `yaml:"keep_recent_turns"`
+}
+
+// ToolResultLimitConfig ツール結果を履歴へ積む際の切り詰め設定
+type ToolResultLimitConfig struct {
+	// MaxChars 上限文字数 (rune 数)。未指定 (0) は applyDefaults が既定値へ
+	// 置換する。切り詰めを無効化する場合は -1 を指定する (00-overview 3.4)
+	MaxChars int `yaml:"max_chars"`
 }
 
 // EnricherConfig コンテキスト拡充の設定
@@ -250,6 +300,7 @@ type ShellToolConfig struct {
 	MaxTimeoutSeconds int      `yaml:"max_timeout_seconds"`
 	AllowBinaries     []string `yaml:"allow_binaries"`
 	ArgDenyPatterns   []string `yaml:"arg_deny_patterns"`
+	OSSandbox         string   `yaml:"os_sandbox"`
 }
 
 // HTTPFetchToolConfig http_fetch の設定
@@ -314,7 +365,11 @@ type ServerCORS struct {
 // StrictNotesInit true のとき memory.NewFileNoteStore 失敗を起動エラーに昇格させる
 // 既定 (false) では degraded mode (note_add / note_search 無効) で agent を継続させる
 type StorageConfig struct {
-	SessionsDir     string `yaml:"sessions_dir"`
+	SessionsDir string `yaml:"sessions_dir"`
+	// ChatSessionsDir chat セッション JSONL の保存先。空文字なら
+	// <sessions_dir>/chat を使う。この解決は cliui.ChatSessionsDir だけが行う
+	// (applyDefaults はこのキーに触れない。00-overview 3.4 節)
+	ChatSessionsDir string `yaml:"chat_sessions_dir"`
 	NotesPath       string `yaml:"notes_path"`
 	StrictNotesInit bool   `yaml:"strict_notes_init"`
 }
@@ -340,6 +395,7 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("config parse: %w", err)
 	}
+	applyDefaults(&cfg)
 	if err := validateFallbackChains(cfg.Providers); err != nil {
 		return nil, err
 	}
@@ -350,6 +406,18 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	if err := validateWebTools(cfg.Tools); err != nil {
+		return nil, err
+	}
+	if err := validateShellOSSandbox(cfg.Tools); err != nil {
+		return nil, err
+	}
+	if err := validateToolResultLimit(cfg.Agent.ToolResultLimit); err != nil {
+		return nil, err
+	}
+	if err := validateCompaction(cfg.Agent.Compaction); err != nil {
+		return nil, err
+	}
+	if err := validateHooks(cfg.Hooks); err != nil {
 		return nil, err
 	}
 	if err := resolveSystemPromptFile(&cfg, path); err != nil {
@@ -410,6 +478,114 @@ func validateApproval(a ApprovalConfig) error {
 	return nil
 }
 
+// defaultToolResultLimitMaxChars agent.tool_result_limit.max_chars の実効既定値
+// (00-overview 3.4 節が凍結)。max_chars <= context_window_tokens * trigger_ratio * 0.4 を満たす
+const defaultToolResultLimitMaxChars = 8000
+
+// agent.compaction の実効既定値 (00-overview 3.4 節が凍結)
+const (
+	defaultCompactionContextWindowTokens = 32768
+	defaultCompactionTriggerRatio        = 0.7
+	defaultCompactionKeepRecentTurns     = 4
+)
+
+// defaultAgentsMDMaxBytes agent.agents_md.max_bytes の実効既定値 (00-overview 3.4 節が凍結)
+const defaultAgentsMDMaxBytes = 32768
+
+// applyDefaults decode 直後・各 validateXxx の前に 1 回呼び、yaml で明示されなかった
+// キーへコード既定値を適用する (00-overview 3.4 節)。数値キーはゼロ値 (未指定) の
+// ときだけ既定値を代入する。切り詰めを明示的に無効化したい利用者は -1 を指定する
+func applyDefaults(cfg *Config) {
+	if cfg.Agent.ToolResultLimit.MaxChars == 0 {
+		cfg.Agent.ToolResultLimit.MaxChars = defaultToolResultLimitMaxChars
+	}
+	applyCompactionDefaults(&cfg.Agent.Compaction)
+	if cfg.Tools.Shell.OSSandbox == "" {
+		cfg.Tools.Shell.OSSandbox = "auto"
+	}
+	applyAgentsMDDefaults(&cfg.Agent.AgentsMD)
+}
+
+// applyAgentsMDDefaults 未指定の agents_md キーへコード既定値を適用する。
+// Enabled は nil (yaml に enabled 行が無い) のときだけ true を代入し、
+// enabled: false の明示は上書きしない
+func applyAgentsMDDefaults(c *AgentsMDConfig) {
+	if c.Enabled == nil {
+		enabled := true
+		c.Enabled = &enabled
+	}
+	if c.MaxBytes == 0 {
+		c.MaxBytes = defaultAgentsMDMaxBytes
+	}
+}
+
+// applyCompactionDefaults 未指定の compaction キーへコード既定値を適用する。
+// Enabled は nil (yaml に enabled 行が無い) のときだけ true を代入し、
+// enabled: false の明示は上書きしない
+func applyCompactionDefaults(c *CompactionConfig) {
+	if c.Enabled == nil {
+		enabled := true
+		c.Enabled = &enabled
+	}
+	if c.ContextWindowTokens == 0 {
+		c.ContextWindowTokens = defaultCompactionContextWindowTokens
+	}
+	if c.TriggerRatio == 0 {
+		c.TriggerRatio = defaultCompactionTriggerRatio
+	}
+	// keep_recent_turns: 0 (全区間の要約) は運用として想定しないため未指定として扱う
+	if c.KeepRecentTurns == 0 {
+		c.KeepRecentTurns = defaultCompactionKeepRecentTurns
+	}
+}
+
+// validateCompaction 起動時に compaction 設定の妥当性を検査する
+func validateCompaction(c CompactionConfig) error {
+	// applyDefaults の後に呼ばれるため c.Enabled は常に非 nil
+	if c.Enabled == nil || !*c.Enabled {
+		return nil
+	}
+	if c.ContextWindowTokens <= 0 {
+		return fmt.Errorf("config: agent.compaction.context_window_tokens は enabled=true のとき正の整数で必須 (got %d)", c.ContextWindowTokens)
+	}
+	if c.TriggerRatio <= 0 || c.TriggerRatio > 1 {
+		return fmt.Errorf("config: agent.compaction.trigger_ratio は 0 より大きく 1 以下 (got %f)", c.TriggerRatio)
+	}
+	if c.KeepRecentTurns < 0 {
+		return fmt.Errorf("config: agent.compaction.keep_recent_turns は 0 以上 (got %d)", c.KeepRecentTurns)
+	}
+	return nil
+}
+
+// validateToolResultLimit 起動時に tool_result_limit 設定の妥当性を検査する。
+// -1 は切り詰めの明示的な無効化として受理する。それより小さい値は設定ミスとして拒否する
+func validateToolResultLimit(c ToolResultLimitConfig) error {
+	if c.MaxChars < -1 {
+		return fmt.Errorf("config: agent.tool_result_limit.max_chars は -1 (無効) または 0 以上 (got %d)", c.MaxChars)
+	}
+	return nil
+}
+
+// validateHooks 起動時に hooks 設定の妥当性を検査する。
+// command 空文字は設定ミスとして起動時に fail-fast させる。timeout_seconds は
+// 0 (既定値を使う) を許可し、負数のみ拒否する
+func validateHooks(h HooksConfig) error {
+	for _, list := range [][]HookConfig{h.PreToolUse, h.PostToolUse} {
+		for _, hk := range list {
+			if hk.Matcher == "" {
+				return fmt.Errorf("config: hooks の matcher は空にできません")
+			}
+			if hk.Command == "" {
+				return fmt.Errorf("config: hooks.command は空にできません (matcher=%q)", hk.Matcher)
+			}
+			if hk.TimeoutSeconds < 0 {
+				return fmt.Errorf("config: hooks.timeout_seconds は 0 以上(0=既定10秒) (matcher=%q, got %d)", hk.Matcher, hk.TimeoutSeconds)
+			}
+		}
+	}
+	return nil
+}
+
 // validateWebTools 起動時に web_search / web_fetch 設定の妥当性を検査する (design/17 §7)
 func validateWebTools(t ToolsConfig) error {
 	if v := t.WebSearch.MaxResults; v != 0 && (v < 1 || v > 10) {
@@ -425,6 +601,16 @@ func validateWebTools(t ToolsConfig) error {
 		return fmt.Errorf("config: tools.web_fetch.max_chars は 100 以上 (got %d)", v)
 	}
 	return nil
+}
+
+// validateShellOSSandbox 起動時に tools.shell.os_sandbox の値を検査する
+func validateShellOSSandbox(t ToolsConfig) error {
+	switch t.Shell.OSSandbox {
+	case "", "auto", "off":
+		return nil
+	default:
+		return fmt.Errorf("config: tools.shell.os_sandbox は \"auto\" または \"off\" のみサポート (got %q)", t.Shell.OSSandbox)
+	}
 }
 
 // validateFallbackChains providers の fallback_to から有向グラフを作り、サイクルが存在しないことを確認する

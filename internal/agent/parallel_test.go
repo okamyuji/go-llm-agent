@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -121,7 +122,7 @@ func TestExecuteToolsParallel_FallsBackToSerialWhenApprovalRequired(t *testing.T
 	}}
 	s := &service{
 		tools:            reg,
-		approver:         AutoApprover{Allow: true},
+		decider:          AutoDecider{Allow: true},
 		approvalRequired: map[string]bool{"dangerous": true},
 		approvalTimeout:  time.Second,
 	}
@@ -155,5 +156,76 @@ func TestExecuteToolsParallel_MissingToolIsError(t *testing.T) {
 	out := s.ExecuteToolsParallel(context.Background(), "sess", calls, ParallelToolsOptions{MaxConcurrency: 2})
 	if !out[0].IsError {
 		t.Errorf("missing tool must yield IsError=true")
+	}
+}
+
+// erroringDecider 承認機構自体の致命的失敗を模擬する ApprovalDecider
+type erroringDecider struct{ err error }
+
+func (d erroringDecider) Decide(context.Context, ApprovalRequest) (bool, string, error) {
+	return false, "", d.err
+}
+
+func TestExecuteOne_ApproverFailureIsError(t *testing.T) {
+	t.Parallel()
+	var hits int32
+	reg := &fakeRegistry{tools: map[string]tool.Tool{"a": &sleepyTool{name: "a", hits: &hits}}}
+	s := &service{
+		tools:            reg,
+		decider:          erroringDecider{err: errors.New("boom")},
+		approvalRequired: map[string]bool{"a": true},
+		approvalTimeout:  time.Second,
+	}
+	out := s.ExecuteToolsParallel(context.Background(), "sess", []llm.ToolCall{{ID: "1", Name: "a"}}, ParallelToolsOptions{MaxConcurrency: 4})
+	if out[0].Content != "approver failure: boom" {
+		t.Fatalf("承認機構失敗の文言期待 got %q", out[0].Content)
+	}
+	if !out[0].IsError {
+		t.Fatal("IsError=true 期待")
+	}
+	if atomic.LoadInt32(&hits) != 0 {
+		t.Fatalf("ツールを実行しない期待 got %d", hits)
+	}
+}
+
+func TestExecuteOne_ApprovalDeniedIsError(t *testing.T) {
+	t.Parallel()
+	var hits int32
+	reg := &fakeRegistry{tools: map[string]tool.Tool{"a": &sleepyTool{name: "a", hits: &hits}}}
+	s := &service{
+		tools:            reg,
+		decider:          AutoDecider{Allow: false, Reason: "policy"},
+		approvalRequired: map[string]bool{"a": true},
+		approvalTimeout:  time.Second,
+	}
+	out := s.ExecuteToolsParallel(context.Background(), "sess", []llm.ToolCall{{ID: "1", Name: "a"}}, ParallelToolsOptions{MaxConcurrency: 4})
+	if out[0].Content != "tool execution denied: policy" {
+		t.Fatalf("拒否の文言期待 got %q", out[0].Content)
+	}
+	if !out[0].IsError {
+		t.Fatal("IsError=true 期待")
+	}
+	if atomic.LoadInt32(&hits) != 0 {
+		t.Fatalf("ツールを実行しない期待 got %d", hits)
+	}
+}
+
+func TestExecuteOne_PreHookBlockIsError(t *testing.T) {
+	t.Parallel()
+	var hits int32
+	reg := &fakeRegistry{tools: map[string]tool.Tool{"a": &sleepyTool{name: "a", hits: &hits}}}
+	s := &service{
+		tools: reg,
+		hooks: NewHookRunner([]HookSpec{{Matcher: "a", Command: "echo blocked >&2; exit 2"}}, nil),
+	}
+	out := s.ExecuteToolsParallel(context.Background(), "sess", []llm.ToolCall{{ID: "1", Name: "a"}}, ParallelToolsOptions{MaxConcurrency: 4})
+	if out[0].Content != "tool execution blocked by pre_tool_use hook: blocked\n" {
+		t.Fatalf("pre hook ブロックの文言期待 got %q", out[0].Content)
+	}
+	if !out[0].IsError {
+		t.Fatal("IsError=true 期待")
+	}
+	if atomic.LoadInt32(&hits) != 0 {
+		t.Fatalf("ツールを実行しない期待 got %d", hits)
 	}
 }

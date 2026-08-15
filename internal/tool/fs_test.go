@@ -115,3 +115,115 @@ func TestFSWrite_WritesAndCreatesDir(t *testing.T) {
 		t.Fatalf("got %q", string(b))
 	}
 }
+
+func TestFSRead_ExecuteSuccess_MarksRegistryKnown(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sb := tool.NewSandbox([]string{dir})
+	reg := tool.NewReadRegistry()
+	r := tool.NewFSReadWithLogger(sb, 1024, nil, reg)
+	if _, err := r.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	e := tool.NewFSEdit(sb, reg, nil)
+	res, _ := e.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","old_string":"hello","new_string":"hi"}`))
+	if res.IsError {
+		t.Fatalf("registry should be known after fs_read Execute: %+v", res)
+	}
+}
+
+func TestFSRead_ReadForSummary_DoesNotMarkRegistryKnown(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sb := tool.NewSandbox([]string{dir})
+	reg := tool.NewReadRegistry()
+	r := tool.NewFSReadWithLogger(sb, 1024, nil, reg)
+	if _, err := r.ReadForSummary(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	e := tool.NewFSEdit(sb, reg, nil)
+	res, _ := e.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","old_string":"hello","new_string":"hi"}`))
+	if !res.IsError {
+		t.Fatal("ReadForSummary should not mark registry known; fs_edit should still be rejected")
+	}
+}
+
+func TestFSRead_NilRegistry_ExecuteDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sb := tool.NewSandbox([]string{dir})
+	r := tool.NewFSReadWithLogger(sb, 1024, nil, nil)
+	res, err := r.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`"}`))
+	if err != nil || res.IsError {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+func TestFSWrite_NilRegistry_ExecuteDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "out.txt")
+	sb := tool.NewSandbox([]string{dir})
+	w := tool.NewFSWriteWithLogger(sb, nil, nil)
+	res, err := w.Execute(context.Background(), json.RawMessage(`{"path":"`+target+`","content":"hi"}`))
+	if err != nil || res.IsError {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+}
+
+func TestFSWrite_MalformedJSON_IsError(t *testing.T) {
+	sb := tool.NewSandbox([]string{"/tmp"})
+	w := tool.NewFSWrite(sb)
+	res, err := w.Execute(context.Background(), json.RawMessage(`{not valid`))
+	if err != nil {
+		t.Fatalf("Execute should not return a Go error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("got %+v, want IsError=true for malformed JSON", res)
+	}
+}
+
+func TestFSWrite_EmptyPath_IsError(t *testing.T) {
+	sb := tool.NewSandbox([]string{"/tmp"})
+	w := tool.NewFSWrite(sb)
+	res, _ := w.Execute(context.Background(), json.RawMessage(`{"path":"","content":"x"}`))
+	if !res.IsError {
+		t.Fatal("empty path は IsError")
+	}
+}
+
+func TestFSWrite_OutsideSandbox_IsError(t *testing.T) {
+	dir := t.TempDir()
+	sb := tool.NewSandbox([]string{dir})
+	w := tool.NewFSWrite(sb)
+	res, _ := w.Execute(context.Background(), json.RawMessage(`{"path":"/etc/passwd","content":"x"}`))
+	if !res.IsError {
+		t.Fatal("外側は IsError")
+	}
+}
+
+func TestFSWrite_ReadOnlyExistingFile_WriteFails(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission checks are bypassed when running as root")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("orig"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	sb := tool.NewSandbox([]string{dir})
+	w := tool.NewFSWrite(sb)
+	res, _ := w.Execute(context.Background(), json.RawMessage(`{"path":"`+path+`","content":"overwrite"}`))
+	if !res.IsError {
+		t.Fatalf("got %+v, want IsError=true for read-only existing file", res)
+	}
+}

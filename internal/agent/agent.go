@@ -69,19 +69,21 @@ type Service interface {
 type ContextEnricher func(ctx context.Context, messages []llm.Message) ([]llm.Message, error)
 
 type service struct {
-	reg               llm.Registry
-	tools             tool.Registry
-	billing           billing.Accumulator
-	validator         SchemaValidator
-	defaultToolChoice *llm.ToolChoice
-	defaultMaxRetries int
-	scanner           safety.Scanner
-	redactor          safety.Redactor
-	approver          Approver
-	approvalRequired  map[string]bool
-	approvalTimeout   time.Duration
-	strategy          Strategy
-	enricher          ContextEnricher
+	reg                     llm.Registry
+	tools                   tool.Registry
+	billing                 billing.Accumulator
+	validator               SchemaValidator
+	defaultToolChoice       *llm.ToolChoice
+	defaultMaxRetries       int
+	scanner                 safety.Scanner
+	redactor                safety.Redactor
+	decider                 ApprovalDecider
+	approvalRequired        map[string]bool
+	approvalTimeout         time.Duration
+	strategy                Strategy
+	enricher                ContextEnricher
+	toolResultLimitMaxChars int
+	hooks                   *HookRunner
 }
 
 // New Service を構築する。billing.Accumulator は nil 可で、その場合は集計を無効にする
@@ -136,14 +138,26 @@ func WithContextEnricher(e ContextEnricher) Option {
 	return func(s *service) { s.enricher = e }
 }
 
-// WithApprover 承認ハンドラを注入する。required ツールセットも合わせて指定する
-func WithApprover(ap Approver, requiredTools []string, timeout time.Duration) Option {
+// WithToolResultLimit ツール結果を履歴へ積む際の上限文字数 (rune 数) を設定する。
+// 0 以下を指定すると切り詰めを無効化する。config 側の実効既定値は
+// 00-overview 3.4 節が凍結しており、applyDefaults が適用する
+func WithToolResultLimit(maxChars int) Option {
+	return func(s *service) { s.toolResultLimitMaxChars = maxChars }
+}
+
+// WithHooks pre/post ツール実行フックを注入する。hr が nil の場合は既存動作 (フック無効)
+func WithHooks(hr *HookRunner) Option {
+	return func(s *service) { s.hooks = hr }
+}
+
+// WithApprovalDecider 承認判定を注入する。required ツールセットと timeout を合わせて指定する
+func WithApprovalDecider(d ApprovalDecider, requiredTools []string, timeout time.Duration) Option {
 	set := make(map[string]bool, len(requiredTools))
 	for _, t := range requiredTools {
 		set[t] = true
 	}
 	return func(s *service) {
-		s.approver = ap
+		s.decider = d
 		s.approvalRequired = set
 		s.approvalTimeout = timeout
 	}
