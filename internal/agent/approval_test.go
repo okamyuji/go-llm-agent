@@ -73,27 +73,30 @@ func TestBrokerDecider_PropagatesFatalError(t *testing.T) {
 	t.Parallel()
 	a := NewHTTPApprover()
 	d := NewBrokerDecider(a)
-	first := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		close(first)
-		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_, _ = a.Request(ctx, ApprovalRequest{RunID: "r", CallID: "c"})
 	}()
-	<-first
-	// 同一キーの併走 Request は ErrApprovalAlreadyPending になる
-	var allowed bool
-	var reason string
-	var err error
-	for range 100 {
-		allowed, reason, err = d.Decide(context.Background(), ApprovalRequest{RunID: "r", CallID: "c"})
-		if err != nil {
+	deadline := time.Now().Add(time.Second)
+	for {
+		a.mu.Lock()
+		_, pending := a.pending[approvalKey{RunID: "r", CallID: "c"}]
+		a.mu.Unlock()
+		if pending {
 			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first Request did not register as pending")
 		}
 		time.Sleep(time.Millisecond)
 	}
+	// 同一キーの併走 Request は ErrApprovalAlreadyPending になる
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	allowed, reason, err := d.Decide(ctx, ApprovalRequest{RunID: "r", CallID: "c"})
 	if err == nil || !errors.Is(err, ErrApprovalAlreadyPending) {
 		t.Fatalf("致命的失敗の伝播期待 got %v", err)
 	}
