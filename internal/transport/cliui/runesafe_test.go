@@ -281,15 +281,15 @@ func TestLeadByteLen(t *testing.T) {
 		b    byte
 		want int
 	}{
-		{0x41, 1},    // 'A'
-		{0x7f, 1},    // ASCII boundary
-		{0xC2, 2},    // 2-byte lead
-		{0xE3, 3},    // 3-byte lead ("あ")
-		{0xF0, 4},    // 4-byte lead ("😀")
-		{0x80, 0},    // continuation byte
-		{0xBF, 0},    // continuation byte
-		{0xFF, 0},    // invalid
-		{0xF8, 0},    // invalid 5-byte pattern (not supported by UTF-8)
+		{0x41, 1}, // 'A'
+		{0x7f, 1}, // ASCII boundary
+		{0xC2, 2}, // 2-byte lead
+		{0xE3, 3}, // 3-byte lead ("あ")
+		{0xF0, 4}, // 4-byte lead ("😀")
+		{0x80, 0}, // continuation byte
+		{0xBF, 0}, // continuation byte
+		{0xFF, 0}, // invalid
+		{0xF8, 0}, // invalid 5-byte pattern (not supported by UTF-8)
 	}
 	for _, c := range cases {
 		if got := leadByteLen(c.b); got != c.want {
