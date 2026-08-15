@@ -8,6 +8,9 @@ set -euo pipefail
 echo "==> gofmt"
 ./scripts/hooks/check_gofmt.sh
 
+echo "==> mutation-diff package filter"
+bash scripts/quality/mutation-diff_test.sh
+
 echo "==> go vet"
 go vet ./...
 
@@ -46,11 +49,11 @@ gitleaks detect --no-git --source . --redact --no-banner --config .gitleaks.toml
 # E2E は外部ネットワーク非依存だが、コレクター起動や複数 go build を伴うため
 # pre-commit では skip し、CI と明示要求時のみ全件走らせる
 if [ "${RUN_E2E:-0}" = "1" ]; then
-  echo "==> e2e (16 scripts)"
+  echo "==> e2e (27 scripts)"
   # nullglob を有効化してマッチが 0 件のときにリテラルパターンを実行しないようにする
   shopt -s nullglob
   # 実行順序を決定論的にするため bash の glob ソート (デフォルトで lexical) を明示的に期待する
-  # 01- から 16- まで番号を頭に付けているため、lexical 順 = 設計書の章順序になる
+  # 01- から 27- まで番号を頭に付けているため、lexical 順 = 設計書の章順序になる
   # set -e に従って最初の失敗で即抜けるため、一回の実行で複数 E2E の同時失敗を観測したい場合は
   # RUN_E2E_KEEPGOING=1 を別途設定して個別実行する運用にする
   e2e_failed=0

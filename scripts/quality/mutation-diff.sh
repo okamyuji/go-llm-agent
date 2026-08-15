@@ -6,6 +6,10 @@ set -euo pipefail
 
 BASE="${1:?usage: mutation-diff.sh <base-ref> <pkg> [pkg...]}"
 shift
+if [ "$#" -eq 0 ]; then
+  echo "ERROR: at least one Go package is required" >&2
+  exit 2
+fi
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
@@ -39,11 +43,34 @@ fi
 
 fail=0
 for pkg in "$@"; do
+  if ! pkg_dir="$(go list -f '{{.Dir}}' "$pkg" 2>/dev/null)" ||
+    [ -z "$pkg_dir" ] || [[ "$pkg_dir" == *$'\n'* ]]; then
+    echo "ERROR: mutation target is not exactly one Go package: $pkg" >&2
+    fail=1
+    continue
+  fi
+
+  case "$pkg_dir" in
+    "$ROOT/"*) pkg_rel="${pkg_dir#"$ROOT/"}" ;;
+    *)
+      echo "ERROR: mutation target is outside the repository: $pkg" >&2
+      fail=1
+      continue
+      ;;
+  esac
+
+  case "$pkg_dir" in
+    "$ROOT/tests/e2e" | "$ROOT/tests/e2e/"*)
+      echo ">>> skip gremlins $pkg (E2E fixtures are covered by tests/e2e/*.sh)"
+      continue
+      ;;
+  esac
+
   echo ">>> gremlins unleash $pkg"
   # timeout-coefficient: 既定係数では重いパッケージの mutant が全件 TIMED OUT になる
   gremlins unleash "$pkg" --timeout-coefficient 20 --workers 4 2>&1 | tee "$TMP/gremlins_out" | tail -5
   # 出力形式: "  KILLED CONDITIONALS_NEGATION at fs.go:55:41" (パスはpkg相対)
-  awk -v pkg="$pkg" '
+  awk -v pkg="$pkg_rel" '
     / (LIVED|NOT COVERED) / {
       for (i = 1; i <= NF; i++) if ($i == "at") loc = $(i+1);
       split(loc, p, ":");
@@ -57,7 +84,7 @@ for pkg in "$@"; do
     grep -qxF "$fl" "$TMP/changed_lines" || continue
     # 裁定済み mutant (真の等価 / gremlins 計測の死角) は除外する。
     # 根拠は docs/specs/2026-08-13-improvements/mutation-equivalents.md
-    key="$(printf '%s %s' "${pkg#./}/${s##* at }" \
+    key="$(printf '%s %s' "$pkg_rel/${s##* at }" \
       "$(printf '%s\n' "$s" | awk '{for (i=1; i<=NF; i++) if ($i == "at") print $(i-1)}')")"
     if grep -qxF "$key" "$TMP/allowlist"; then
       echo "ALLOWED (adjudicated): $key"

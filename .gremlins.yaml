@@ -1,0 +1,21 @@
+# gremlins (mutation testing) の共通設定。
+# scripts/quality/mutation-diff.sh のフラグと同値をここでも既定にし、
+# 直接 `gremlins unleash` を叩いたときも同じ条件で走るようにする。
+#
+# 注意: exclude-files は「変異対象からの除外」であり、gremlins が実行時に
+# 行うワークツリー全体の一時コピーには効かない (v0.6.0 の
+# internal/engine/workdir/workdir.go は filepath.Walk で全ファイルを
+# 無条件にコピーする)。models/ 等の大容量ディレクトリはコピーを
+# 避けられないため、リポジトリ外へ置くこと。
+unleash:
+  workers: 4
+  # 既定係数では重いパッケージの mutant が全件 TIMED OUT になる
+  timeout-coefficient: 20
+  exclude-files:
+    # x/term フォーク基底 (第三者由来) はゲート対象外
+    # (docs/specs/2026-08-13-improvements/00-overview.md 6 章の凍結事項)
+    - "terminal\\.go$"
+    # リポジトリルートを対象にした実行では、E2E fixtures を除外する
+    - "^tests/e2e/"
+    # v0.6.0 は package 直指定時に main.go のような相対名だけを除外判定へ
+    # 渡すため、mutation-diff.sh も実体ディレクトリを解決してE2E packageを除く。

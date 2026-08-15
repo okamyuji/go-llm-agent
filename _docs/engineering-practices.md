@@ -15,6 +15,7 @@ Potentially destructive operations and MCP integrations require explicit opt-in 
 `scripts/quality-gate.sh` is the shared local/CI quality entry point. It runs:
 
 - gofmt verification
+- mutation-diff package filtering regression test
 - `go vet`
 - `staticcheck`
 - `golangci-lint`

@@ -67,7 +67,7 @@ jobs:
         run: bash scripts/verify-hardening.sh
 
   e2e:
-    name: e2e (16 scripts)
+    name: e2e (27 scripts)
     runs-on: ubuntu-latest
     env:
       GITLEAKS_VERSION: "8.30.1"

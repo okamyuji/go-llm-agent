@@ -9,7 +9,7 @@ Go 1.25製のCGOなし単一バイナリAIエージェントです。OpenAI、An
 - ストリーミングとtool callingに対応します
 - 内蔵ツールはfs_read、fs_write、fs_edit、shell、http_fetch、search_files、web_search、web_fetchの8種類です (ほかにRAG用のnote_add / note_search)
 - 対話REPL、ワンショットrun、OpenAI互換HTTP APIの3種類のインターフェースを提供します
-- pre-commitとCIでgofmt、go vet、staticcheck、golangci-lint、govulncheck、go test --count=1 --shuffle=on、gitleaksを全部通します
+- pre-commitとCIでgofmt、go vet、staticcheck、golangci-lint、govulncheck、race・coverage付きGoテスト、release build、gitleaksを実行します
 
 ## クイックスタート
 
@@ -678,12 +678,21 @@ bash tests/e2e/01-otel-trace.sh
 ```bash
 make precommit-install   # pre-commit フックを有効化
 make quality             # 品質ゲートをローカル実行（CI と同一フロー）
+RUN_E2E=1 make quality   # 品質ゲートに27本のE2Eスクリプトを追加
 make build-all           # 6 バイナリへクロスコンパイル
 ```
 
-`scripts/quality-gate.sh` は **pre-commit と CI で同一コマンド** を実行する単一エントリです。gofmt / go vet / staticcheck / golangci-lint / govulncheck / `go test
---count=1 --shuffle=on -race -cover` / `gitleaks detect --no-git --source .` を順に走らせます。
-gitleaks は作業ツリーを直接スキャンする方式に統一しており、pre-commit でもステージ済み・未ステージのファイルを検査します。`.gitleaks.toml` で明示したローカル専用ファイルと、コミット対象外のGGUF保存先 `models/` は検査から除外します。
+`scripts/quality-gate.sh` はpre-commitとCIが共有する品質確認の入口です。mutation対象packageの除外テスト、gofmt、go vet、staticcheck、golangci-lint、govulncheck、`go test --count=1 --shuffle=on -race -cover`、release build、機密ファイルのstage防止、`gitleaks detect --no-git --source .` を順に実行します。`RUN_E2E=1`では27本の`tests/e2e/*.sh`も実行します。gitleaksはstage状態にかかわらず作業ツリーを検査し、`.gitleaks.toml`のallowlistに列挙したpathとマスク済みplaceholderを対象外にします。
+
+変更行のmutation testingは、比較元commitと1つ以上のGo packageを指定して実行します。
+
+```bash
+bash scripts/quality/mutation-diff.sh <base-ref> <go-package> [<go-package> ...]
+```
+
+各引数は`go list`で単一のGo packageへ解決されます。`tests/e2e/`配下はgremlinsを起動せず、E2Eスクリプトで検証します。`.gremlins.yaml`は、x/termフォーク基底の`terminal.go`と、リポジトリルートを対象にしたgremlins実行時の`tests/e2e/`を変異対象から除外します。
+
+gremlinsは作業ツリー全体をworkerごとの一時ディレクトリへコピーします。GGUF、checkpoint、生成動画などの大容量ファイルはリポジトリ外に保存してください。中断後に`$TMPDIR/gremlins-*`が残った場合は、gremlinsプロセスが動いていないことを確認してから削除してください。
 
 ## ライセンス
 
