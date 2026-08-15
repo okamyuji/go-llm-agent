@@ -1,6 +1,6 @@
 module github.com/okamyuji/go-llm-agent
 
-go 1.25.10
+go 1.25.13
 
 require (
 	github.com/creack/pty v1.1.24
