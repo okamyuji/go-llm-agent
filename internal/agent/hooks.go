@@ -15,6 +15,10 @@ import (
 // defaultHookTimeout HookSpec.Timeout 未指定 (0) のときの既定値
 const defaultHookTimeout = 10 * time.Second
 
+// hookWaitDelay bounds the time spent waiting for descendants that inherited
+// the hook process's stdout or stderr after the hook itself was canceled.
+const hookWaitDelay = 100 * time.Millisecond
+
 // HookSpec 1 件の hook 実行仕様。config.HookConfig から変換して渡す
 type HookSpec struct {
 	Matcher string
@@ -160,11 +164,13 @@ func runHook(ctx context.Context, spec HookSpec, payload hookPayload) (hookOutco
 	}
 
 	cmd := exec.CommandContext(hctx, "sh", "-c", spec.Command)
+	configureHookProcess(cmd)
 	cmd.Stdin = bytes.NewReader(body)
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 	cmd.Env = append(os.Environ(), "GO_LLM_AGENT_TOOL="+payload.Tool)
+	cmd.WaitDelay = hookWaitDelay
 
 	runErr := cmd.Run()
 	out := hookOutcome{stdout: stdoutBuf.String(), stderr: stderrBuf.String()}

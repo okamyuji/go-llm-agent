@@ -329,6 +329,7 @@ E2Eスクリプトは `tests/e2e/08-hitl-approval.sh` と `tests/e2e/22-approval
 - stdin に JSON を渡します。pre は `{"tool","args"}`、post は `{"tool","args","result":{"is_error","content","duration_ms"}}` です。
 - exit 0 で許可、exit 2 で拒否します。拒否のときは stderr の内容を拒否理由として扱います。
 - `timeout_seconds` の既定は 10 秒です。タイムアウトやコマンド起動の失敗はツール実行を止めません。
+- hook command は `sh -c` で実行します。LinuxとmacOSではタイムアウト時にprocess group全体を停止します。その他のOSでは直接のhook processを停止して待機時間を制限し、子processの停止はOSの挙動に従います。
 
 ```yaml
 hooks:

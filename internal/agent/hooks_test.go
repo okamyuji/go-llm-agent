@@ -45,7 +45,7 @@ func TestHookRunner_RunPre_OtherExit_WarnsAndAllows(t *testing.T) {
 func TestHookRunner_RunPre_HookTimeoutStillAllows(t *testing.T) {
 	t.Parallel()
 	start := time.Now()
-	allowed, _ := preRunner(HookSpec{Matcher: "*", Command: "sleep 5", Timeout: 100 * time.Millisecond}).
+	allowed, _ := preRunner(HookSpec{Matcher: "*", Command: "sleep 5 & wait", Timeout: 100 * time.Millisecond}).
 		RunPre(context.Background(), "shell", json.RawMessage(`{}`))
 	if !allowed {
 		t.Fatal("hook 自身の timeout は許可へ倒す期待")
