@@ -1,6 +1,6 @@
 # REPLで外部の最新情報を取得し、追質問へ根拠を引き継ぐ
 
-対応表は `referent-table-repl-web-search-follow-up.md` に保存した。実モデルでtool choice指定と追質問の反復を確認し、ローカル検索との誤判定、ローカルGGUFの検査境界、複数ターンのtool call ID、追質問生成の既出文、同じ数字列、導入句、prompt断片、未完節、テンプレート断片の除去を反映した後のSHA-256は `0d1b7a2b08a55a7977d919b779b543efdb99508cde7f46bc0cb896acd18692a0` である。
+対応表は `referent-table-repl-web-search-follow-up.md` に保存した。
 
 ## `ai-agent` で観測した検索実行と回答停止
 
@@ -63,13 +63,13 @@ Web取得後の追質問では、既出判定を通った文についても保�
 
 ## コミット対象外のローカルGGUFをGitleaksから除外する
 
-品質ゲートの `gitleaks detect --no-git --source .` は未追跡ファイルも検査するため、コミット対象外の `models/` にある約18GBのGGUFを走査し続けた。`.gitleaks.toml` のpath allowlistへリポジトリ直下の `models/` だけを追加し、その他の作業ツリーには既存のデフォルトルールを適用する。
+品質ゲートの `gitleaks detect --no-git --source .` は未追跡ファイルも検査するため、コミット対象外の `models/` にある約18GBのGGUFを走査し続けた。この変更では `.gitleaks.toml` のpath allowlistへリポジトリ直下の `models/` だけを追加する。既存の除外である `.env.example`、`.env`、`config.yaml` は維持し、その他の作業ツリーには既存のデフォルトルールを適用する。
 
 この除外はユーザーがコミットしないと指定したローカルモデル保存先に限定する。実装、設定、文書、fixtureの検査範囲は変更せず、Gitleaks自体を無効化しない。
 
 ## コマンドで確認できる完了条件
 
-1. agent loopのテストで、外部の最新情報を求める入力では最初のLLM呼び出し前に `web_search` と、検索成功時の `web_fetch` が各1回実行され、そのtool callとtool結果がLLM入力に含まれる。
+1. agent loopのテストで、外部の最新情報を求める入力では最初のLLM呼び出し前に `web_search` が1回実行され、`web_fetch` が利用可能で検索が成功した場合は `web_fetch` も1回実行され、そのtool callとtool結果がLLM入力に含まれる。
 2. 通常の質問、`web_search` がない構成、検索失敗では不要なWebツール実行を行わない。
 3. REPLの2回目の `agent.Input.Messages` に、1回目のassistant tool call、tool結果、最終assistant回答が順序どおり含まれる。
 4. 同じ履歴でWeb検索を2回実行したとき、各ターンの `web_search` と `web_fetch` のtool call IDが重複せず、すべて9文字英数字である。
