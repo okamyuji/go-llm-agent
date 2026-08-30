@@ -188,7 +188,17 @@ agent:
   # (agent run / agent serve は対象外)。探索は tools.fs.allow_paths 配下に限る。
   agents_md:
     enabled: true
-    max_bytes: 32768
+    max_bytes: 32768         # 1 ファイルの上限
+    max_total_bytes: 32768   # グローバル → ルート → cwd の連結合計の上限
+    global_dir: ~/.go-llm-agent   # グローバル AGENTS.md の置き場所
+  # 自動メモリ。dir/<プロジェクトキー>/memory/ に MEMORY.md (索引) とトピック .md を置き、
+  # 起動時に索引の先頭 index_max_lines 行かつ index_max_bytes バイトをシステムプロンプトへ注入する。
+  # memory_write / memory_read を使うには enabled_tools にも列挙する。
+  memory:
+    enabled: true
+    dir: ~/.go-llm-agent/projects
+    index_max_lines: 200
+    index_max_bytes: 24576
 
 # ツール実行の前後に外部コマンドを起動する。matcher に一致したツールだけが対象で
 # "*" は全ツールに一致する。stdin へ JSON を渡し (pre は {"tool","args"}、post は

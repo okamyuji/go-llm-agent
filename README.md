@@ -7,7 +7,7 @@ Go 1.25製のCGOなし単一バイナリAIエージェントです。OpenAI、An
 - 単一バイナリで配布できます。CGO不要で Linux、macOS、Windowsのamd64とarm64に対応します
 - 5プロバイダー (OpenAI、Anthropic、Google Gemini、Ollama、llama.cpp) を統一した抽象層として扱えます
 - ストリーミングとtool callingに対応します
-- 内蔵ツールはfs_read、fs_write、fs_edit、shell、http_fetch、search_files、web_search、web_fetchの8種類です (ほかにRAG用のnote_add / note_search)
+- 内蔵ツールはfs_read、fs_write、fs_edit、shell、http_fetch、search_files、web_search、web_fetchの8種類です (ほかにRAG用のnote_add / note_search、自動メモリ用のmemory_write / memory_read)
 - 対話REPL、ワンショットrun、OpenAI互換HTTP APIの3種類のインターフェースを提供します
 - pre-commitとCIでgofmt、go vet、staticcheck、golangci-lint、govulncheck、race・coverage付きGoテスト、release build、gitleaksを実行します
 
@@ -149,9 +149,19 @@ bash scripts/verify-hardening.sh
 
 ### AGENTS.md 自動読み込み
 
-起動時のカレントディレクトリから親方向へ探索し、最初に見つかった `AGENTS.md` の内容をシステムプロンプト末尾へ付加します。探索範囲は `tools.fs.allow_paths` の配下に限ります。内容は信頼境界マーカーで囲み、上位の指示や安全上の制約を上書きしない参考情報として渡します。
+`agent.agents_md.global_dir`（既定`~/.go-llm-agent`）の`AGENTS.md`、次に`tools.fs.allow_paths`配下にあるカレントディレクトリの最も浅い祖先からカレントディレクトリまでの各`AGENTS.md`を、この順に連結してシステムプロンプト末尾へ付加します。後方（カレントディレクトリに近い側）ほど実質的に優先されます。1ファイルは`max_bytes`、連結合計は`max_total_bytes`（既定32KiB、ファイル本文の合計で信頼境界マーカー分は含まない）で打ち切ります。各ファイルは由来パス付きの信頼境界マーカーで囲み、上位の指示や安全上の制約を上書きしない参考情報として渡します。
 
-`agent.agents_md.max_bytes` を超えるファイルは先頭で切り詰めます。`agent.agents_md.enabled: false` で読み込みを無効化できます。
+行頭の`@相対パス`は記述ファイル基準で展開します（深さ4まで、コードフェンス内は対象外、探索ルート外やシンボリックリンクは拒否）。`agent run` / `agent serve`は対象外です。
+
+### 自動メモリ
+
+エージェントがセッションをまたいで覚えておく事実を、`agent.memory.dir`（既定`~/.go-llm-agent/projects`）配下のプロジェクト単位ディレクトリ`<プロジェクトキー>/memory/`へMarkdownで保存します。プロジェクトキーはgitリポジトリのルート（worktreeとsubmoduleは主リポジトリ。`gitdir:`の逆参照を検証し、偽造した`.git`ファイルでは解決しない）から導出し、git外ではカレントディレクトリを使います。キーは`<ディレクトリ名>-<ルート絶対パスのSHA-256先頭32桁（128bit）>`で、区切り文字の置換だけでは衝突するパスも区別します。
+
+- `MEMORY.md`は索引で、起動時に先頭200行かつ24KiB（`index_max_lines` / `index_max_bytes`）だけをシステムプロンプトへ注入します。信頼境界マーカーで囲み、コードから導出できる情報や`AGENTS.md`に書いてある情報は保存しないという保存方針も添えます
+- `memory_write` / `memory_read`ツールでエージェントがトピックファイル（`<name>.md`）を読み書きします。書き込み先はメモリディレクトリ直下に限定し、`..`や絶対パス、シンボリックリンク、1MiB超は拒否します。`enabled_tools`へ2つを列挙すると使えます
+- REPLでは`/memory`で一覧と索引を、`/memory <file>`で本文を表示します。`# <本文>`と入力すると`memories.md`と索引へ即時追記し、LLMへは送りません
+- `agent serve`ではメモリツールを無効化します。自動メモリはプロジェクト単位の1ストアで、bearer認証は呼び出し元の識別をツールへ渡さないため、複数クライアント間でメモリが共有されてしまうからです
+- `agent.memory.enabled: false`で全機能を無効化します。ディレクトリ初期化に失敗した場合はエラーログを出して無効化し、起動は継続します
 
 ## 評価フレームワーク
 
@@ -679,11 +689,17 @@ bash tests/e2e/01-otel-trace.sh
 ```bash
 make precommit-install   # pre-commit フックを有効化
 make quality             # 品質ゲートをローカル実行（CI と同一フロー）
-RUN_E2E=1 make quality   # 品質ゲートに27本のE2Eスクリプトを追加
+RUN_E2E=1 make quality   # 品質ゲートに28本のE2Eスクリプトを追加
 make build-all           # 6 バイナリへクロスコンパイル
 ```
 
-`scripts/quality-gate.sh` はpre-commitとCIが共有する品質確認の入口です。mutation対象packageの除外テスト、gofmt、go vet、staticcheck、golangci-lint、govulncheck、`go test --count=1 --shuffle=on -race -cover`、release build、機密ファイルのstage防止、`gitleaks detect --no-git --source .` を順に実行します。`RUN_E2E=1`では27本の`tests/e2e/*.sh`も実行します。gitleaksはstage状態にかかわらず作業ツリーを検査し、`.gitleaks.toml`のallowlistに列挙したpathとマスク済みplaceholderを対象外にします。
+### バージョン付与
+
+バージョンは`vMAJOR.MINOR.PATCH`のsemantic versionで、mainへのマージごとにGitHub Actions（`.github/workflows/release.yml`）が自動で付与します。直近の`v`タグ以降のコミットをConventional Commitsとして読み、`feat`ならMINOR、`fix`/`refactor`/`docs`/`chore`などならPATCH、`type!:`または本文の`BREAKING CHANGE`ならMAJOR（0.x系の間はMINOR）を上げてタグとGitHub Release（6バイナリ添付）を作ります。計算規則は`scripts/release/next-version.sh`が単一の情報源で、`bash scripts/release/next-version_test.sh`で検証できます。起点は「マージ済みPRの本数」をMINORに置いた`v0.13.0`です。
+
+ビルド時のバージョンは`-ldflags -X main.version=...`で埋め込み、`agent version`で表示します。`make build`は未指定なら`git describe --tags`の値（例: `v0.13.0-3-gabc1234-dirty`）を使います。
+
+`scripts/quality-gate.sh` はpre-commitとCIが共有する品質確認の入口です。mutation対象packageの除外テスト、gofmt、go vet、staticcheck、golangci-lint、govulncheck、`go test --count=1 --shuffle=on -race -cover`、release build、機密ファイルのstage防止、`gitleaks detect --no-git --source .` を順に実行します。`RUN_E2E=1`では28本の`tests/e2e/*.sh`も実行します。gitleaksはstage状態にかかわらず作業ツリーを検査し、`.gitleaks.toml`のallowlistに列挙したpathとマスク済みplaceholderを対象外にします。
 
 変更行のmutation testingは、比較元commitと1つ以上のGo packageを指定して実行します。
 
@@ -698,3 +714,24 @@ gremlinsは作業ツリー全体をworkerごとの一時ディレクトリへコ
 ## ライセンス
 
 MIT
+
+## バージョン履歴
+
+`v0.13.0`までは「マージ済みPR 1本＝1バージョン」として遡って対応づけたものです。以降はConventional Commitsに基づく自動bumpで付与します。
+
+| バージョン | 日付 | 機能の追加・修正 |
+|---|---|---|
+| v0.14.0 | 2026-08-30 | メモリ機能（階層AGENTS.md連結と`@import`、自動メモリ`memory_write`/`memory_read`、`/memory`と`#`）、semantic versionの自動付与、`fsx`パッケージ（`O_NOFOLLOW`付きの安全なopen） |
+| v0.13.0 | 2026-08-30 | 改善1-10と日本語UX（compaction、session resume、AGENTS.md自動読み込み、行エディタ内蔵、`/help` `/model` `/cost` `/clear` `/tools`、E2E 27本、変異テストとCRAP計測） |
+| v0.12.0 | 2026-08-15 | 対話UX・安全性・品質ゲートの強化 |
+| v0.11.0 | 2026-08-10 | Web検索とfollow-upの信頼性向上 |
+| v0.10.0 | 2026-08-09 | `web_search` / `web_fetch`ツール |
+| v0.9.0 | 2026-08-09 | 日本語IME復元（cooked入力と生成中のみraw監視のハイブリッドREPL） |
+| v0.8.0 | 2026-08-09 | raw-mode行エディタ（ESCキャンセル、履歴、CJK幅） |
+| v0.7.0 | 2026-08-08 | OpenAI互換ツール定義にparametersとdescriptionを付与 |
+| v0.6.0 | 2026-08-08 | llama.cpp（llama-server）プロバイダ |
+| v0.5.0 | 2026-07-05 | reusable-workflows@v1による共通CI |
+| v0.4.0 | 2026-07-05 | 依存更新（golang.org/x/net 0.55.0） |
+| v0.3.0 | 2026-05-23 | REPLの進捗スピナーとターン要約 |
+| v0.2.0 | 2026-05-23 | 本番投入に向けた16領域のハードニング |
+| v0.1.0 | 2026-05-21 | ツール層のdeny-by-defaultとハードニング |

@@ -14,6 +14,9 @@ const agentsMDFileName = "AGENTS.md"
 
 // LoadAgentsMD startDir から祖先ディレクトリを / へ向けて 1 段ずつ辿り、
 // 最初に見つかった AGENTS.md の内容と絶対パスを返す。
+// agent chat の起動経路は internal/instructions.Discover (階層連結・import 展開・
+// 合計上限つき) へ移行済みで、本関数は単一ファイル探索の互換 API として残す。
+// 探索規則を変える場合は instructions 側を正とする。
 // 探索は allowPaths のいずれかの配下にあるディレクトリだけを対象とし、
 // どの allowPaths 配下でもないディレクトリに到達した時点で打ち切る
 // (07-agents-md.md §2.1 の 2 つめ)。allowPaths が空の場合は startDir 自身のみを見る。

@@ -15,6 +15,7 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
+	"github.com/okamyuji/go-llm-agent/internal/memory"
 	"github.com/okamyuji/go-llm-agent/internal/transport/cliui/lineedit"
 )
 
@@ -52,6 +53,8 @@ type Options struct {
 	AvailableModels map[string][]string
 	// Billing 構成済みの billing.Accumulator。nil なら /cost はトークン数のみ表示する
 	Billing billing.Accumulator
+	// MemoryStore 自動メモリの Store。nil なら /memory と # プレフィックスは無効メッセージを出す
+	MemoryStore *memory.Store
 }
 
 // CompactionOptions agent.compaction の値をそのまま運ぶ。
@@ -146,6 +149,11 @@ func (r *REPL) Run(ctx context.Context) error {
 			if r.handleSlashCommand(ctx, pump, line, st, out, rec) {
 				return nil
 			}
+			continue
+		}
+		// "#" で始まる入力は自動メモリへ即保存し、LLM へは送らない
+		if strings.HasPrefix(line, "#") {
+			r.handleHashMemory(strings.TrimSpace(strings.TrimPrefix(line, "#")), out)
 			continue
 		}
 		if r.executeTurn(ctx, pump, line, st, out, rec) {
@@ -339,8 +347,10 @@ func (r *REPL) handleSlashCommand(ctx context.Context, pump *bytePump, line stri
 		r.handleModelCommand(out, arg)
 	case "/cost":
 		r.handleCostCommand(out)
+	case "/memory":
+		r.handleMemoryCommand(arg, out)
 	default:
-		fmt.Fprintf(out, "[コマンド] %s は未定義です。利用可能: /quit /exit /clear /tools off|on /help /model /compact /cost\n", name)
+		fmt.Fprintf(out, "[コマンド] %s は未定義です。利用可能: /quit /exit /clear /tools off|on /help /model /compact /cost /memory\n", name)
 	}
 	return false
 }
@@ -354,6 +364,8 @@ func helpText() string {
   /cost                   このセッションの累計トークン数と費用を表示します
   /clear                  会話履歴を破棄し、新しいセッションを開始します
   /tools off|on           ツール定義の送信を無効化/有効化します
+  /memory [file]          自動メモリの一覧と索引、または指定ファイルの本文を表示します
+  # <本文>                本文を自動メモリ (memories.md) へ即時保存します (LLM へは送りません)
   /quit, /exit            REPL を終了します
 `
 }

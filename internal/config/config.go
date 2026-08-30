@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"net/url"
 	"os"
@@ -160,6 +161,7 @@ type AgentConfig struct {
 	ToolResultLimit  ToolResultLimitConfig `yaml:"tool_result_limit"`
 	Compaction       CompactionConfig      `yaml:"compaction"`
 	AgentsMD         AgentsMDConfig        `yaml:"agents_md"`
+	Memory           MemoryConfig          `yaml:"memory"`
 }
 
 // AgentsMDConfig AGENTS.md 自動読込の設定。
@@ -170,8 +172,29 @@ type AgentConfig struct {
 // *Enabled が false の場合は探索自体を行わない (ファイルシステムへのアクセスも
 // 発生させない)。
 type AgentsMDConfig struct {
-	Enabled  *bool `yaml:"enabled"`
-	MaxBytes int   `yaml:"max_bytes"`
+	Enabled *bool `yaml:"enabled"`
+	// MaxBytes 1 ファイルの上限バイト数
+	MaxBytes int `yaml:"max_bytes"`
+	// MaxTotalBytes 階層連結の合計上限バイト数 (18-memory.md 6.1)
+	MaxTotalBytes int `yaml:"max_total_bytes"`
+	// GlobalDir グローバル AGENTS.md を置くディレクトリ。~ 展開は利用側が行う
+	GlobalDir string `yaml:"global_dir"`
+}
+
+// MemoryConfig 自動メモリの設定 (18-memory.md 6.4)。
+// Enabled は yaml 未指定 (nil) と enabled: false を区別するため *bool とする。
+// applyDefaults が nil のとき true を指すポインタを代入するため、Load を
+// 通過した値では常に非 nil であり、利用側は *cfg.Enabled を読む。
+// *Enabled が false の場合はツール登録・索引注入・REPL コマンドをすべて
+// 無効化し、ファイルシステムへのアクセスも発生させない
+type MemoryConfig struct {
+	Enabled *bool `yaml:"enabled"`
+	// Dir プロジェクトキー配下に memory/ を作る親ディレクトリ。~ 展開は利用側が行う
+	Dir string `yaml:"dir"`
+	// IndexMaxLines 起動時に注入する MEMORY.md の行数上限
+	IndexMaxLines int `yaml:"index_max_lines"`
+	// IndexMaxBytes 起動時に注入する MEMORY.md のバイト上限
+	IndexMaxBytes int `yaml:"index_max_bytes"`
 }
 
 // CompactionConfig 会話履歴圧縮の設定。
@@ -395,6 +418,11 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("config parse: %w", err)
 	}
+	// 負値の検査は既定値適用の前に行う。applyDefaults は 0 (未指定) だけを置き換えるため、
+	// 前に置くことで「未指定は通り、負値だけ拒否する」境界をテストで固定できる
+	if err := validateMemory(cfg.Agent); err != nil {
+		return nil, err
+	}
 	applyDefaults(&cfg)
 	if err := validateFallbackChains(cfg.Providers); err != nil {
 		return nil, err
@@ -492,6 +520,15 @@ const (
 // defaultAgentsMDMaxBytes agent.agents_md.max_bytes の実効既定値 (00-overview 3.4 節が凍結)
 const defaultAgentsMDMaxBytes = 32768
 
+// agent.agents_md と agent.memory の追加キーの実効既定値 (18-memory.md 6.4 が凍結)
+const (
+	defaultAgentsMDMaxTotalBytes = 32768
+	defaultAgentsMDGlobalDir     = "~/.go-llm-agent"
+	defaultMemoryDir             = "~/.go-llm-agent/projects"
+	defaultMemoryIndexMaxLines   = 200
+	defaultMemoryIndexMaxBytes   = 24576
+)
+
 // applyDefaults decode 直後・各 validateXxx の前に 1 回呼び、yaml で明示されなかった
 // キーへコード既定値を適用する (00-overview 3.4 節)。数値キーはゼロ値 (未指定) の
 // ときだけ既定値を代入する。切り詰めを明示的に無効化したい利用者は -1 を指定する
@@ -504,6 +541,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Tools.Shell.OSSandbox = "auto"
 	}
 	applyAgentsMDDefaults(&cfg.Agent.AgentsMD)
+	applyMemoryDefaults(&cfg.Agent.Memory)
 }
 
 // applyAgentsMDDefaults 未指定の agents_md キーへコード既定値を適用する。
@@ -517,6 +555,37 @@ func applyAgentsMDDefaults(c *AgentsMDConfig) {
 	if c.MaxBytes == 0 {
 		c.MaxBytes = defaultAgentsMDMaxBytes
 	}
+	c.MaxTotalBytes = cmp.Or(c.MaxTotalBytes, defaultAgentsMDMaxTotalBytes)
+	c.GlobalDir = cmp.Or(c.GlobalDir, defaultAgentsMDGlobalDir)
+}
+
+// validateMemory agents_md.max_total_bytes と memory.index_max_* の負値を拒否する。
+// fsx.ReadCapped は maxBytes <= 0 を無制限として扱うため、負値を通すと索引の上限を
+// 設定で無効化できてしまう。無制限モードは意図的に提供しない
+func validateMemory(a AgentConfig) error {
+	if a.AgentsMD.MaxTotalBytes < 0 {
+		return fmt.Errorf("agent.agents_md.max_total_bytes must be >= 0, got %d", a.AgentsMD.MaxTotalBytes)
+	}
+	if a.Memory.IndexMaxLines < 0 {
+		return fmt.Errorf("agent.memory.index_max_lines must be >= 0, got %d", a.Memory.IndexMaxLines)
+	}
+	if a.Memory.IndexMaxBytes < 0 {
+		return fmt.Errorf("agent.memory.index_max_bytes must be >= 0, got %d", a.Memory.IndexMaxBytes)
+	}
+	return nil
+}
+
+// applyMemoryDefaults 未指定の memory キーへコード既定値を適用する。
+// Enabled は nil (yaml に enabled 行が無い) のときだけ true を代入し、
+// enabled: false の明示は上書きしない
+func applyMemoryDefaults(c *MemoryConfig) {
+	if c.Enabled == nil {
+		enabled := true
+		c.Enabled = &enabled
+	}
+	c.Dir = cmp.Or(c.Dir, defaultMemoryDir)
+	c.IndexMaxLines = cmp.Or(c.IndexMaxLines, defaultMemoryIndexMaxLines)
+	c.IndexMaxBytes = cmp.Or(c.IndexMaxBytes, defaultMemoryIndexMaxBytes)
 }
 
 // applyCompactionDefaults 未指定の compaction キーへコード既定値を適用する。

@@ -1,0 +1,102 @@
+name: Release
+
+# main への push (= PR のマージ) ごとに Conventional Commits から次の semantic version を
+# 計算し、タグと GitHub Release (各 OS/arch のバイナリ付き) を自動作成する。
+# bump 規則は scripts/release/next-version.sh が単一の情報源で、ここでは呼ぶだけにする。
+#
+# 再実行で復旧できるように、スキップ判定は「公開済みの Release があり、アセットが
+# 揃っている」ときだけ行う。タグだけが残った失敗、draft が残った失敗、アセット不足の
+# 失敗は、いずれも次回実行で同じバージョンを対象に補完する。
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+env:
+  # Makefile の PLATFORMS (6 組) と一致させる。増減したらここも更新する
+  EXPECTED_ASSETS: "6"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Compute next version
+        id: next
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          next="$(bash scripts/release/next-version.sh)"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+          skip=false
+          if state="$(gh release view "$next" --json isDraft,assets --jq '"\(.isDraft) \(.assets | length)"' 2>/dev/null)"; then
+            read -r is_draft asset_count <<<"$state"
+            if [ "$is_draft" = "false" ] && [ "$asset_count" -ge "$EXPECTED_ASSETS" ]; then
+              skip=true
+              echo "release $next is published with $asset_count assets; skip"
+            else
+              echo "release $next exists but incomplete (draft=$is_draft assets=$asset_count); repair"
+            fi
+          else
+            echo "release $next is missing; publish"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - name: Verify existing tag target
+        if: steps.next.outputs.skip == 'false'
+        env:
+          NEXT: ${{ steps.next.outputs.next }}
+        run: |
+          set -euo pipefail
+          # 前回の失敗でタグだけ残っている場合、そのタグが今回のコミットを指していなければ
+          # 別コミットのタグへ今回のバイナリを付けることになるため中断する
+          if git ls-remote --exit-code --tags origin "refs/tags/$NEXT" >/dev/null 2>&1; then
+            git fetch --quiet origin "refs/tags/$NEXT:refs/tags/$NEXT"
+            target="$(git rev-list -n 1 "$NEXT")"
+            if [ "$target" != "$GITHUB_SHA" ]; then
+              echo "::error::tag $NEXT points to $target, not $GITHUB_SHA; refusing to publish"
+              exit 1
+            fi
+            echo "tag $NEXT already points to $GITHUB_SHA"
+          fi
+
+      - name: Build release binaries
+        if: steps.next.outputs.skip == 'false'
+        run: make build-all VERSION="${{ steps.next.outputs.next }}"
+
+      - name: Tag and publish release
+        if: steps.next.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXT: ${{ steps.next.outputs.next }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$NEXT" >/dev/null 2>&1; then
+            git tag -a "$NEXT" -m "release $NEXT"
+            git push origin "$NEXT"
+          fi
+          if gh release view "$NEXT" >/dev/null 2>&1; then
+            # draft またはアセット不足の Release を補完して公開する
+            gh release upload "$NEXT" dist/* --clobber
+            gh release edit "$NEXT" --draft=false
+          else
+            gh release create "$NEXT" dist/* --title "$NEXT" --generate-notes
+          fi

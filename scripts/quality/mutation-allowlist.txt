@@ -42,9 +42,13 @@ internal/transport/cliui/lineedit/width.go:39:10 CONDITIONALS_NEGATION
 internal/agent/hooks.go:16:31 ARITHMETIC_BASE
 internal/transport/cliui/compact.go:16:25 ARITHMETIC_BASE
 internal/transport/cliui/lineedit/search.go:7:28 ARITHMETIC_BASE
+internal/transport/cliui/memory_cmd.go:15:34 ARITHMETIC_BASE
 
 # --- コンパイル不能な変異: パッケージレベル const の文字列連結 (実行可能な mutant が生成されない) ---
-cmd/agent/chat.go:111:67 ARITHMETIC_BASE
-cmd/agent/chat.go:112:122 ARITHMETIC_BASE
-cmd/agent/chat.go:113:116 ARITHMETIC_BASE
-cmd/agent/chat.go:114:125 ARITHMETIC_BASE
+cmd/agent/memorywire.go:26:136 ARITHMETIC_BASE
+cmd/agent/memorywire.go:27:149 ARITHMETIC_BASE
+cmd/agent/memorywire.go:28:149 ARITHMETIC_BASE
+cmd/agent/memorywire.go:88:127 ARITHMETIC_BASE
+cmd/agent/memorywire.go:89:151 ARITHMETIC_BASE
+cmd/agent/memorywire.go:90:111 ARITHMETIC_BASE
+cmd/agent/memorywire.go:91:137 ARITHMETIC_BASE
