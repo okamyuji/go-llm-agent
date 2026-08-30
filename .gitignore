@@ -30,3 +30,11 @@
 /*.crt
 /*.key
 /certs/
+
+# 個人環境（ローカルMac・Codex設定）依存の調査メモはローカル保持のみ
+/_docs/ai-agent-draw-things-video-generation-integration.md
+/_docs/ltx-2.3-local-feasibility-referents.md
+/_docs/ltx-2.3-local-video-command-referents.md
+/_docs/referent-table-codex-router-install.md
+/referent-table-codex-stop-hook-json.md
+/referent-table-gremlins-mcp-model-cleanup.md
