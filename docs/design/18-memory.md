@@ -101,7 +101,7 @@ importの構文を次に示す。
 ストアAPIを次に示す。
 
 ```go
-// Store メモリディレクトリへの読み書き。パスはディレクトリ内相対パスのみ受け付ける
+// Storeはメモリディレクトリへの読み書きを担う。パスはディレクトリ内相対パスのみ受け付ける
 type Store struct { /* dir string */ }
 
 func NewStore(dir string) (*Store, error)
