@@ -176,6 +176,44 @@ func TestDiscover_EmptyGlobalDirSkipsGlobal(t *testing.T) {
 	}
 }
 
+func TestDiscover_DirectoryNamedAgentsMDIsError(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "AGENTS.md"), 0o755); err != nil {
+		t.Fatalf("prep: %v", err)
+	}
+	if _, err := instructions.Discover("", root, []string{root}, defaultOpt()); err == nil {
+		t.Fatalf("ディレクトリを AGENTS.md として扱ってもエラーにならない")
+	}
+}
+
+func TestDiscover_GlobalReadErrorPropagates(t *testing.T) {
+	global := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(global, "AGENTS.md"), 0o755); err != nil {
+		t.Fatalf("prep: %v", err)
+	}
+	cwd := t.TempDir()
+	if _, err := instructions.Discover(global, cwd, []string{cwd}, defaultOpt()); err == nil {
+		t.Fatalf("グローバル側の読み取りエラーが伝播しない")
+	}
+}
+
+func TestDiscover_GlobalAloneHitsTotalLimit(t *testing.T) {
+	global := t.TempDir()
+	cwd := t.TempDir()
+	writeFile(t, filepath.Join(global, "AGENTS.md"), "0123456789ABCDEF")
+	writeFile(t, filepath.Join(cwd, "AGENTS.md"), "project")
+
+	opt := defaultOpt()
+	opt.TotalMaxBytes = 8
+	srcs, err := instructions.Discover(global, cwd, []string{cwd}, opt)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(srcs) != 0 {
+		t.Fatalf("グローバルで上限超過したのに追加された: %+v", srcs)
+	}
+}
+
 func TestDiscover_EmptyFileSkipped(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "AGENTS.md"), "")

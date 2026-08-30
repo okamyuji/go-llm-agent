@@ -165,6 +165,20 @@ func TestAttachMemoryTools(t *testing.T) {
 	}
 }
 
+func TestAttachMemoryTools_DegradedOnInitFailure(t *testing.T) {
+	work := resolvedTempDir(t)
+	withChdir(t, work)
+	blocker := filepath.Join(resolvedTempDir(t), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := memoryCfg(blocker)
+
+	if got := attachMemoryTools(cfg, quietLogger(), nil); len(got) != 0 {
+		t.Fatalf("初期化失敗時にツールが登録された: %s", toolNames(got))
+	}
+}
+
 func toolNames(tools []tool.Tool) string {
 	var b []string
 	for _, tl := range tools {

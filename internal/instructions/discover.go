@@ -35,56 +35,56 @@ type Options struct {
 // 空ファイルはスキップし、合計が TotalMaxBytes へ達した時点で以降のファイルを
 // 追加しない
 func Discover(globalDir, cwd string, allowPaths []string, opt Options) ([]Source, error) {
-	var sources []Source
-	total := 0
-
-	appendSource := func(path, scope string, roots []string) (bool, error) {
-		found, content, err := readCandidate(path, opt.FileMaxBytes)
-		if err != nil {
-			return true, fmt.Errorf("instructions: read %s: %w", path, err)
-		}
-		if !found || content == "" {
-			return true, nil
-		}
-		visited := map[string]bool{filepath.Clean(path): true}
-		content = expandImports(content, filepath.Dir(path), roots, opt, 0, visited)
-		if opt.TotalMaxBytes > 0 && total+len(content) > opt.TotalMaxBytes {
-			// 合計上限へ達した。以降のファイルは追加しない
-			return false, nil
-		}
-		total += len(content)
-		sources = append(sources, Source{Path: path, Content: content, Scope: scope})
-		return true, nil
-	}
-
+	c := &collector{opt: opt}
 	if globalDir != "" {
-		cont, err := appendSource(filepath.Join(globalDir, instructionsFileName), "global", []string{globalDir})
-		if err != nil {
-			return nil, err
-		}
-		if !cont {
-			return sources, nil
+		cont, err := c.add(filepath.Join(globalDir, instructionsFileName), "global", []string{globalDir})
+		if err != nil || !cont {
+			return c.sources, err
 		}
 	}
-
 	chain, err := projectChain(cwd, allowPaths)
 	if err != nil {
 		return nil, err
 	}
-	projectRoots := allowPaths
-	if len(projectRoots) == 0 && len(chain) > 0 {
-		projectRoots = []string{chain[0]}
+	roots := allowPaths
+	if len(roots) == 0 && len(chain) > 0 {
+		roots = []string{chain[0]}
 	}
 	for _, dir := range chain {
-		cont, err := appendSource(filepath.Join(dir, instructionsFileName), "project", projectRoots)
-		if err != nil {
-			return nil, err
-		}
-		if !cont {
-			break
+		cont, err := c.add(filepath.Join(dir, instructionsFileName), "project", roots)
+		if err != nil || !cont {
+			return c.sources, err
 		}
 	}
-	return sources, nil
+	return c.sources, nil
+}
+
+// collector 連結対象を収集し、合計バイト上限を追跡する
+type collector struct {
+	opt     Options
+	total   int
+	sources []Source
+}
+
+// add path を読み、import を展開して sources へ追加する。戻り値 cont=false は
+// 合計上限へ達したため以降のファイルを追加しないことを示す。
+// 読めない・空のファイルはスキップして cont=true を返す
+func (c *collector) add(path, scope string, roots []string) (cont bool, err error) {
+	found, content, err := readCandidate(path, c.opt.FileMaxBytes)
+	if err != nil {
+		return false, fmt.Errorf("instructions: read %s: %w", path, err)
+	}
+	if !found || content == "" {
+		return true, nil
+	}
+	visited := map[string]bool{filepath.Clean(path): true}
+	content = expandImports(content, filepath.Dir(path), roots, c.opt, 0, visited)
+	if c.opt.TotalMaxBytes > 0 && c.total+len(content) > c.opt.TotalMaxBytes {
+		return false, nil
+	}
+	c.total += len(content)
+	c.sources = append(c.sources, Source{Path: path, Content: content, Scope: scope})
+	return true, nil
 }
 
 // projectChain allowPaths 配下にある cwd の最も浅い祖先から cwd までの
