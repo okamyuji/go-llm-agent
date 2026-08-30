@@ -11,6 +11,11 @@
 
 # 個人ローカル設定はコミット対象外。サンプルは config.yaml.example を参照
 /config.yaml
+/llm-agent-workspace/
+
+# ローカル実験用のモデルバイナリと生成動画はコミット対象外
+/models/
+/videos/
 
 # docs/design/ は公開設計書として git 管理する
 # それ以外の docs サブディレクトリ（plans, specs, notes）と usage.md は個人ローカル保持のままにする
