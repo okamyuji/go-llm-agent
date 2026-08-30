@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -74,11 +75,7 @@ func (t *MemoryReadTool) Execute(_ context.Context, raw json.RawMessage) (Result
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid args: %v", err)}, nil
 	}
-	path := a.Path
-	if path == "" {
-		path = memory.IndexFileName
-	}
-	content, err := t.Store.Read(path, memoryReadMaxBytes)
+	content, err := t.Store.Read(cmp.Or(a.Path, memory.IndexFileName), memoryReadMaxBytes)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}

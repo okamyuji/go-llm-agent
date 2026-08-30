@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"net/url"
 	"os"
@@ -549,12 +550,8 @@ func applyAgentsMDDefaults(c *AgentsMDConfig) {
 	if c.MaxBytes == 0 {
 		c.MaxBytes = defaultAgentsMDMaxBytes
 	}
-	if c.MaxTotalBytes == 0 {
-		c.MaxTotalBytes = defaultAgentsMDMaxTotalBytes
-	}
-	if c.GlobalDir == "" {
-		c.GlobalDir = defaultAgentsMDGlobalDir
-	}
+	c.MaxTotalBytes = cmp.Or(c.MaxTotalBytes, defaultAgentsMDMaxTotalBytes)
+	c.GlobalDir = cmp.Or(c.GlobalDir, defaultAgentsMDGlobalDir)
 }
 
 // applyMemoryDefaults 未指定の memory キーへコード既定値を適用する。
@@ -565,15 +562,9 @@ func applyMemoryDefaults(c *MemoryConfig) {
 		enabled := true
 		c.Enabled = &enabled
 	}
-	if c.Dir == "" {
-		c.Dir = defaultMemoryDir
-	}
-	if c.IndexMaxLines == 0 {
-		c.IndexMaxLines = defaultMemoryIndexMaxLines
-	}
-	if c.IndexMaxBytes == 0 {
-		c.IndexMaxBytes = defaultMemoryIndexMaxBytes
-	}
+	c.Dir = cmp.Or(c.Dir, defaultMemoryDir)
+	c.IndexMaxLines = cmp.Or(c.IndexMaxLines, defaultMemoryIndexMaxLines)
+	c.IndexMaxBytes = cmp.Or(c.IndexMaxBytes, defaultMemoryIndexMaxBytes)
 }
 
 // applyCompactionDefaults 未指定の compaction キーへコード既定値を適用する。

@@ -214,6 +214,91 @@ func TestDiscover_GlobalAloneHitsTotalLimit(t *testing.T) {
 	}
 }
 
+func TestDiscover_ZeroLimitsMeanUnlimited(t *testing.T) {
+	root := t.TempDir()
+	body := strings.Repeat("x", 5000)
+	writeFile(t, filepath.Join(root, "AGENTS.md"), body)
+
+	opt := instructions.Options{FileMaxBytes: 0, TotalMaxBytes: 0, ImportDepth: 4}
+	srcs, err := instructions.Discover("", root, []string{root}, opt)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(srcs) != 1 || srcs[0].Content != body {
+		t.Fatalf("上限 0 が無制限として扱われていない: len=%d", len(srcs))
+	}
+}
+
+func TestDiscover_FileExactlyAtMaxBytesNotTruncated(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "AGENTS.md"), "abcd")
+
+	opt := defaultOpt()
+	opt.FileMaxBytes = 4
+	srcs, err := instructions.Discover("", root, []string{root}, opt)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(srcs) != 1 || srcs[0].Content != "abcd" {
+		t.Fatalf("上限ちょうどのファイルが切り詰められた: %+v", srcs)
+	}
+	// 1 バイト超えると末尾が落ちる
+	opt.FileMaxBytes = 3
+	srcs, err = instructions.Discover("", root, []string{root}, opt)
+	if err != nil || len(srcs) != 1 || srcs[0].Content != "abc" {
+		t.Fatalf("上限超過の切り詰め結果 %+v err=%v", srcs, err)
+	}
+}
+
+func TestDiscover_TruncationKeepsInvalidByteMidContent(t *testing.T) {
+	root := t.TempDir()
+	// 不正バイト 0xff を先頭に置いても、末尾の rune 境界処理だけが働く
+	writeFile(t, filepath.Join(root, "AGENTS.md"), "\xffab")
+
+	opt := defaultOpt()
+	opt.FileMaxBytes = 2
+	srcs, err := instructions.Discover("", root, []string{root}, opt)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(srcs) != 1 || srcs[0].Content != "\xffa" {
+		t.Fatalf("got %q", srcs[0].Content)
+	}
+}
+
+func TestDiscover_TotalExactlyAtLimitIncluded(t *testing.T) {
+	root := t.TempDir()
+	cwd := filepath.Join(root, "sub")
+	writeFile(t, filepath.Join(root, "AGENTS.md"), "12345")
+	writeFile(t, filepath.Join(cwd, "AGENTS.md"), "67890")
+
+	opt := defaultOpt()
+	opt.TotalMaxBytes = 10
+	srcs, err := instructions.Discover("", cwd, []string{root}, opt)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(srcs) != 2 {
+		t.Fatalf("合計がちょうど上限のときは両方含まれるべき: %+v", srcs)
+	}
+}
+
+func TestDiscover_EmptyAllowPathsImportsResolveUnderCwd(t *testing.T) {
+	base := t.TempDir()
+	cwd := filepath.Join(base, "repo")
+	writeFile(t, filepath.Join(base, "secret.md"), "SECRET")
+	writeFile(t, filepath.Join(cwd, "extra.md"), "EXTRA")
+	writeFile(t, filepath.Join(cwd, "AGENTS.md"), "@extra.md\n@../secret.md\n")
+
+	srcs, err := instructions.Discover("", cwd, nil, defaultOpt())
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(srcs) != 1 || !strings.Contains(srcs[0].Content, "EXTRA") || strings.Contains(srcs[0].Content, "SECRET") {
+		t.Fatalf("allowPaths 空のとき cwd を探索ルートとして import すべき: %+v", srcs)
+	}
+}
+
 func TestDiscover_EmptyFileSkipped(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "AGENTS.md"), "")

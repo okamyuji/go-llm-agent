@@ -14,10 +14,9 @@ const importPrefix = "@"
 // 達した行、絶対パス・roots 外・存在しない・読めないファイルの行は原文のまま残す。
 // 循環は visited (絶対パス集合) で遮断する
 func expandImports(content, baseDir string, roots []string, opt Options, depth int, visited map[string]bool) string {
-	lines := strings.Split(content, "\n")
 	var out []string
 	inFence := false
-	for _, line := range lines {
+	for line := range strings.SplitSeq(content, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "```") {
 			inFence = !inFence
 			out = append(out, line)
@@ -40,7 +39,10 @@ func expandImports(content, baseDir string, roots []string, opt Options, depth i
 }
 
 // readImport rel を baseDir 基準で解決し、roots 内の通常ファイルであれば
-// 再帰展開済みの内容を返す。読めない・境界外・循環のときは ok=false
+// 再帰展開済みの内容を返す。読めない・境界外・循環のときは ok=false。
+// visited は展開中の祖先チェーンだけを保持する (展開後に delete する) ため、
+// 同じファイルを別経路から 2 回参照するダイヤモンド構成は両方展開され、
+// 自分自身へ戻る真の循環だけを遮断する
 func readImport(rel string, baseDir string, roots []string, opt Options, depth int, visited map[string]bool) (string, bool) {
 	if rel == "" || filepath.IsAbs(rel) {
 		return "", false
@@ -57,5 +59,6 @@ func readImport(rel string, baseDir string, roots []string, opt Options, depth i
 		return "", false
 	}
 	visited[path] = true
+	defer delete(visited, path)
 	return expandImports(content, filepath.Dir(path), roots, opt, depth+1, visited), true
 }

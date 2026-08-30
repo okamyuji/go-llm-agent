@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/okamyuji/go-llm-agent/internal/memory"
@@ -116,7 +118,7 @@ func TestStore_ReadIndex(t *testing.T) {
 	}
 
 	var b strings.Builder
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		b.WriteString("- line\n")
 	}
 	if err := s.Write("MEMORY.md", b.String(), false); err != nil {
@@ -202,6 +204,68 @@ func TestProjectKey_WorktreeGitFile(t *testing.T) {
 	}
 	if got, want := memory.ProjectKey(wt), memory.ProjectKey(main); got != want {
 		t.Fatalf("worktree キー %q, want %q", got, want)
+	}
+}
+
+func TestProjectKey_SubmoduleRelativeGitFile(t *testing.T) {
+	main := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(main, ".git", "modules", "sub"), 0o755); err != nil {
+		t.Fatalf("prep: %v", err)
+	}
+	sub := filepath.Join(main, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("prep sub: %v", err)
+	}
+	// submodule は通常、相対パスの gitdir: を書く
+	if err := os.WriteFile(filepath.Join(sub, ".git"), []byte("gitdir: ../.git/modules/sub\n"), 0o644); err != nil {
+		t.Fatalf("prep gitfile: %v", err)
+	}
+	got := memory.ProjectKey(sub)
+	if got != memory.ProjectKey(main) {
+		t.Fatalf("submodule キー %q, want 主リポジトリと同じ %q", got, memory.ProjectKey(main))
+	}
+	if got == ".." || got == "" {
+		t.Fatalf("相対 gitdir が誤解決された: %q", got)
+	}
+}
+
+func TestProjectKey_MalformedGitFileFallsBackToDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("not a gitdir line\n"), 0o644); err != nil {
+		t.Fatalf("prep: %v", err)
+	}
+	if got, want := memory.ProjectKey(dir), memory.ProjectKey(dir); got != want || got == "" {
+		t.Fatalf("got %q", got)
+	}
+	resolved, _ := filepath.EvalSymlinks(dir)
+	if !strings.Contains(memory.ProjectKey(dir), filepath.Base(resolved)) {
+		t.Fatalf("不正な .git ファイルではそのディレクトリをキーにするべき: %q", memory.ProjectKey(dir))
+	}
+}
+
+func TestStore_ConcurrentAppendKeepsSizeLimit(t *testing.T) {
+	s, _ := newStore(t)
+	chunk := strings.Repeat("a", 1<<18) // 256 KiB
+	var wg sync.WaitGroup
+	var okCount atomic.Int32
+	for range 8 {
+		wg.Go(func() {
+			if err := s.Write("big.md", chunk, true); err == nil {
+				okCount.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	// 1 MiB 上限のため成功は最大 4 回。並行しても上限を超えて書かれない
+	if okCount.Load() > 4 {
+		t.Fatalf("並行 append で上限を超えた: %d 回成功", okCount.Load())
+	}
+	fi, err := os.Stat(filepath.Join(s.Dir(), "big.md"))
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if fi.Size() > 1<<20 {
+		t.Fatalf("ファイルサイズが上限超過: %d", fi.Size())
 	}
 }
 

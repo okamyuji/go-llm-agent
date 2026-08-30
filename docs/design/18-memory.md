@@ -73,7 +73,7 @@ func Discover(globalDir, cwd string, allowPaths []string, opt Options) ([]Source
 
 - 探索順序: (1)`<globalDir>/AGENTS.md`（既定`~/.go-llm-agent/AGENTS.md`）、(2)allowPaths配下でcwdの最も浅い祖先からcwdまで、各ディレクトリの`AGENTS.md`。1ディレクトリ1ファイル
 - 連結: 収集順（広いスコープが先）に空行で連結する。cwdに近いファイルほどプロンプト後方に置かれる
-- 上限: 1ファイルは既存`max_bytes`（rune境界で切り詰め）、合計は`max_total_bytes`（既定32KiB）。合計上限へ達した時点で以降のファイルを追加せず、警告ログを1行出す
+- 上限: 1ファイルは既存`max_bytes`（rune境界で切り詰め）、合計は`max_total_bytes`（既定32KiB、import展開後の本文合計で信頼境界マーカー分は含まない）。合計上限へ達した時点で以降のファイルを追加しない
 - ファイル検査は既存`readAgentsMDCandidate`と同じ方針（Lstatでシンボリックリンク・非通常ファイルを拒否、`io.LimitReader`で読み取りバイトを制限）
 - 信頼境界: ファイルごとに既存`agentsMDHeader`相当のマーカーを付け、由来パスを明示する。グローバルファイルはユーザー自身の管理物だが、同一の境界で包み例外を作らない
 

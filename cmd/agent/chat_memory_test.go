@@ -120,6 +120,24 @@ func TestResolveMemory_InjectsIndexWithMarker(t *testing.T) {
 	}
 }
 
+func TestBuildMemoryStore_SharesInstancePerDir(t *testing.T) {
+	work := resolvedTempDir(t)
+	withChdir(t, work)
+	cfg := memoryCfg(resolvedTempDir(t))
+
+	a, err := buildMemoryStore(cfg)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	b, err := buildMemoryStore(cfg)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if a != b {
+		t.Fatalf("同じディレクトリで別インスタンスが返った")
+	}
+}
+
 func TestResolveMemory_DisabledReturnsNil(t *testing.T) {
 	work := resolvedTempDir(t)
 	withChdir(t, work)

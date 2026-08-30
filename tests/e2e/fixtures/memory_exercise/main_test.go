@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"strings"
 	"testing"
 
@@ -30,7 +29,7 @@ func TestComposeMemoryPrompt_IndexInsideMarkers(t *testing.T) {
 }
 
 func TestSeenProvider_Stream_FactPresentReturnsTrue(t *testing.T) {
-	stream, err := seenProvider{}.Stream(context.Background(), llm.ChatRequest{
+	stream, err := seenProvider{}.Stream(t.Context(), llm.ChatRequest{
 		Messages: []llm.Message{{Role: llm.RoleSystem, Content: "base " + memoryFact + " tail"}},
 	})
 	if err != nil {
@@ -43,7 +42,7 @@ func TestSeenProvider_Stream_FactPresentReturnsTrue(t *testing.T) {
 }
 
 func TestSeenProvider_Stream_FactAbsentReturnsFalse(t *testing.T) {
-	stream, err := seenProvider{}.Stream(context.Background(), llm.ChatRequest{
+	stream, err := seenProvider{}.Stream(t.Context(), llm.ChatRequest{
 		Messages: []llm.Message{{Role: llm.RoleSystem, Content: "base"}},
 	})
 	if err != nil {
@@ -59,7 +58,7 @@ func TestSeenProvider_Stream_FactAbsentReturnsFalse(t *testing.T) {
 }
 
 func TestSeenProvider_Chat_ReturnsError(t *testing.T) {
-	if _, err := (seenProvider{}).Chat(context.Background(), llm.ChatRequest{}); err == nil {
+	if _, err := (seenProvider{}).Chat(t.Context(), llm.ChatRequest{}); err == nil {
 		t.Fatalf("Chat は使わない契約のためエラーを返すべき")
 	}
 }
@@ -67,7 +66,7 @@ func TestSeenProvider_Chat_ReturnsError(t *testing.T) {
 func TestCheckHashSaves_WritesTrue(t *testing.T) {
 	st := newStore(t)
 	var w bytes.Buffer
-	checkHashSaves(context.Background(), st, &w)
+	checkHashSaves(t.Context(), st, &w)
 	if !strings.Contains(w.String(), "memory_hash_saved=true") {
 		t.Fatalf("out=%q", w.String())
 	}
@@ -79,7 +78,7 @@ func TestCheckIndexInjected_TrueAfterIndexExists(t *testing.T) {
 		t.Fatalf("prep: %v", err)
 	}
 	var w bytes.Buffer
-	checkIndexInjected(context.Background(), st, &w)
+	checkIndexInjected(t.Context(), st, &w)
 	if !strings.Contains(w.String(), "memory_index_injected=true") {
 		t.Fatalf("out=%q", w.String())
 	}
@@ -88,7 +87,7 @@ func TestCheckIndexInjected_TrueAfterIndexExists(t *testing.T) {
 func TestCheckIndexInjected_FalseWithoutIndex(t *testing.T) {
 	st := newStore(t)
 	var w bytes.Buffer
-	checkIndexInjected(context.Background(), st, &w)
+	checkIndexInjected(t.Context(), st, &w)
 	if !strings.Contains(w.String(), "memory_index_injected=false") {
 		t.Fatalf("out=%q", w.String())
 	}
@@ -97,7 +96,7 @@ func TestCheckIndexInjected_FalseWithoutIndex(t *testing.T) {
 func TestCheckToolRoundTrip_WritesTrue(t *testing.T) {
 	st := newStore(t)
 	var w bytes.Buffer
-	checkToolRoundTrip(context.Background(), st, &w)
+	checkToolRoundTrip(t.Context(), st, &w)
 	if !strings.Contains(w.String(), "memory_tool_roundtrip=true") {
 		t.Fatalf("out=%q", w.String())
 	}

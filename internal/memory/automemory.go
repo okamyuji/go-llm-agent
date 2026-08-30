@@ -7,7 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode/utf8"
+
+	"github.com/okamyuji/go-llm-agent/internal/fsx"
 )
 
 // IndexFileName 自動メモリの索引ファイル名
@@ -20,9 +23,12 @@ const maxMemoryFileBytes = 1 << 20
 var ErrMemoryFileTooLarge = fmt.Errorf("memory: file exceeds %d bytes", maxMemoryFileBytes)
 
 // Store 自動メモリディレクトリへの読み書き。パスはディレクトリ直下の
-// `<name>.md` のみ受け付け、シンボリックリンクとディレクトリ外参照を拒否する
+// `<name>.md` のみ受け付け、シンボリックリンクとディレクトリ外参照を拒否する。
+// 並列ツール実行から同時に呼ばれるため、mu でサイズ検査と書き込みを 1 つの
+// 臨界区間にまとめる。同じディレクトリに対しては 1 つの Store を共有すること
 type Store struct {
 	dir string
+	mu  sync.RWMutex
 }
 
 // NewStore dir を 0o700 で作成 (存在すれば維持) して Store を返す
@@ -30,7 +36,7 @@ func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("memory: mkdir %s: %w", dir, err)
 	}
-	// シンボリックリンク経由でディレクトリ外を指す構成を初期化時点で解決して固定する
+	// 初期化時点でシンボリックリンクを解決し、以後はその物理パス配下だけを扱う
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return nil, fmt.Errorf("memory: resolve %s: %w", dir, err)
@@ -38,29 +44,23 @@ func NewStore(dir string) (*Store, error) {
 	return &Store{dir: resolved}, nil
 }
 
+// Dir 解決済みのメモリディレクトリを返す
+func (s *Store) Dir() string { return s.dir }
+
 // resolve rel を検証してディレクトリ内の絶対パスを返す。
-// 受け付けるのはディレクトリ直下のフラットな `<name>.md` のみ
+// 受け付けるのはディレクトリ直下のフラットな `<name>.md` のみ。
+// シンボリックリンクの拒否は open 時 (fsx.OpenNoFollow) が担う
 func (s *Store) resolve(rel string) (string, error) {
 	if rel == "" || !filepath.IsLocal(rel) {
 		return "", fmt.Errorf("memory: invalid path %q", rel)
 	}
-	if strings.ContainsRune(rel, '/') || strings.ContainsRune(rel, '\\') {
+	if strings.ContainsAny(rel, `/\`) {
 		return "", fmt.Errorf("memory: nested path %q is not allowed", rel)
 	}
 	if filepath.Ext(rel) != ".md" {
 		return "", fmt.Errorf("memory: only .md files are allowed, got %q", rel)
 	}
-	path := filepath.Join(s.dir, rel)
-	// 既存エントリがシンボリックリンク・非通常ファイルなら読み書きとも拒否する
-	if fi, err := os.Lstat(path); err == nil {
-		if fi.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("memory: %q is a symlink", rel)
-		}
-		if !fi.Mode().IsRegular() {
-			return "", fmt.Errorf("memory: %q is not a regular file", rel)
-		}
-	}
-	return path, nil
+	return filepath.Join(s.dir, rel), nil
 }
 
 // Read rel の内容を最大 maxBytes (rune 境界) まで読んで返す
@@ -69,7 +69,9 @@ func (s *Store) Read(rel string, maxBytes int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	f, err := os.Open(path)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	f, err := fsx.OpenNoFollow(path, os.O_RDONLY, 0)
 	if err != nil {
 		return "", fmt.Errorf("memory: open %q: %w", rel, err)
 	}
@@ -86,20 +88,12 @@ func (s *Store) Read(rel string, maxBytes int) (string, error) {
 }
 
 // Write rel へ content を書く。appendMode が true なら追記する。
-// 書き込み後のファイルサイズが上限を超える場合は ErrMemoryFileTooLarge を返す
+// 書き込み後のファイルサイズが上限を超える場合は ErrMemoryFileTooLarge を返す。
+// サイズ検査は開いた fd に対して行い、検査と書き込みの間の差し替えを防ぐ
 func (s *Store) Write(rel, content string, appendMode bool) error {
 	path, err := s.resolve(rel)
 	if err != nil {
 		return err
-	}
-	size := len(content)
-	if appendMode {
-		if fi, statErr := os.Stat(path); statErr == nil {
-			size += int(fi.Size())
-		}
-	}
-	if size > maxMemoryFileBytes {
-		return fmt.Errorf("%w (got %d)", ErrMemoryFileTooLarge, size)
 	}
 	flags := os.O_CREATE | os.O_WRONLY
 	if appendMode {
@@ -107,18 +101,37 @@ func (s *Store) Write(rel, content string, appendMode bool) error {
 	} else {
 		flags |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(path, flags, 0o600)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := fsx.OpenNoFollow(path, flags, 0o600)
 	if err != nil {
 		return fmt.Errorf("memory: open %q: %w", rel, err)
 	}
-	if _, werr := f.WriteString(content); werr != nil {
+	if err := writeChecked(f, content, appendMode); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("memory: write %q: %w", rel, werr)
+		return fmt.Errorf("memory: write %q: %w", rel, err)
 	}
-	if cerr := f.Close(); cerr != nil {
-		return fmt.Errorf("memory: close %q: %w", rel, cerr)
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("memory: close %q: %w", rel, err)
 	}
 	return nil
+}
+
+// writeChecked 開いた fd のサイズと content の合計が上限内であることを確認して書く
+func writeChecked(f *os.File, content string, appendMode bool) error {
+	size := len(content)
+	if appendMode {
+		fi, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		size += int(fi.Size())
+	}
+	if size > maxMemoryFileBytes {
+		return fmt.Errorf("%w (got %d)", ErrMemoryFileTooLarge, size)
+	}
+	_, err := f.WriteString(content)
+	return err
 }
 
 // ReadIndex MEMORY.md の先頭 maxLines 行かつ maxBytes バイト (rune 境界) を返す。
@@ -142,6 +155,8 @@ func (s *Store) ReadIndex(maxLines, maxBytes int) (string, error) {
 
 // List ディレクトリ直下の .md 通常ファイル名をソート済みで返す
 func (s *Store) List() ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil, fmt.Errorf("memory: list: %w", err)
@@ -156,8 +171,8 @@ func (s *Store) List() ([]string, error) {
 }
 
 // ProjectKey cwd の属する git リポジトリのルート絶対パス (git 外は cwd の絶対パス)
-// をパス区切りを `-` へ置換した文字列として返す。worktree の `.git` ファイルは
-// `gitdir:` 参照を解決して主リポジトリのルートへ寄せる
+// をパス区切りを `-` へ置換した文字列として返す。worktree や submodule の
+// `.git` ファイルは `gitdir:` 参照を解決して主リポジトリのルートへ寄せる
 func ProjectKey(cwd string) string {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
@@ -196,8 +211,10 @@ func findGitRoot(dir string) (string, bool) {
 // maxGitFileBytes worktree の .git ファイルとして読む上限。通常は 1 行のため十分大きい
 const maxGitFileBytes = 4096
 
-// resolveGitFile worktree の `.git` ファイルから主リポジトリのルートを解決する。
-// `gitdir: <main>/.git/worktrees/<name>` 形式を想定し、`.git` より前を返す
+// resolveGitFile worktree / submodule の `.git` ファイルから主リポジトリのルートを解決する。
+// `gitdir: <path>` の path は絶対パスまたは `.git` ファイルのあるディレクトリ基準の
+// 相対パス (submodule は通常 `../.git/modules/<name>`)。絶対化したうえで
+// 最初の `/.git/` より前をルートとして返す
 func resolveGitFile(path string) (string, bool) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -208,18 +225,21 @@ func resolveGitFile(path string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	line := strings.TrimSpace(string(b))
-	gitdir, ok := strings.CutPrefix(line, "gitdir:")
+	gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
 	if !ok {
 		return "", false
 	}
-	gitdir = filepath.Clean(strings.TrimSpace(gitdir))
-	sep := string(filepath.Separator)
-	marker := sep + ".git" + sep
-	if i := strings.Index(gitdir, marker); i >= 0 {
-		return gitdir[:i], true
+	gitdir = strings.TrimSpace(gitdir)
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(filepath.Dir(path), gitdir)
 	}
-	return "", false
+	gitdir = filepath.Clean(gitdir)
+	sep := string(filepath.Separator)
+	root, _, found := strings.Cut(gitdir, sep+".git"+sep)
+	if !found || root == "" {
+		return "", false
+	}
+	return root, true
 }
 
 // sanitizeKey 絶対パスをディレクトリ名として安全な 1 セグメントへ変換する

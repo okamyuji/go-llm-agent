@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/okamyuji/go-llm-agent/internal/config"
 	"github.com/okamyuji/go-llm-agent/internal/instructions"
@@ -98,14 +99,33 @@ func chatLogger(cfg *config.Config) *slog.Logger {
 	return obs.NewLogger(obs.LoggerOptions{Format: cfg.Logging.Format, Level: cfg.Logging.Level})
 }
 
-// buildMemoryStore agent.memory.dir/<プロジェクトキー>/memory を開く
+// memoryStores 同じディレクトリに対する Store をプロセス内で 1 つに共有する。
+// Store の排他はインスタンス内の mutex で行うため、loadDeps (ツール登録) と
+// chat (索引注入・REPL) が別々に開くと排他が効かなくなる
+var memoryStores = struct {
+	sync.Mutex
+	byDir map[string]*memory.Store
+}{byDir: map[string]*memory.Store{}}
+
+// buildMemoryStore agent.memory.dir/<プロジェクトキー>/memory を開く。
+// 同じディレクトリに対しては同一の Store を返す
 func buildMemoryStore(cfg *config.Config) (*memory.Store, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("memory: getwd: %w", err)
 	}
 	dir := filepath.Join(expand(cfg.Agent.Memory.Dir), memory.ProjectKey(cwd), "memory")
-	return memory.NewStore(dir)
+	memoryStores.Lock()
+	defer memoryStores.Unlock()
+	if st, ok := memoryStores.byDir[dir]; ok {
+		return st, nil
+	}
+	st, err := memory.NewStore(dir)
+	if err != nil {
+		return nil, err
+	}
+	memoryStores.byDir[dir] = st
+	return st, nil
 }
 
 // resolveMemory agent.memory.enabled が true のとき Store を開き、索引があれば

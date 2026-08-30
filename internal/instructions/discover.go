@@ -8,8 +8,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/okamyuji/go-llm-agent/internal/fsx"
 )
 
 // instructionsFileName 探索対象のファイル名。大文字小文字を含め固定とする
@@ -46,8 +49,9 @@ func Discover(globalDir, cwd string, allowPaths []string, opt Options) ([]Source
 	if err != nil {
 		return nil, err
 	}
+	// allowPaths が空のとき chain は cwd の 1 件であり、import の探索ルートも cwd とする
 	roots := allowPaths
-	if len(roots) == 0 && len(chain) > 0 {
+	if len(roots) == 0 {
 		roots = []string{chain[0]}
 	}
 	for _, dir := range chain {
@@ -107,9 +111,7 @@ func projectChain(cwd string, allowPaths []string) ([]string, error) {
 		dir = parent
 	}
 	// 浅い祖先が先頭になるよう反転する
-	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
-		chain[i], chain[j] = chain[j], chain[i]
-	}
+	slices.Reverse(chain)
 	return chain, nil
 }
 
@@ -131,7 +133,8 @@ func withinAllowPaths(dir string, allowPaths []string) bool {
 
 // readCandidate candidate を検査し、信頼できる通常ファイルとして読める場合だけ
 // found=true で内容を返す。シンボリックリンク・非通常ファイルは読まずにスキップし、
-// ディレクトリと権限エラーはエラーとして返す (fs 境界の検証失敗を明示する方針)
+// ディレクトリと権限エラーはエラーとして返す (fs 境界の検証失敗を明示する方針)。
+// Lstat と open の間の差し替え (TOCTOU) は readCapped 側の fsx.OpenNoFollow が塞ぐ
 func readCandidate(candidate string, maxBytes int) (found bool, content string, err error) {
 	fi, statErr := os.Lstat(candidate)
 	switch {
@@ -154,10 +157,10 @@ func readCandidate(candidate string, maxBytes int) (found bool, content string, 
 	}
 }
 
-// readCapped path を開き、maxBytes > 0 のときは最大 maxBytes+1 バイトだけを読む
-// (truncateAtRuneBoundary が境界判定できるよう 1 バイト多く読む)
+// readCapped path をシンボリックリンクを辿らずに開き、maxBytes > 0 のときは最大
+// maxBytes+1 バイトだけを読む (truncateAtRuneBoundary が境界判定できるよう 1 バイト多く読む)
 func readCapped(path string, maxBytes int) (string, error) {
-	f, err := os.Open(path)
+	f, err := fsx.OpenNoFollow(path, os.O_RDONLY, 0)
 	if err != nil {
 		return "", err
 	}

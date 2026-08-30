@@ -1,7 +1,6 @@
 package tool_test
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -34,7 +33,7 @@ func TestMemoryWriteTool_Spec(t *testing.T) {
 func TestMemoryWriteTool_Execute(t *testing.T) {
 	st := newMemoryStore(t)
 	mw := &tool.MemoryWriteTool{Store: st}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cases := []struct {
 		name    string
@@ -75,7 +74,7 @@ func TestMemoryReadTool_Execute(t *testing.T) {
 		t.Fatalf("prep: %v", err)
 	}
 	mr := &tool.MemoryReadTool{Store: st}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	res, err := mr.Execute(ctx, json.RawMessage(`{}`))
 	if err != nil || res.IsError {

@@ -78,6 +78,21 @@ func TestImports_CycleStops(t *testing.T) {
 	}
 }
 
+func TestImports_DiamondExpandsBothPaths(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "common.md"), "COMMON")
+	writeFile(t, filepath.Join(root, "sub", "other.md"), "@../common.md\n")
+	writeFile(t, filepath.Join(root, "AGENTS.md"), "@common.md\n@sub/other.md\n")
+
+	src := discoverOne(t, root, defaultOpt())
+	if strings.Count(src.Content, "COMMON") != 2 {
+		t.Fatalf("ダイヤモンド構成で共通ファイルが 2 回展開されない: %q", src.Content)
+	}
+	if strings.Contains(src.Content, "@../common.md") {
+		t.Fatalf("未展開の import 行が残った: %q", src.Content)
+	}
+}
+
 func TestImports_CodeFenceSkipped(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "extra.md"), "SHOULD_NOT_APPEAR")
