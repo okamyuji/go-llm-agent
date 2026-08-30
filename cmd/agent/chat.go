@@ -66,7 +66,6 @@ func runChatSession(ctx context.Context, p chatSessionParams) error {
 	agentsMDPath := strings.Join(agentsMDPaths, ", ")
 	memStore, memSection := resolveMemory(cfg, chatLogger(cfg))
 	sysPrompt += memSection
-	_ = memStore
 
 	r := cliui.NewREPL(svc, cliui.Options{
 		Model:            m,
@@ -91,6 +90,7 @@ func runChatSession(ctx context.Context, p chatSessionParams) error {
 		AgentsMDPath:    agentsMDPath,
 		AvailableModels: availableModels(cfg),
 		Billing:         acc,
+		MemoryStore:     memStore,
 	})
 	return r.Run(ctx)
 }
