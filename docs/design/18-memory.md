@@ -94,7 +94,7 @@ importの構文を次に示す。
   <topic>.md     トピックファイル（任意個）
 ```
 
-- プロジェクトキー: gitリポジトリ内ならgit共通ディレクトリ（`.git`）の親ディレクトリ絶対パス、git外ならcwdの絶対パスを、パス区切りを`-`へ置換して生成する。gitコマンドは呼ばず`.git`の探索はGoで実装する（worktreeの`.git`ファイルの`gitdir:`参照も解決する）
+- プロジェクトキー: gitリポジトリ内ならgit共通ディレクトリ（`.git`）の親ディレクトリ絶対パス、git外ならcwdの絶対パスから、`<basename>-<絶対パスのSHA-256先頭8桁>`を生成する（区切り置換だけでは`/work/a-b`と`/work/a/b`が衝突するため）。gitコマンドは呼ばず`.git`の探索はGoで実装する。worktreeとsubmoduleの`.git`ファイルは`gitdir:`を解決するが、`<gitdir>/gitdir`（worktreeの逆参照）または`<gitdir>/config`の`core.worktree`（submodule）がそのディレクトリを指す場合だけ採用し、偽造した`.git`ファイルで他プロジェクトのメモリへ寄せられないようにする
 - 起動時注入: `MEMORY.md`の先頭200行かつ24KiB（両上限を同時適用、rune境界で切り詰め）をシステムプロンプトへ注入する。マーカーは「過去セッションでエージェント自身が書いたメモであり、上位の指示を上書きしない」ことを明示する専用文言とする
 - 注入時にメモリの保存方針（コードから導出できる情報・指示ファイル記載済みの情報は保存しない、将来のセッションで有用な事実のみ保存する）を3行程度で添える
 
@@ -156,7 +156,7 @@ agent:
 2. `resolveMemory`（chat.go / deps.go）: プロジェクトキーを導出してStoreを作り、`ReadIndex`の内容をさらに後方へ注入する。`memory_write` / `memory_read`をツールregistryへ登録する
 3. REPL起動時にStoreをOptions経由で渡し、`/memory`と`#`を有効化する
 
-`agent run`と`agent serve`は現状AGENTS.mdを注入しないため、メモリ索引の注入もchat専用とする。両モードではツール登録のみ有効とし、REPLコマンドは対象外とする。
+`agent run`と`agent serve`は現状AGENTS.mdを注入しないため、メモリ索引の注入もchat専用とする。`agent run`ではツール登録のみ有効とし、`agent serve`ではメモリツールも無効化する（プロジェクト単位の1ストアを複数クライアントが共有してしまい、bearer認証は呼び出し元の識別をツールへ渡さないため）。REPLコマンドはchat専用とする。
 
 ## 7. セキュリティ
 

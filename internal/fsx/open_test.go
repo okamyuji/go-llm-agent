@@ -43,8 +43,12 @@ func TestOpenNoFollow_RejectsSymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
 	}
-	if _, err := fsx.OpenNoFollow(link, os.O_RDONLY, 0); err == nil {
+	_, err := fsx.OpenNoFollow(link, os.O_RDONLY, 0)
+	if err == nil {
 		t.Fatalf("シンボリックリンクが開けてしまった")
+	}
+	if !errors.Is(err, fsx.ErrSymlink) {
+		t.Fatalf("ErrSymlink でない: %v", err)
 	}
 }
 

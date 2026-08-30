@@ -1,6 +1,7 @@
 package memory_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -201,18 +202,93 @@ func TestProjectKey_PlainRepo(t *testing.T) {
 	}
 }
 
-func TestProjectKey_WorktreeGitFile(t *testing.T) {
-	main := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(main, ".git", "worktrees", "wt"), 0o755); err != nil {
+// prepWorktree git 2.50 が `git worktree add` で作るレイアウトを再現する。
+// wt/.git は gitdir: で main/.git/worktrees/wt を指し、そこにある gitdir ファイルが
+// wt/.git の絶対パスで逆参照する
+func prepWorktree(t *testing.T, main, wt string, withBackRef bool) {
+	t.Helper()
+	gitdir := filepath.Join(main, ".git", "worktrees", "wt")
+	if err := os.MkdirAll(gitdir, 0o755); err != nil {
 		t.Fatalf("prep: %v", err)
 	}
-	wt := t.TempDir()
-	gitFile := "gitdir: " + filepath.Join(main, ".git", "worktrees", "wt") + "\n"
-	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte(gitFile), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+gitdir+"\n"), 0o644); err != nil {
 		t.Fatalf("prep gitfile: %v", err)
 	}
+	if withBackRef {
+		if err := os.WriteFile(filepath.Join(gitdir, "gitdir"), []byte(filepath.Join(wt, ".git")+"\n"), 0o644); err != nil {
+			t.Fatalf("prep backref: %v", err)
+		}
+	}
+}
+
+func TestProjectKey_WorktreeGitFile(t *testing.T) {
+	main := t.TempDir()
+	wt := t.TempDir()
+	prepWorktree(t, main, wt, true)
 	if got, want := memory.ProjectKey(wt), memory.ProjectKey(main); got != want {
 		t.Fatalf("worktree キー %q, want %q", got, want)
+	}
+}
+
+func TestProjectKey_ForgedGitFileWithoutBackRefFallsBack(t *testing.T) {
+	victim := t.TempDir()
+	attacker := t.TempDir()
+	// 逆参照の無い gitdir: は偽造とみなし、被害者のキーへ寄せない
+	prepWorktree(t, victim, attacker, false)
+	got := memory.ProjectKey(attacker)
+	if got == memory.ProjectKey(victim) {
+		t.Fatalf("偽造 .git ファイルで他プロジェクトのキーになった: %q", got)
+	}
+	if !strings.HasPrefix(got, filepath.Base(attacker)+"-") {
+		t.Fatalf("偽造時は自ディレクトリをキーにするべき: %q", got)
+	}
+}
+
+func TestProjectKey_WorktreeBackRefPointingElsewhereRejected(t *testing.T) {
+	victim := t.TempDir()
+	realWT := t.TempDir()
+	attacker := t.TempDir()
+	prepWorktree(t, victim, realWT, true)
+	// 攻撃者は本物の worktree 用 gitdir を指すが、逆参照は realWT を指しているため不一致
+	gitdir := filepath.Join(victim, ".git", "worktrees", "wt")
+	if err := os.WriteFile(filepath.Join(attacker, ".git"), []byte("gitdir: "+gitdir+"\n"), 0o644); err != nil {
+		t.Fatalf("prep: %v", err)
+	}
+	if memory.ProjectKey(attacker) == memory.ProjectKey(victim) {
+		t.Fatalf("逆参照が別ディレクトリを指す gitdir を受け入れた")
+	}
+}
+
+func TestSanitizeKey_DistinguishesSeparatorCollisions(t *testing.T) {
+	a := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(a, "work", "a-b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(a, "work", "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	k1 := memory.ProjectKey(filepath.Join(a, "work", "a-b"))
+	k2 := memory.ProjectKey(filepath.Join(a, "work", "a", "b"))
+	if k1 == k2 {
+		t.Fatalf("/work/a-b と /work/a/b が同じキーになった: %q", k1)
+	}
+	if !strings.HasPrefix(k1, "a-b-") || !strings.HasPrefix(k2, "b-") {
+		t.Fatalf("basename プレフィックスが無い: %q %q", k1, k2)
+	}
+}
+
+func TestStore_RejectedOverwriteKeepsPriorContent(t *testing.T) {
+	s, _ := newStore(t)
+	if err := s.Write("keep.md", "precious", false); err != nil {
+		t.Fatalf("prep: %v", err)
+	}
+	err := s.Write("keep.md", strings.Repeat("x", 1<<20+1), false)
+	if !errors.Is(err, memory.ErrMemoryFileTooLarge) {
+		t.Fatalf("上限超過が ErrMemoryFileTooLarge でない: %v", err)
+	}
+	got, rerr := s.Read("keep.md", 1<<20)
+	if rerr != nil || got != "precious" {
+		t.Fatalf("拒否された上書きで既存内容が失われた: %q err=%v", got, rerr)
 	}
 }
 
@@ -225,9 +301,14 @@ func TestProjectKey_SubmoduleRelativeGitFile(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatalf("prep sub: %v", err)
 	}
-	// submodule は通常、相対パスの gitdir: を書く
+	// git 2.50 の実レイアウト: submodule の .git は相対の gitdir: を書き、
+	// modules/sub/config の core.worktree が gitdir 基準の相対パスで sub を指す
 	if err := os.WriteFile(filepath.Join(sub, ".git"), []byte("gitdir: ../.git/modules/sub\n"), 0o644); err != nil {
 		t.Fatalf("prep gitfile: %v", err)
+	}
+	cfg := "[core]\n\tbare = false\n\tworktree = ../../../sub\n"
+	if err := os.WriteFile(filepath.Join(main, ".git", "modules", "sub", "config"), []byte(cfg), 0o644); err != nil {
+		t.Fatalf("prep config: %v", err)
 	}
 	got := memory.ProjectKey(sub)
 	if got != memory.ProjectKey(main) {

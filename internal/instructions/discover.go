@@ -130,6 +130,28 @@ func withinAllowPaths(dir string, allowPaths []string) bool {
 	return false
 }
 
+// withinPhysicalRoots dir の物理パス (シンボリックリンク解決後) が roots のいずれかの
+// 物理パス配下にあるかを返す。withinAllowPaths は字面の比較だけであり、
+// `root/linked/x.md` の `linked` が root 外を指すディレクトリシンボリックリンクだと
+// 抜けられる (O_NOFOLLOW は最終コンポーネントにしか効かない) ため、両方で検査する。
+// 解決できないパス (不存在など) は配下と見なさない
+func withinPhysicalRoots(dir string, roots []string) bool {
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	for _, root := range roots {
+		realRoot, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			continue
+		}
+		if withinAllowPaths(realDir, []string{realRoot}) {
+			return true
+		}
+	}
+	return false
+}
+
 // readCandidate candidate を検査し、信頼できる通常ファイルとして読める場合だけ
 // found=true で内容を返す。シンボリックリンク・非通常ファイルは読まずにスキップし、
 // ディレクトリと権限エラーはエラーとして返す (fs 境界の検証失敗を明示する方針)。

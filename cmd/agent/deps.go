@@ -191,13 +191,25 @@ func attachNoteTools(cfg *config.Config, logger *slog.Logger, tools []tool.Tool)
 	return tools, nil
 }
 
-// resolveEnabledTools serve では fs_edit を除外する。read registry はプロセス単位の
-// scope のため、複数リクエストが混在する serve では既読チェックが破綻する
+// serveExcludedTools serve で無効化するツール。
+//   - fs_edit: read registry はプロセス単位の scope のため、複数リクエストが混在する
+//     serve では既読チェックが破綻する
+//   - memory_write / memory_read: 自動メモリはプロジェクト単位の 1 ストアであり、
+//     bearer 認証は呼び出し元の識別をツールへ渡さない。複数クライアントが同じ
+//     メモリを読み書きできてしまうため、呼び出し元ごとの分離ができるまで serve では無効化する
+var serveExcludedTools = []string{"fs_edit", "memory_write", "memory_read"}
+
+// resolveEnabledTools serve では serveExcludedTools を除外し、除外したものを警告する
 func resolveEnabledTools(cfg *config.Config, isServe bool) []string {
 	enabled := cfg.Agent.EnabledTools
-	if isServe && slices.Contains(enabled, "fs_edit") {
-		fmt.Fprintln(os.Stderr, "warn: serve では fs_edit を無効化します (read registry はプロセス単位のため複数リクエストで既読チェックが破綻する)")
-		return excludeTool(enabled, "fs_edit")
+	if !isServe {
+		return enabled
+	}
+	for _, name := range serveExcludedTools {
+		if slices.Contains(enabled, name) {
+			fmt.Fprintf(os.Stderr, "warn: serve では %s を無効化します (複数クライアント間で状態を共有できないため)\n", name)
+			enabled = excludeTool(enabled, name)
+		}
 	}
 	return enabled
 }

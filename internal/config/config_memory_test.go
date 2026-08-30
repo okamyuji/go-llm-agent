@@ -49,6 +49,25 @@ func TestLoad_MemoryDefaultsWhenUnspecified(t *testing.T) {
 	}
 }
 
+func TestLoad_MemoryRejectsNegativeLimits(t *testing.T) {
+	cases := map[string]string{
+		"index_max_bytes": "default_model: test/m\nagent:\n  memory:\n    index_max_bytes: -1\n",
+		"index_max_lines": "default_model: test/m\nagent:\n  memory:\n    index_max_lines: -5\n",
+		"max_total_bytes": "default_model: test/m\nagent:\n  agents_md:\n    max_total_bytes: -1\n",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := config.Load(path); err == nil {
+				t.Fatalf("負値の %s がエラーにならない", name)
+			}
+		})
+	}
+}
+
 func TestLoad_MemoryExplicitValues(t *testing.T) {
 	body := "default_model: test/m\n" +
 		"agent:\n" +

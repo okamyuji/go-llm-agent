@@ -3,6 +3,8 @@ name: Release
 # main への push (= PR のマージ) ごとに Conventional Commits から次の semantic version を
 # 計算し、タグと GitHub Release (各 OS/arch のバイナリ付き) を自動作成する。
 # bump 規則は scripts/release/next-version.sh が単一の情報源で、ここでは呼ぶだけにする。
+# スキップ判定はタグではなく GitHub Release の有無で行う。タグ push 後に
+# gh release create が失敗しても、再実行で欠けた Release を作れるようにするため。
 on:
   push:
     branches: [main]
@@ -34,14 +36,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          current="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null || echo none)"
           next="$(bash scripts/release/next-version.sh)"
-          echo "current=$current next=$next"
-          echo "current=$current" >> "$GITHUB_OUTPUT"
           echo "next=$next" >> "$GITHUB_OUTPUT"
-          if [ "$current" = "$next" ]; then
+          if gh release view "$next" >/dev/null 2>&1; then
+            echo "release $next already exists; skip"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
+            echo "release $next is missing; publish"
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -58,6 +59,9 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$NEXT" -m "release $NEXT"
-          git push origin "$NEXT"
+          # 前回の失敗でタグだけ残っている場合は作り直さず、そのタグへ Release を付ける
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$NEXT" >/dev/null 2>&1; then
+            git tag -a "$NEXT" -m "release $NEXT"
+            git push origin "$NEXT"
+          fi
           gh release create "$NEXT" dist/* --title "$NEXT" --generate-notes

@@ -155,11 +155,12 @@ bash scripts/verify-hardening.sh
 
 ### 自動メモリ
 
-エージェントがセッションをまたいで覚えておく事実を、`agent.memory.dir`（既定`~/.go-llm-agent/projects`）配下のプロジェクト単位ディレクトリ`<プロジェクトキー>/memory/`へMarkdownで保存します。プロジェクトキーはgitリポジトリのルート（worktreeは主リポジトリ）から導出し、git外ではカレントディレクトリを使います。
+エージェントがセッションをまたいで覚えておく事実を、`agent.memory.dir`（既定`~/.go-llm-agent/projects`）配下のプロジェクト単位ディレクトリ`<プロジェクトキー>/memory/`へMarkdownで保存します。プロジェクトキーはgitリポジトリのルート（worktreeとsubmoduleは主リポジトリ。`gitdir:`の逆参照を検証し、偽造した`.git`ファイルでは解決しない）から導出し、git外ではカレントディレクトリを使います。キーは`<ディレクトリ名>-<ルート絶対パスのSHA-256先頭8桁>`で、区切り文字の置換だけでは衝突するパスも区別します。
 
 - `MEMORY.md`は索引で、起動時に先頭200行かつ24KiB（`index_max_lines` / `index_max_bytes`）だけをシステムプロンプトへ注入します。信頼境界マーカーで囲み、コードから導出できる情報や`AGENTS.md`に書いてある情報は保存しないという保存方針も添えます
 - `memory_write` / `memory_read`ツールでエージェントがトピックファイル（`<name>.md`）を読み書きします。書き込み先はメモリディレクトリ直下に限定し、`..`や絶対パス、シンボリックリンク、1MiB超は拒否します。`enabled_tools`へ2つを列挙すると使えます
 - REPLでは`/memory`で一覧と索引を、`/memory <file>`で本文を表示します。`# <本文>`と入力すると`memories.md`と索引へ即時追記し、LLMへは送りません
+- `agent serve`ではメモリツールを無効化します。自動メモリはプロジェクト単位の1ストアで、bearer認証は呼び出し元の識別をツールへ渡さないため、複数クライアント間でメモリが共有されてしまうからです
 - `agent.memory.enabled: false`で全機能を無効化します。ディレクトリ初期化に失敗した場合はエラーログを出して無効化し、起動は継続します
 
 ## 評価フレームワーク
@@ -688,7 +689,7 @@ bash tests/e2e/01-otel-trace.sh
 ```bash
 make precommit-install   # pre-commit フックを有効化
 make quality             # 品質ゲートをローカル実行（CI と同一フロー）
-RUN_E2E=1 make quality   # 品質ゲートに27本のE2Eスクリプトを追加
+RUN_E2E=1 make quality   # 品質ゲートに28本のE2Eスクリプトを追加
 make build-all           # 6 バイナリへクロスコンパイル
 ```
 
@@ -698,7 +699,7 @@ make build-all           # 6 バイナリへクロスコンパイル
 
 ビルド時のバージョンは`-ldflags -X main.version=...`で埋め込み、`agent version`で表示します。`make build`は未指定なら`git describe --tags`の値（例: `v0.13.0-3-gabc1234-dirty`）を使います。
 
-`scripts/quality-gate.sh` はpre-commitとCIが共有する品質確認の入口です。mutation対象packageの除外テスト、gofmt、go vet、staticcheck、golangci-lint、govulncheck、`go test --count=1 --shuffle=on -race -cover`、release build、機密ファイルのstage防止、`gitleaks detect --no-git --source .` を順に実行します。`RUN_E2E=1`では27本の`tests/e2e/*.sh`も実行します。gitleaksはstage状態にかかわらず作業ツリーを検査し、`.gitleaks.toml`のallowlistに列挙したpathとマスク済みplaceholderを対象外にします。
+`scripts/quality-gate.sh` はpre-commitとCIが共有する品質確認の入口です。mutation対象packageの除外テスト、gofmt、go vet、staticcheck、golangci-lint、govulncheck、`go test --count=1 --shuffle=on -race -cover`、release build、機密ファイルのstage防止、`gitleaks detect --no-git --source .` を順に実行します。`RUN_E2E=1`では28本の`tests/e2e/*.sh`も実行します。gitleaksはstage状態にかかわらず作業ツリーを検査し、`.gitleaks.toml`のallowlistに列挙したpathとマスク済みplaceholderを対象外にします。
 
 変更行のmutation testingは、比較元commitと1つ以上のGo packageを指定して実行します。
 

@@ -1,6 +1,7 @@
 package instructions_test
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -126,6 +127,22 @@ func TestImports_MissingFileKeepsLine(t *testing.T) {
 	}
 	if !strings.Contains(src.Content, "tail") {
 		t.Fatalf("後続行が消えた: %q", src.Content)
+	}
+}
+
+func TestImports_SymlinkedDirectoryRejected(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "repo")
+	outside := filepath.Join(base, "outside")
+	writeFile(t, filepath.Join(outside, "secret.md"), "SECRET")
+	writeFile(t, filepath.Join(root, "AGENTS.md"), "@linked/secret.md\n")
+	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	src := discoverOne(t, root, defaultOpt())
+	if strings.Contains(src.Content, "SECRET") {
+		t.Fatalf("ディレクトリシンボリックリンク経由で探索ルート外が読まれた: %q", src.Content)
 	}
 }
 

@@ -48,7 +48,7 @@ func readImport(rel string, baseDir string, roots []string, opt Options, depth i
 		return "", false
 	}
 	path := filepath.Clean(filepath.Join(baseDir, rel))
-	if !withinAllowPaths(filepath.Dir(path), roots) {
+	if !withinAllowPaths(filepath.Dir(path), roots) || !withinPhysicalRoots(filepath.Dir(path), roots) {
 		return "", false
 	}
 	if visited[path] {

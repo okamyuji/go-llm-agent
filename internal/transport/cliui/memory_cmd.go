@@ -17,6 +17,22 @@ const memoryDisplayMaxBytes = 64 * 1024
 // memoryDisabledMessage MemoryStore 未設定時の案内
 const memoryDisabledMessage = "[memory] メモリ機能は無効です (agent.memory.enabled または初期化失敗を確認してください)"
 
+// sanitizeTerminal 端末へ表示する前に制御文字を落とす。メモリの内容は LLM (ツール出力
+// 由来の汚染を含む) が書いたものであり、ESC を含む CSI / OSC シーケンスをそのまま出すと
+// 端末状態を書き換えられる。改行とタブ以外の C0 制御文字、DEL、C1 制御文字 (U+0080-U+009F)
+// を除去する。ESC を落とすことでシーケンスの残りは無害な文字列として表示される
+func sanitizeTerminal(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\t':
+			return r
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
+			return -1
+		}
+		return r
+	}, s)
+}
+
 // handleMemoryCommand /memory を処理する。arg が空なら一覧と索引を、
 // ファイル名ならその本文を表示する。表示のみで編集はしない
 func (r *REPL) handleMemoryCommand(arg string, out io.Writer) {
@@ -28,10 +44,10 @@ func (r *REPL) handleMemoryCommand(arg string, out io.Writer) {
 	if arg != "" {
 		body, err := st.Read(arg, memoryDisplayMaxBytes)
 		if err != nil {
-			fmt.Fprintf(out, "[memory] %s を読めません: %v\n", arg, err)
+			fmt.Fprintf(out, "[memory] %s を読めません: %v\n", sanitizeTerminal(arg), err)
 			return
 		}
-		fmt.Fprintf(out, "[memory] %s:\n%s\n", arg, body)
+		fmt.Fprintf(out, "[memory] %s:\n%s\n", sanitizeTerminal(arg), sanitizeTerminal(body))
 		return
 	}
 	names, err := st.List()
@@ -39,7 +55,7 @@ func (r *REPL) handleMemoryCommand(arg string, out io.Writer) {
 		fmt.Fprintf(out, "[memory] 一覧を取得できません: %v\n", err)
 		return
 	}
-	fmt.Fprintf(out, "[memory] ファイル (%d 件): %s\n", len(names), strings.Join(names, " "))
+	fmt.Fprintf(out, "[memory] ファイル (%d 件): %s\n", len(names), sanitizeTerminal(strings.Join(names, " ")))
 	index, err := st.ReadIndex(0, memoryDisplayMaxBytes)
 	if err != nil {
 		fmt.Fprintf(out, "[memory] 索引を読めません: %v\n", err)
@@ -49,7 +65,7 @@ func (r *REPL) handleMemoryCommand(arg string, out io.Writer) {
 		fmt.Fprintln(out, "[memory] 索引 MEMORY.md はまだありません")
 		return
 	}
-	fmt.Fprintf(out, "[memory] %s:\n%s\n", memory.IndexFileName, index)
+	fmt.Fprintf(out, "[memory] %s:\n%s\n", memory.IndexFileName, sanitizeTerminal(index))
 }
 
 // handleHashMemory `# <本文>` を memories.md と索引 MEMORY.md へ 1 行ずつ追記する

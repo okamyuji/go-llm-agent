@@ -84,6 +84,27 @@ func TestREPL_HashPrefixAppendsMemory(t *testing.T) {
 	}
 }
 
+func TestREPL_MemoryDisplayStripsTerminalControls(t *testing.T) {
+	st := newMemStore(t)
+	// ESC[2J (画面消去) と OSC タイトル変更、C1 CSI (U+009B) を混ぜる
+	payload := "safe\x1b[2Jline\ttab\n\x1b]0;evil\x07more\u009b31mend"
+	if err := st.Write("topic.md", payload, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write("MEMORY.md", "- \x1b[31mred\x1b[0m", false); err != nil {
+		t.Fatal(err)
+	}
+	got := runSlashREPL(t, &inputCapturingSvc{}, cliui.Options{MemoryStore: st}, "/memory topic.md\n/memory\n/quit\n")
+	if strings.ContainsAny(got, "\x1b\x07\u009b") {
+		t.Fatalf("制御文字が端末へ出力された: %q", got)
+	}
+	for _, want := range []string{"safe", "line\ttab", "more", "end", "red"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("通常文字 %q が失われた: %q", want, got)
+		}
+	}
+}
+
 func TestREPL_HelpMentionsMemory(t *testing.T) {
 	got := runSlashREPL(t, &inputCapturingSvc{}, cliui.Options{}, "/help\n/quit\n")
 	if !strings.Contains(got, "/memory") || !strings.Contains(got, "# <本文>") {

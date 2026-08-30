@@ -440,6 +440,9 @@ func Load(path string) (*Config, error) {
 	if err := validateCompaction(cfg.Agent.Compaction); err != nil {
 		return nil, err
 	}
+	if err := validateMemory(cfg.Agent); err != nil {
+		return nil, err
+	}
 	if err := validateHooks(cfg.Hooks); err != nil {
 		return nil, err
 	}
@@ -552,6 +555,22 @@ func applyAgentsMDDefaults(c *AgentsMDConfig) {
 	}
 	c.MaxTotalBytes = cmp.Or(c.MaxTotalBytes, defaultAgentsMDMaxTotalBytes)
 	c.GlobalDir = cmp.Or(c.GlobalDir, defaultAgentsMDGlobalDir)
+}
+
+// validateMemory agents_md.max_total_bytes と memory.index_max_* の負値を拒否する。
+// fsx.ReadCapped は maxBytes <= 0 を無制限として扱うため、負値を通すと索引の上限を
+// 設定で無効化できてしまう。無制限モードは意図的に提供しない
+func validateMemory(a AgentConfig) error {
+	if a.AgentsMD.MaxTotalBytes < 0 {
+		return fmt.Errorf("agent.agents_md.max_total_bytes must be >= 0, got %d", a.AgentsMD.MaxTotalBytes)
+	}
+	if a.Memory.IndexMaxLines < 0 {
+		return fmt.Errorf("agent.memory.index_max_lines must be >= 0, got %d", a.Memory.IndexMaxLines)
+	}
+	if a.Memory.IndexMaxBytes < 0 {
+		return fmt.Errorf("agent.memory.index_max_bytes must be >= 0, got %d", a.Memory.IndexMaxBytes)
+	}
+	return nil
 }
 
 // applyMemoryDefaults 未指定の memory キーへコード既定値を適用する。

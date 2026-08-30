@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -79,11 +81,15 @@ func (s *Store) Read(rel string, maxBytes int) (string, error) {
 
 // Write rel へ content を書く。appendMode が true なら追記する。
 // 書き込み後のファイルサイズが上限を超える場合は ErrMemoryFileTooLarge を返す。
-// サイズ検査は開いた fd に対して行い、検査と書き込みの間の差し替えを防ぐ
+// 上書きは O_TRUNC で既存内容を消す前に content のサイズを検査し、拒否時に
+// 既存メモリを失わない。追記は開いた fd の Stat で既存サイズを足して検査する
 func (s *Store) Write(rel, content string, appendMode bool) error {
 	path, err := s.resolve(rel)
 	if err != nil {
 		return err
+	}
+	if len(content) > maxMemoryFileBytes {
+		return fmt.Errorf("%w (got %d)", ErrMemoryFileTooLarge, len(content))
 	}
 	flags := os.O_CREATE | os.O_WRONLY
 	if appendMode {
@@ -201,9 +207,35 @@ const maxGitFileBytes = 4096
 
 // resolveGitFile worktree / submodule の `.git` ファイルから主リポジトリのルートを解決する。
 // `gitdir: <path>` の path は絶対パスまたは `.git` ファイルのあるディレクトリ基準の
-// 相対パス (submodule は通常 `../.git/modules/<name>`)。絶対化したうえで
-// 最初の `/.git/` より前をルートとして返す
+// 相対パス (submodule は通常 `../.git/modules/<name>`)。
+//
+// 偽造した `.git` ファイルで他プロジェクトの gitdir を指し、そのメモリを共有させる
+// 攻撃を防ぐため、gitdir 側が逆参照でこのディレクトリを指していることを検証する
+// (git 2.50 で観測した実レイアウト):
+//   - worktree: `<gitdir>/gitdir` に元の `.git` ファイルの絶対パスが入る
+//   - submodule: `<gitdir>/config` の core.worktree が gitdir 基準の相対パスで
+//     submodule ディレクトリを指す
+//
+// どちらの逆参照も一致しない場合は解決を拒否し、呼び出し元は `.git` ファイルの
+// あるディレクトリ自身をキーにする
 func resolveGitFile(path string) (string, bool) {
+	gitdir, ok := readGitdirPointer(path)
+	if !ok {
+		return "", false
+	}
+	if !backReferencesGitFile(gitdir, path) {
+		return "", false
+	}
+	sep := string(filepath.Separator)
+	root, _, found := strings.Cut(gitdir, sep+".git"+sep)
+	if !found || root == "" {
+		return "", false
+	}
+	return root, true
+}
+
+// readGitdirPointer `.git` ファイルの `gitdir:` 行を絶対パスへ正規化して返す
+func readGitdirPointer(path string) (string, bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", false
@@ -221,23 +253,65 @@ func resolveGitFile(path string) (string, bool) {
 	if !filepath.IsAbs(gitdir) {
 		gitdir = filepath.Join(filepath.Dir(path), gitdir)
 	}
-	gitdir = filepath.Clean(gitdir)
-	sep := string(filepath.Separator)
-	root, _, found := strings.Cut(gitdir, sep+".git"+sep)
-	if !found || root == "" {
-		return "", false
-	}
-	return root, true
+	return filepath.Clean(gitdir), true
 }
 
-// sanitizeKey 絶対パスをディレクトリ名として安全な 1 セグメントへ変換する
+// backReferencesGitFile gitdir が worktree の逆参照 (`<gitdir>/gitdir`) または
+// submodule の core.worktree でこの `.git` ファイルのディレクトリを指すかを返す
+func backReferencesGitFile(gitdir, gitFilePath string) bool {
+	self := samePathKey(filepath.Dir(gitFilePath))
+	if b, err := os.ReadFile(filepath.Join(gitdir, "gitdir")); err == nil {
+		back := strings.TrimSpace(string(b))
+		if samePathKey(filepath.Dir(back)) == self {
+			return true
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(gitdir, "config")); err == nil {
+		for line := range strings.SplitSeq(string(b), "\n") {
+			key, val, ok := strings.Cut(strings.TrimSpace(line), "=")
+			if !ok || strings.TrimSpace(key) != "worktree" {
+				continue
+			}
+			wt := strings.TrimSpace(val)
+			if !filepath.IsAbs(wt) {
+				wt = filepath.Join(gitdir, wt)
+			}
+			if samePathKey(wt) == self {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// samePathKey シンボリックリンクを解決した比較用パスを返す。解決できなければ Clean 結果
+func samePathKey(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return filepath.Clean(p)
+}
+
+// keyHashLen キーに付ける SHA-256 の 16 進文字数。8 文字 (32 bit) で衝突は実用上起きない
+const keyHashLen = 8
+
+// sanitizeKey 絶対パスを `<basename>-<sha256先頭8桁>` へ変換する。basename は人が
+// 見て分かる名前、ハッシュは `/work/a-b` と `/work/a/b` のような区切り置換だけでは
+// 衝突するパスを区別する。basename の区切り・コロンは `-` へ置換する
 func sanitizeKey(path string) string {
-	replaced := strings.Map(func(r rune) rune {
+	clean := filepath.Clean(path)
+	base := strings.Map(func(r rune) rune {
 		switch r {
 		case '/', '\\', ':':
 			return '-'
 		}
 		return r
-	}, path)
-	return strings.Trim(replaced, "-")
+	}, filepath.Base(clean))
+	base = strings.Trim(base, "-")
+	sum := sha256.Sum256([]byte(clean))
+	digest := hex.EncodeToString(sum[:])[:keyHashLen]
+	if base == "" {
+		return digest
+	}
+	return base + "-" + digest
 }
