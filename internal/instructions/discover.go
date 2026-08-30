@@ -98,11 +98,7 @@ func projectChain(cwd string, allowPaths []string) ([]string, error) {
 		return []string{abs}, nil
 	}
 	var chain []string
-	dir := abs
-	for {
-		if !withinAllowPaths(dir, allowPaths) {
-			break
-		}
+	for dir := abs; withinAllowPaths(dir, allowPaths); {
 		chain = append(chain, dir)
 		parent := filepath.Dir(dir)
 		if parent == dir {
