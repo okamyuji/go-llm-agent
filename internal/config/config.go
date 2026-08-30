@@ -418,6 +418,11 @@ func Load(path string) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("config parse: %w", err)
 	}
+	// 負値の検査は既定値適用の前に行う。applyDefaults は 0 (未指定) だけを置き換えるため、
+	// 前に置くことで「未指定は通り、負値だけ拒否する」境界をテストで固定できる
+	if err := validateMemory(cfg.Agent); err != nil {
+		return nil, err
+	}
 	applyDefaults(&cfg)
 	if err := validateFallbackChains(cfg.Providers); err != nil {
 		return nil, err
@@ -438,9 +443,6 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	if err := validateCompaction(cfg.Agent.Compaction); err != nil {
-		return nil, err
-	}
-	if err := validateMemory(cfg.Agent); err != nil {
 		return nil, err
 	}
 	if err := validateHooks(cfg.Hooks); err != nil {

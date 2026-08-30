@@ -2,6 +2,7 @@ package fsx
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,7 +17,14 @@ func TestOpenWithIdentityCheck_RegularFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openWithIdentityCheck: %v", err)
 	}
-	_ = f.Close()
+	if f == nil {
+		t.Fatalf("成功時に nil の *os.File が返った")
+	}
+	defer func() { _ = f.Close() }()
+	b, err := io.ReadAll(f)
+	if err != nil || string(b) != "x" {
+		t.Fatalf("開いた fd から読めない: %q err=%v", b, err)
+	}
 }
 
 func TestOpenWithIdentityCheck_CreatesNewFile(t *testing.T) {
@@ -25,9 +33,16 @@ func TestOpenWithIdentityCheck_CreatesNewFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openWithIdentityCheck: %v", err)
 	}
+	if f == nil {
+		t.Fatalf("成功時に nil の *os.File が返った")
+	}
+	if _, err := f.WriteString("created"); err != nil {
+		t.Fatalf("書き込めない: %v", err)
+	}
 	_ = f.Close()
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("作成されていない: %v", err)
+	b, err := os.ReadFile(path)
+	if err != nil || string(b) != "created" {
+		t.Fatalf("作成したファイルへ書けていない: %q err=%v", b, err)
 	}
 }
 

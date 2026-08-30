@@ -98,10 +98,33 @@ func TestREPL_MemoryDisplayStripsTerminalControls(t *testing.T) {
 	if strings.ContainsAny(got, "\x1b\x07\u009b") {
 		t.Fatalf("制御文字が端末へ出力された: %q", got)
 	}
-	for _, want := range []string{"safe", "line\ttab", "more", "end", "red"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("通常文字 %q が失われた: %q", want, got)
-		}
+	// 制御文字だけが落ち、残りは 1 文字も変わらないこと (置換や挿入があれば不一致になる)
+	if !strings.Contains(got, "safe[2Jline\ttab\n]0;evilmore31mend") {
+		t.Fatalf("サニタイズ結果が期待と異なる: %q", got)
+	}
+	if !strings.Contains(got, "- [31mred[0m") {
+		t.Fatalf("索引のサニタイズ結果が期待と異なる: %q", got)
+	}
+}
+
+func TestSanitizeTerminalBoundaries(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"改行とタブは残す", "a\nb\tc", "a\nb\tc"},
+		{"0x1f は落とし 0x20 は残す", "a\x1fb c", "ab c"},
+		{"DEL は落とし 0x7e は残す", "a\x7fb~", "ab~"},
+		{"U+0080 と U+009F は落とし U+00A0 は残す", "a\u0080b\u009fc\u00a0d", "abc\u00a0d"},
+		{"通常文字だけなら同じ", "hello 日本語", "hello 日本語"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cliui.SanitizeTerminalForTest(tc.in); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

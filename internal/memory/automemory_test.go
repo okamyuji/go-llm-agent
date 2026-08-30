@@ -230,6 +230,38 @@ func TestProjectKey_WorktreeGitFile(t *testing.T) {
 	}
 }
 
+func TestProjectKey_WorktreeBackRefViaSymlinkAlias(t *testing.T) {
+	main := t.TempDir()
+	base := t.TempDir()
+	real := filepath.Join(base, "real-wt")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "alias-wt")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	// 逆参照はシンボリックリンク経由の別名で書かれ、ProjectKey は物理パスで呼ぶ。
+	// シンボリックリンク解決で同一視できなければ偽造扱いになりキーが一致しない
+	gitdir := filepath.Join(main, ".git", "worktrees", "wt")
+	if err := os.MkdirAll(gitdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, ".git"), []byte("gitdir: "+gitdir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitdir, "gitdir"), []byte(filepath.Join(alias, ".git")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	realResolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := memory.ProjectKey(realResolved), memory.ProjectKey(main); got != want {
+		t.Fatalf("別名経由の逆参照が同一視されない: %q, want %q", got, want)
+	}
+}
+
 func TestProjectKey_ForgedGitFileWithoutBackRefFallsBack(t *testing.T) {
 	victim := t.TempDir()
 	attacker := t.TempDir()

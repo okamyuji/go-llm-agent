@@ -23,14 +23,23 @@ const memoryDisabledMessage = "[memory] メモリ機能は無効です (agent.me
 // を除去する。ESC を落とすことでシーケンスの残りは無害な文字列として表示される
 func sanitizeTerminal(s string) string {
 	return strings.Map(func(r rune) rune {
-		switch {
-		case r == '\n' || r == '\t':
-			return r
-		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
+		if isTerminalControl(r) {
+			// strings.Map は負の rune を返すと文字を落とす
 			return -1
 		}
 		return r
 	}, s)
+}
+
+// isTerminalControl 改行とタブを除く C0 制御文字、DEL、C1 制御文字なら true
+func isTerminalControl(r rune) bool {
+	if r == '\n' || r == '\t' {
+		return false
+	}
+	if r < 0x20 || r == 0x7f {
+		return true
+	}
+	return r >= 0x80 && r <= 0x9f
 }
 
 // handleMemoryCommand /memory を処理する。arg が空なら一覧と索引を、

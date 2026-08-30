@@ -12,3 +12,6 @@ func SetCompactTimeoutForTest(d time.Duration) func() {
 	compactTimeout = d
 	return func() { compactTimeout = prev }
 }
+
+// SanitizeTerminalForTest sanitizeTerminal を外部テストから呼ぶ
+func SanitizeTerminalForTest(s string) string { return sanitizeTerminal(s) }
