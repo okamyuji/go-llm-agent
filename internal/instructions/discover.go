@@ -38,7 +38,7 @@ func Discover(globalDir, cwd string, allowPaths []string, opt Options) ([]Source
 	var sources []Source
 	total := 0
 
-	appendSource := func(path, scope string) (bool, error) {
+	appendSource := func(path, scope string, roots []string) (bool, error) {
 		found, content, err := readCandidate(path, opt.FileMaxBytes)
 		if err != nil {
 			return true, fmt.Errorf("instructions: read %s: %w", path, err)
@@ -46,6 +46,8 @@ func Discover(globalDir, cwd string, allowPaths []string, opt Options) ([]Source
 		if !found || content == "" {
 			return true, nil
 		}
+		visited := map[string]bool{filepath.Clean(path): true}
+		content = expandImports(content, filepath.Dir(path), roots, opt, 0, visited)
 		if opt.TotalMaxBytes > 0 && total+len(content) > opt.TotalMaxBytes {
 			// 合計上限へ達した。以降のファイルは追加しない
 			return false, nil
@@ -56,7 +58,7 @@ func Discover(globalDir, cwd string, allowPaths []string, opt Options) ([]Source
 	}
 
 	if globalDir != "" {
-		cont, err := appendSource(filepath.Join(globalDir, instructionsFileName), "global")
+		cont, err := appendSource(filepath.Join(globalDir, instructionsFileName), "global", []string{globalDir})
 		if err != nil {
 			return nil, err
 		}
@@ -69,8 +71,12 @@ func Discover(globalDir, cwd string, allowPaths []string, opt Options) ([]Source
 	if err != nil {
 		return nil, err
 	}
+	projectRoots := allowPaths
+	if len(projectRoots) == 0 && len(chain) > 0 {
+		projectRoots = []string{chain[0]}
+	}
 	for _, dir := range chain {
-		cont, err := appendSource(filepath.Join(dir, instructionsFileName), "project")
+		cont, err := appendSource(filepath.Join(dir, instructionsFileName), "project", projectRoots)
 		if err != nil {
 			return nil, err
 		}
