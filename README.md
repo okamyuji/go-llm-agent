@@ -692,6 +692,12 @@ RUN_E2E=1 make quality   # 品質ゲートに27本のE2Eスクリプトを追加
 make build-all           # 6 バイナリへクロスコンパイル
 ```
 
+### バージョン付与
+
+バージョンは`vMAJOR.MINOR.PATCH`のsemantic versionで、mainへのマージごとにGitHub Actions（`.github/workflows/release.yml`）が自動で付与します。直近の`v`タグ以降のコミットをConventional Commitsとして読み、`feat`ならMINOR、`fix`/`refactor`/`docs`/`chore`などならPATCH、`type!:`または本文の`BREAKING CHANGE`ならMAJOR（0.x系の間はMINOR）を上げてタグとGitHub Release（6バイナリ添付）を作ります。計算規則は`scripts/release/next-version.sh`が単一の情報源で、`bash scripts/release/next-version_test.sh`で検証できます。起点は「マージ済みPRの本数」をMINORに置いた`v0.13.0`です。
+
+ビルド時のバージョンは`-ldflags -X main.version=...`で埋め込み、`agent version`で表示します。`make build`は未指定なら`git describe --tags`の値（例: `v0.13.0-3-gabc1234-dirty`）を使います。
+
 `scripts/quality-gate.sh` はpre-commitとCIが共有する品質確認の入口です。mutation対象packageの除外テスト、gofmt、go vet、staticcheck、golangci-lint、govulncheck、`go test --count=1 --shuffle=on -race -cover`、release build、機密ファイルのstage防止、`gitleaks detect --no-git --source .` を順に実行します。`RUN_E2E=1`では27本の`tests/e2e/*.sh`も実行します。gitleaksはstage状態にかかわらず作業ツリーを検査し、`.gitleaks.toml`のallowlistに列挙したpathとマスク済みplaceholderを対象外にします。
 
 変更行のmutation testingは、比較元commitと1つ以上のGo packageを指定して実行します。
@@ -707,3 +713,24 @@ gremlinsは作業ツリー全体をworkerごとの一時ディレクトリへコ
 ## ライセンス
 
 MIT
+
+## バージョン履歴
+
+`v0.13.0`までは「マージ済みPR 1本＝1バージョン」として遡って対応づけたものです。以降はConventional Commitsに基づく自動bumpで付与します。
+
+| バージョン | 日付 | 機能の追加・修正 |
+|---|---|---|
+| v0.14.0 | 2026-08-30 | メモリ機能（階層AGENTS.md連結と`@import`、自動メモリ`memory_write`/`memory_read`、`/memory`と`#`）、semantic versionの自動付与、`fsx`パッケージ（`O_NOFOLLOW`付きの安全なopen） |
+| v0.13.0 | 2026-08-30 | 改善1-10と日本語UX（compaction、session resume、AGENTS.md自動読み込み、行エディタ内蔵、`/help` `/model` `/cost` `/clear` `/tools`、E2E 27本、変異テストとCRAP計測） |
+| v0.12.0 | 2026-08-15 | 対話UX・安全性・品質ゲートの強化 |
+| v0.11.0 | 2026-08-10 | Web検索とfollow-upの信頼性向上 |
+| v0.10.0 | 2026-08-09 | `web_search` / `web_fetch`ツール |
+| v0.9.0 | 2026-08-09 | 日本語IME復元（cooked入力と生成中のみraw監視のハイブリッドREPL） |
+| v0.8.0 | 2026-08-09 | raw-mode行エディタ（ESCキャンセル、履歴、CJK幅） |
+| v0.7.0 | 2026-08-08 | OpenAI互換ツール定義にparametersとdescriptionを付与 |
+| v0.6.0 | 2026-08-08 | llama.cpp（llama-server）プロバイダ |
+| v0.5.0 | 2026-07-05 | reusable-workflows@v1による共通CI |
+| v0.4.0 | 2026-07-05 | 依存更新（golang.org/x/net 0.55.0） |
+| v0.3.0 | 2026-05-23 | REPLの進捗スピナーとターン要約 |
+| v0.2.0 | 2026-05-23 | 本番投入に向けた16領域のハードニング |
+| v0.1.0 | 2026-05-21 | ツール層のdeny-by-defaultとハードニング |

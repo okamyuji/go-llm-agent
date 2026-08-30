@@ -1,0 +1,63 @@
+name: Release
+
+# main への push (= PR のマージ) ごとに Conventional Commits から次の semantic version を
+# 計算し、タグと GitHub Release (各 OS/arch のバイナリ付き) を自動作成する。
+# bump 規則は scripts/release/next-version.sh が単一の情報源で、ここでは呼ぶだけにする。
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Compute next version
+        id: next
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null || echo none)"
+          next="$(bash scripts/release/next-version.sh)"
+          echo "current=$current next=$next"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$next" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release binaries
+        if: steps.next.outputs.skip == 'false'
+        run: make build-all VERSION="${{ steps.next.outputs.next }}"
+
+      - name: Tag and publish release
+        if: steps.next.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEXT: ${{ steps.next.outputs.next }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$NEXT" -m "release $NEXT"
+          git push origin "$NEXT"
+          gh release create "$NEXT" dist/* --title "$NEXT" --generate-notes

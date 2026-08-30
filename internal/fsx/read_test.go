@@ -24,6 +24,7 @@ func TestTruncateAtRuneBoundary(t *testing.T) {
 		{"3バイト文字の途中(2バイト残り)でも切らない", "ああ", 5, "あ"},
 		{"先頭の不正バイトは残す", "\xffab", 2, "\xffa"},
 		{"切り詰め位置が不正バイト単体なら削る", "a\xff\xff", 2, "a"},
+		{"全部不正バイトなら空になる", "\xff\xff", 1, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -140,6 +140,15 @@ func TestStore_ReadIndex(t *testing.T) {
 	if len(got) > 10 {
 		t.Fatalf("バイト上限が効いていない: %d bytes", len(got))
 	}
+
+	// 行数上限 0 は無制限
+	got, err = s.ReadIndex(0, 1<<20)
+	if err != nil {
+		t.Fatalf("ReadIndex unlimited lines: %v", err)
+	}
+	if got != b.String() {
+		t.Fatalf("行数上限 0 が無制限になっていない: %q", got)
+	}
 }
 
 func TestStore_ReadIndexRuneBoundary(t *testing.T) {

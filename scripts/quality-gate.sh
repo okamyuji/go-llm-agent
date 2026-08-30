@@ -11,6 +11,9 @@ echo "==> gofmt"
 echo "==> mutation-diff package filter"
 bash scripts/quality/mutation-diff_test.sh
 
+echo "==> next-version bump rules"
+bash scripts/release/next-version_test.sh
+
 echo "==> go vet"
 go vet ./...
 

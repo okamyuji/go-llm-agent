@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 GO ?= go
-VERSION ?= dev
+# 未指定なら直近の v タグ基準 (例: v0.13.0-3-gabc1234-dirty)。タグが無ければ dev
+VERSION ?= $(shell git describe --tags --always --dirty --match 'v[0-9]*' 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 PKG := ./...
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
