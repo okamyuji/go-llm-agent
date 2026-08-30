@@ -7,7 +7,7 @@ Go 1.25製のCGOなし単一バイナリAIエージェントです。OpenAI、An
 - 単一バイナリで配布できます。CGO不要で Linux、macOS、Windowsのamd64とarm64に対応します
 - 5プロバイダー (OpenAI、Anthropic、Google Gemini、Ollama、llama.cpp) を統一した抽象層として扱えます
 - ストリーミングとtool callingに対応します
-- 内蔵ツールはfs_read、fs_write、fs_edit、shell、http_fetch、search_files、web_search、web_fetchの8種類です (ほかにRAG用のnote_add / note_search)
+- 内蔵ツールはfs_read、fs_write、fs_edit、shell、http_fetch、search_files、web_search、web_fetchの8種類です (ほかにRAG用のnote_add / note_search、自動メモリ用のmemory_write / memory_read)
 - 対話REPL、ワンショットrun、OpenAI互換HTTP APIの3種類のインターフェースを提供します
 - pre-commitとCIでgofmt、go vet、staticcheck、golangci-lint、govulncheck、race・coverage付きGoテスト、release build、gitleaksを実行します
 
@@ -149,9 +149,18 @@ bash scripts/verify-hardening.sh
 
 ### AGENTS.md 自動読み込み
 
-起動時のカレントディレクトリから親方向へ探索し、最初に見つかった `AGENTS.md` の内容をシステムプロンプト末尾へ付加します。探索範囲は `tools.fs.allow_paths` の配下に限ります。内容は信頼境界マーカーで囲み、上位の指示や安全上の制約を上書きしない参考情報として渡します。
+`agent.agents_md.global_dir`（既定`~/.go-llm-agent`）の`AGENTS.md`、次に`tools.fs.allow_paths`配下にあるカレントディレクトリの最も浅い祖先からカレントディレクトリまでの各`AGENTS.md`を、この順に連結してシステムプロンプト末尾へ付加します。後方（カレントディレクトリに近い側）ほど実質的に優先されます。1ファイルは`max_bytes`、連結合計は`max_total_bytes`（既定32KiB）で打ち切ります。各ファイルは由来パス付きの信頼境界マーカーで囲み、上位の指示や安全上の制約を上書きしない参考情報として渡します。
 
-`agent.agents_md.max_bytes` を超えるファイルは先頭で切り詰めます。`agent.agents_md.enabled: false` で読み込みを無効化できます。
+行頭の`@相対パス`は記述ファイル基準で展開します（深さ4まで、コードフェンス内は対象外、探索ルート外やシンボリックリンクは拒否）。`agent run` / `agent serve`は対象外です。
+
+### 自動メモリ
+
+エージェントがセッションをまたいで覚えておく事実を、`agent.memory.dir`（既定`~/.go-llm-agent/projects`）配下のプロジェクト単位ディレクトリ`<プロジェクトキー>/memory/`へMarkdownで保存します。プロジェクトキーはgitリポジトリのルート（worktreeは主リポジトリ）から導出し、git外ではカレントディレクトリを使います。
+
+- `MEMORY.md`は索引で、起動時に先頭200行かつ24KiB（`index_max_lines` / `index_max_bytes`）だけをシステムプロンプトへ注入します。信頼境界マーカーで囲み、コードから導出できる情報や`AGENTS.md`に書いてある情報は保存しないという保存方針も添えます
+- `memory_write` / `memory_read`ツールでエージェントがトピックファイル（`<name>.md`）を読み書きします。書き込み先はメモリディレクトリ直下に限定し、`..`や絶対パス、シンボリックリンク、1MiB超は拒否します。`enabled_tools`へ2つを列挙すると使えます
+- REPLでは`/memory`で一覧と索引を、`/memory <file>`で本文を表示します。`# <本文>`と入力すると`memories.md`と索引へ即時追記し、LLMへは送りません
+- `agent.memory.enabled: false`で全機能を無効化します。ディレクトリ初期化に失敗した場合はエラーログを出して無効化し、起動は継続します
 
 ## 評価フレームワーク
 

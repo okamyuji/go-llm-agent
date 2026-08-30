@@ -156,7 +156,7 @@ agent:
 2. `resolveMemory`（chat.go / deps.go）: プロジェクトキーを導出してStoreを作り、`ReadIndex`の内容をさらに後方へ注入する。`memory_write` / `memory_read`をツールregistryへ登録する
 3. REPL起動時にStoreをOptions経由で渡し、`/memory`と`#`を有効化する
 
-serveモードではREPLコマンドは対象外とし、ツールと索引注入のみ有効とする。
+`agent run`と`agent serve`は現状AGENTS.mdを注入しないため、メモリ索引の注入もchat専用とする。両モードではツール登録のみ有効とし、REPLコマンドは対象外とする。
 
 ## 7. セキュリティ
 
