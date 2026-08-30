@@ -49,6 +49,7 @@ func loadDeps(ctx context.Context, configPath string, isServe bool) (*config.Con
 	if nerr != nil {
 		return nil, nil, nil, nil, nerr
 	}
+	tools = attachMemoryTools(cfg, logger, tools)
 	toolReg := tool.NewRegistry(tools, resolveEnabledTools(cfg, isServe))
 	store := storage.NewSessionStore(expand(cfg.Storage.SessionsDir))
 	return cfg, llmReg, toolReg, store, nil
