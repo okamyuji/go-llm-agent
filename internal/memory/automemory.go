@@ -292,10 +292,11 @@ func samePathKey(p string) string {
 	return filepath.Clean(p)
 }
 
-// keyHashLen キーに付ける SHA-256 の 16 進文字数。8 文字 (32 bit) で衝突は実用上起きない
-const keyHashLen = 8
+// keyHashLen キーに付ける SHA-256 の 16 進文字数。32 文字 (128 bit) にして、
+// 同じ basename のパスを作って先頭を一致させる第二原像探索を現実的でなくする
+const keyHashLen = 32
 
-// sanitizeKey 絶対パスを `<basename>-<sha256先頭8桁>` へ変換する。basename は人が
+// sanitizeKey 絶対パスを `<basename>-<sha256先頭32桁>` へ変換する。basename は人が
 // 見て分かる名前、ハッシュは `/work/a-b` と `/work/a/b` のような区切り置換だけでは
 // 衝突するパスを区別する。basename の区切り・コロンは `-` へ置換する
 func sanitizeKey(path string) string {
