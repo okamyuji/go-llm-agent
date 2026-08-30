@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/okamyuji/go-llm-agent/internal/fsx"
 )
@@ -63,7 +62,7 @@ func (s *Store) resolve(rel string) (string, error) {
 	return filepath.Join(s.dir, rel), nil
 }
 
-// Read rel の内容を最大 maxBytes (rune 境界) まで読んで返す
+// Read rel の内容を最大 maxBytes (rune 境界) まで読んで返す。maxBytes <= 0 は全文
 func (s *Store) Read(rel string, maxBytes int) (string, error) {
 	path, err := s.resolve(rel)
 	if err != nil {
@@ -71,20 +70,11 @@ func (s *Store) Read(rel string, maxBytes int) (string, error) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	f, err := fsx.OpenNoFollow(path, os.O_RDONLY, 0)
-	if err != nil {
-		return "", fmt.Errorf("memory: open %q: %w", rel, err)
-	}
-	defer func() { _ = f.Close() }()
-	var r io.Reader = f
-	if maxBytes > 0 {
-		r = io.LimitReader(f, int64(maxBytes)+1)
-	}
-	b, err := io.ReadAll(r)
+	content, err := fsx.ReadCapped(path, maxBytes)
 	if err != nil {
 		return "", fmt.Errorf("memory: read %q: %w", rel, err)
 	}
-	return truncateAtRuneBoundary(string(b), maxBytes), nil
+	return content, nil
 }
 
 // Write rel へ content を書く。appendMode が true なら追記する。
@@ -146,9 +136,7 @@ func (s *Store) ReadIndex(maxLines, maxBytes int) (string, error) {
 	}
 	if maxLines > 0 {
 		lines := strings.SplitAfterN(content, "\n", maxLines+1)
-		if len(lines) > maxLines {
-			content = strings.Join(lines[:maxLines], "")
-		}
+		content = strings.Join(lines[:min(len(lines), maxLines)], "")
 	}
 	return content, nil
 }
@@ -252,21 +240,4 @@ func sanitizeKey(path string) string {
 		return r
 	}, path)
 	return strings.Trim(replaced, "-")
-}
-
-// truncateAtRuneBoundary s が maxBytes を超える場合に rune 境界で切り詰める。
-// memory.go とは独立に automemory 系だけで使う
-func truncateAtRuneBoundary(s string, maxBytes int) string {
-	if maxBytes <= 0 || len(s) <= maxBytes {
-		return s
-	}
-	b := s[:maxBytes]
-	for len(b) > 0 {
-		r, size := utf8.DecodeLastRuneInString(b)
-		if r != utf8.RuneError || size > 1 {
-			break
-		}
-		b = b[:len(b)-1]
-	}
-	return b
 }

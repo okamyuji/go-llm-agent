@@ -4,13 +4,12 @@
 package instructions
 
 import (
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/okamyuji/go-llm-agent/internal/fsx"
 )
@@ -134,62 +133,25 @@ func withinAllowPaths(dir string, allowPaths []string) bool {
 // readCandidate candidate を検査し、信頼できる通常ファイルとして読める場合だけ
 // found=true で内容を返す。シンボリックリンク・非通常ファイルは読まずにスキップし、
 // ディレクトリと権限エラーはエラーとして返す (fs 境界の検証失敗を明示する方針)。
-// Lstat と open の間の差し替え (TOCTOU) は readCapped 側の fsx.OpenNoFollow が塞ぐ
+// Lstat と open の間の差し替え (TOCTOU) は fsx.ReadCapped 側の O_NOFOLLOW が塞ぐ
 func readCandidate(candidate string, maxBytes int) (found bool, content string, err error) {
 	fi, statErr := os.Lstat(candidate)
-	switch {
-	case statErr == nil && fi.Mode()&os.ModeSymlink != 0:
-		return false, "", nil
-	case statErr == nil && fi.IsDir():
-		return false, "", fmt.Errorf("%s is a directory", candidate)
-	case statErr == nil && !fi.Mode().IsRegular():
-		return false, "", nil
-	case statErr == nil:
-		c, rerr := readCapped(candidate, maxBytes)
-		if rerr != nil {
-			return false, "", rerr
+	if statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			return false, "", nil
 		}
-		return true, c, nil
-	case os.IsNotExist(statErr):
-		return false, "", nil
-	default:
 		return false, "", statErr
 	}
-}
-
-// readCapped path をシンボリックリンクを辿らずに開き、maxBytes > 0 のときは最大
-// maxBytes+1 バイトだけを読む (truncateAtRuneBoundary が境界判定できるよう 1 バイト多く読む)
-func readCapped(path string, maxBytes int) (string, error) {
-	f, err := fsx.OpenNoFollow(path, os.O_RDONLY, 0)
-	if err != nil {
-		return "", err
+	if fi.IsDir() {
+		return false, "", fmt.Errorf("%s is a directory", candidate)
 	}
-	defer func() { _ = f.Close() }()
-
-	var r io.Reader = f
-	if maxBytes > 0 {
-		r = io.LimitReader(f, int64(maxBytes)+1)
+	// シンボリックリンク・デバイスファイル・FIFO 等は通常ファイルではないため読まない
+	if !fi.Mode().IsRegular() {
+		return false, "", nil
 	}
-	b, err := io.ReadAll(r)
-	if err != nil {
-		return "", err
+	c, rerr := fsx.ReadCapped(candidate, maxBytes)
+	if rerr != nil {
+		return false, "", rerr
 	}
-	return truncateAtRuneBoundary(string(b), maxBytes), nil
-}
-
-// truncateAtRuneBoundary s が maxBytes バイトを超える場合、maxBytes バイト目の
-// 直前にある rune 境界までを返す。末尾の不完全なシーケンスだけを削る
-func truncateAtRuneBoundary(s string, maxBytes int) string {
-	if maxBytes <= 0 || len(s) <= maxBytes {
-		return s
-	}
-	b := s[:maxBytes]
-	for len(b) > 0 {
-		r, size := utf8.DecodeLastRuneInString(b)
-		if r != utf8.RuneError || size > 1 {
-			break
-		}
-		b = b[:len(b)-1]
-	}
-	return b
+	return true, c, nil
 }
