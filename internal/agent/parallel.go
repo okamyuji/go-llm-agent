@@ -18,10 +18,11 @@ type ParallelToolsOptions struct {
 
 // ParallelOutcome 並列ツール実行の結果。順序は入力 ToolCall の順を保つ
 type ParallelOutcome struct {
-	CallID  string
-	Name    string
-	Content string
-	IsError bool
+	CallID   string
+	Name     string
+	Content  string
+	IsError  bool
+	Duration time.Duration
 }
 
 // ExecuteToolsParallel 複数 ToolCall を errgroup と semaphore で並列実行する
@@ -139,5 +140,5 @@ func (s *service) executeOne(ctx context.Context, sessionID string, call llm.Too
 	if s.redactor != nil {
 		content = s.redactor.Redact(content)
 	}
-	return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: content, IsError: terr != nil || res.IsError}
+	return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: content, IsError: terr != nil || res.IsError, Duration: time.Since(start)}
 }
