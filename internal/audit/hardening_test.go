@@ -56,14 +56,19 @@ func TestStreamCloseAfterCompletionIsSuccess(t *testing.T) {
 	}
 	_ = st.Close()
 	_ = e.Shutdown(context.Background())
+	found := false
 	for _, ev := range readAllEvents(t, dir) {
 		if ev.Kind == KindLLMResponse {
+			found = true
 			var pl LLMResponsePayload
 			_ = json.Unmarshal(ev.Payload, &pl)
 			if pl.Error != "" {
 				t.Fatalf("completed stream must not carry an error: %s", ev.Payload)
 			}
 		}
+	}
+	if !found {
+		t.Fatal("llm_response not recorded")
 	}
 }
 
@@ -97,6 +102,9 @@ func TestValidateIggyURL(t *testing.T) {
 		{"http://iggy.example.com", false},
 		{"ftp://127.0.0.1", false},
 		{"://bad", false},
+		{"https://", false},
+		{"https:///only-path", false},
+		{"http://", false},
 	}
 	for _, c := range cases {
 		err := ValidateIggyURL(c.url)

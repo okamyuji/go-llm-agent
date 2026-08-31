@@ -54,11 +54,14 @@ func ValidateIggyURL(raw string) error {
 	if err != nil {
 		return fmt.Errorf("iggy url: %w", err)
 	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("iggy url: %q にホストがありません", raw)
+	}
 	switch u.Scheme {
 	case "https":
 		return nil
 	case "http":
-		host := u.Hostname()
 		ip := net.ParseIP(host)
 		if host == "localhost" || (ip != nil && ip.IsLoopback()) {
 			return nil
