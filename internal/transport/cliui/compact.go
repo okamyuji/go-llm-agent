@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
+	"github.com/okamyuji/go-llm-agent/internal/audit"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 )
 
@@ -46,6 +47,7 @@ func (r *REPL) compactHistory(ctx context.Context, pump *bytePump, hist []llm.Me
 	fmt.Fprintf(out, "[compact] 会話履歴を圧縮しています (最大 %s、ESC で中断)\n", compactTimeout)
 	cctx, cancel := context.WithTimeout(ctx, compactTimeout)
 	defer cancel()
+	cctx = audit.WithSessionID(cctx, r.sessionID)
 
 	done := make(chan compactResult, 1)
 	go func() {

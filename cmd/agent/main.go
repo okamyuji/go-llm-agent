@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
+	"github.com/okamyuji/go-llm-agent/internal/audit"
 	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/config"
 	"github.com/okamyuji/go-llm-agent/internal/enricher"
@@ -26,6 +27,10 @@ var version = "dev"
 
 // shutdownTelemetry OTel shutdown フック。main から呼ぶ。Init 失敗時 noop
 var shutdownTelemetry obs.Shutdown = func(context.Context) error { return nil }
+
+// auditEmitter loadDeps が生成した監査 Emitter。IGGY_PAT 未設定なら nil のまま
+// (buildAuditEmitter, cmd/agent/deps.go)。 nil でも Shutdown はレシーバ側で no-op
+var auditEmitter *audit.Emitter
 
 func main() {
 	// runWithShutdown 内で mainEntry を defer 付きで包むことで、
@@ -45,6 +50,11 @@ func runWithShutdown() int {
 	defer func() {
 		if err := shutdownTelemetry(shutdownCtx); err != nil {
 			fmt.Fprintln(os.Stderr, "telemetry shutdown:", err)
+		}
+	}()
+	defer func() {
+		if err := auditEmitter.Shutdown(shutdownCtx); err != nil {
+			fmt.Fprintln(os.Stderr, "audit shutdown:", err)
 		}
 	}()
 	return mainEntry()

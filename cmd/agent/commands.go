@@ -61,7 +61,7 @@ func runServer(ctx context.Context, p serveParams) error {
 // listTools 有効化されているツールの一覧を書き出す
 func listTools(ctx context.Context, configPath string, out io.Writer) error {
 	// telemetry / 親 ctx の cancellation を伝搬させるため、サブコマンド受領 ctx をそのまま渡す
-	_, _, tools, _, err := loadDeps(ctx, configPath, false)
+	_, _, tools, _, _, err := loadDeps(ctx, configPath, false)
 	if err != nil {
 		return err
 	}

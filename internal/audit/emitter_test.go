@@ -38,6 +38,17 @@ func TestNilEmitterIsNoop(t *testing.T) {
 	}
 }
 
+func TestNewEmitterDefaultsExpiry(t *testing.T) {
+	e := NewEmitter(Options{WALDir: t.TempDir(), PAT: "p"})
+	if e.opts.Expiry != "7776000000000" {
+		t.Fatalf("expiry=%q, want 90 日既定値", e.opts.Expiry)
+	}
+	e2 := NewEmitter(Options{WALDir: t.TempDir(), PAT: "p", Expiry: "60"})
+	if e2.opts.Expiry != "60" {
+		t.Fatalf("expiry=%q, want 明示指定を優先", e2.opts.Expiry)
+	}
+}
+
 func TestEmitterIsLazy(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "wal")
 	e := NewEmitter(Options{WALDir: dir, IggyURL: "http://127.0.0.1:1", PAT: "p"})

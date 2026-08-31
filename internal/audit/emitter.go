@@ -52,6 +52,9 @@ func NewEmitter(o Options) *Emitter {
 	if o.Stream == "" {
 		o.Stream = "agent-audit"
 	}
+	if o.Expiry == "" {
+		o.Expiry = "7776000000000" // 90 日 (マイクロ秒)。Iggy 0.8.0 は u64 を要求する
+	}
 	return &Emitter{opts: o, runID: uuid.NewString(), wals: map[string]*walFile{}}
 }
 
