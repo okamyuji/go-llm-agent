@@ -16,7 +16,9 @@ trap 'rm -rf "$TMP"' EXIT
 # 変更された .go ファイル (テスト以外)。
 # lineedit/terminal.go は x/term からのフォーク基底 (第三者由来コード) のため
 # ゲート対象外 (docs/specs/2026-08-13-improvements/00-overview.md 6 章の凍結事項)
-git diff --name-only "$BASE"...HEAD -- '*.go' | grep -v '_test\.go$' | grep -v 'lineedit/terminal\.go$' > "$TMP/changed_files" || true
+# tests/ 配下は E2E フィクスチャ (テストスキャフォールド) であり、プロダクションコードの
+# 複雑度予算の対象外
+git diff --name-only "$BASE"...HEAD -- '*.go' | grep -v '_test\.go$' | grep -v 'lineedit/terminal\.go$' | grep -v '^tests/' > "$TMP/changed_files" || true
 if [ ! -s "$TMP/changed_files" ]; then
   echo "no changed non-test go files"
   exit 0

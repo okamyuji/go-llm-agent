@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/okamyuji/agent-audit/schema/event.schema.json",
+  "title": "AuditEvent",
+  "description": "go-llm-agent が Iggy に送る監査イベント。1 メッセージ = 1 イベント。一意性は (session_id, run_id, seq)。",
+  "type": "object",
+  "required": ["v", "id", "session_id", "run_id", "seq", "ts", "kind", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "v": { "const": 1 },
+    "id": { "type": "string", "format": "uuid" },
+    "session_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "format": "uuid" },
+    "seq": { "type": "integer", "minimum": 0 },
+    "ts": { "type": "string", "format": "date-time" },
+    "kind": {
+      "type": "string",
+      "enum": ["llm_request", "llm_response", "tool_call", "tool_result", "usage"]
+    },
+    "provider": { "type": "string", "minLength": 1 },
+    "model": { "type": "string", "minLength": 1 },
+    "call_id": { "type": "string", "minLength": 1 },
+    "payload": { "type": "object" }
+  },
+  "$defs": {
+    "truncated": {
+      "type": "object",
+      "required": ["truncated", "bytes"],
+      "additionalProperties": false,
+      "properties": {
+        "truncated": { "const": true },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "tool_call": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "minLength": 1 },
+        "arguments": {}
+      }
+    },
+    "message": {
+      "type": "object",
+      "required": ["role"],
+      "additionalProperties": false,
+      "properties": {
+        "role": { "type": "string", "minLength": 1 },
+        "content": { "type": "string" },
+        "name": { "type": "string" },
+        "tool_call_id": { "type": "string" },
+        "tool_calls": { "type": "array", "items": { "$ref": "#/$defs/tool_call" } }
+      }
+    },
+    "llm_request_payload": {
+      "type": "object",
+      "required": ["messages"],
+      "additionalProperties": false,
+      "properties": {
+        "messages": { "type": "array", "items": { "$ref": "#/$defs/message" } },
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "temperature": { "type": "number" },
+        "max_tokens": { "type": "integer" }
+      }
+    },
+    "llm_response_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["content"] },
+        { "required": ["tool_call"] },
+        { "required": ["error"] }
+      ],
+      "properties": {
+        "content": { "type": "string" },
+        "tool_call": { "$ref": "#/$defs/tool_call" },
+        "finish": { "type": "string" },
+        "error": { "type": "string" }
+      }
+    },
+    "tool_result_payload": {
+      "type": "object",
+      "required": ["name", "content", "is_error", "duration_ms"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "content": { "type": "string" },
+        "is_error": { "type": "boolean" },
+        "duration_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "usage_payload": {
+      "type": "object",
+      "required": ["input_tokens", "output_tokens"],
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "llm_request" } } },
+      "then": {
+        "required": ["provider", "model"],
+        "properties": {
+          "payload": { "anyOf": [{ "$ref": "#/$defs/llm_request_payload" }, { "$ref": "#/$defs/truncated" }] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "llm_response" } } },
+      "then": {
+        "required": ["provider", "model"],
+        "properties": {
+          "payload": { "anyOf": [{ "$ref": "#/$defs/llm_response_payload" }, { "$ref": "#/$defs/truncated" }] }
+        },
+        "if": { "properties": { "payload": { "required": ["tool_call"] } } },
+        "then": { "required": ["call_id"] }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "tool_call" } } },
+      "then": {
+        "required": ["call_id"],
+        "properties": { "payload": { "$ref": "#/$defs/tool_call" } }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "tool_result" } } },
+      "then": {
+        "required": ["call_id"],
+        "properties": {
+          "payload": { "anyOf": [{ "$ref": "#/$defs/tool_result_payload" }, { "$ref": "#/$defs/truncated" }] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "usage" } } },
+      "then": {
+        "required": ["provider", "model"],
+        "properties": { "payload": { "$ref": "#/$defs/usage_payload" } }
+      }
+    }
+  ]
+}

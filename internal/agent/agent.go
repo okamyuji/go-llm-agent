@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/okamyuji/go-llm-agent/internal/audit"
 	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/safety"
@@ -84,6 +85,7 @@ type service struct {
 	enricher                ContextEnricher
 	toolResultLimitMaxChars int
 	hooks                   *HookRunner
+	emitter                 *audit.Emitter
 }
 
 // New Service を構築する。billing.Accumulator は nil 可で、その場合は集計を無効にする
@@ -148,6 +150,11 @@ func WithToolResultLimit(maxChars int) Option {
 // WithHooks pre/post ツール実行フックを注入する。hr が nil の場合は既存動作 (フック無効)
 func WithHooks(hr *HookRunner) Option {
 	return func(s *service) { s.hooks = hr }
+}
+
+// WithEmitter 監査イベント送出を注入する。nil なら送出しない
+func WithEmitter(e *audit.Emitter) Option {
+	return func(s *service) { s.emitter = e }
 }
 
 // WithApprovalDecider 承認判定を注入する。required ツールセットと timeout を合わせて指定する

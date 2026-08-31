@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
@@ -94,6 +97,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		SystemPrompt: sysPrompt,
 		Messages:     msgs,
 		MaxToolHops:  s.cfg.Agent.MaxToolHops,
+		SessionID:    sessionIDFromRequest(r),
 	}
 
 	if req.Stream {
@@ -101,6 +105,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.syncChat(r.Context(), w, in)
+}
+
+// sessionIDHeaderPattern X-Session-Id が満たすべき形式。この値は WAL のディレクトリ名と
+// Iggy の topic 名になるため、パストラバーサルや不正文字を含む外部入力をそのまま使わない
+var sessionIDHeaderPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// sessionIDFromRequest X-Session-Id が規則に合えばそれを使い、それ以外は毎回新しい UUID を振る
+func sessionIDFromRequest(r *http.Request) string {
+	if v := r.Header.Get("X-Session-Id"); sessionIDHeaderPattern.MatchString(v) {
+		return v
+	}
+	return uuid.NewString()
 }
 
 func (s *Server) syncChat(ctx context.Context, w http.ResponseWriter, in agent.Input) {

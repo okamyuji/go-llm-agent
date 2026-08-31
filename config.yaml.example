@@ -351,6 +351,14 @@ safety:
         regex: "\\b(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)(\\.(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)){3}\\b"
         replacement: "[REDACTED:IPV4]"
 
+audit:
+  # Apache Iggy の REST URL。PAT は環境変数 IGGY_PAT で渡す（未設定なら監査は無効）
+  iggy_url: http://127.0.0.1:3000
+  wal_dir: ""  # 空なら $HOME/.go-llm-agent/audit-wal
+  stream: agent-audit
+  # topic の保持期間（Iggy の message_expiry）。空なら 90 日
+  message_expiry: ""
+
 # OpenTelemetry 計装。enabled: true で OTLP HTTP exporter にトレースとメトリクスを送る。
 # 既定は無効で、有効化しても他機能の挙動は変えない。詳細は docs/design/01-otel-instrumentation.md を参照する。
 observability:

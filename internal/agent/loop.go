@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/okamyuji/go-llm-agent/internal/audit"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/obs"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
@@ -27,6 +28,7 @@ const (
 
 // Run Strategy に処理を委譲する。Strategy 未設定なら ReAct で動く
 func (s *service) Run(ctx context.Context, in Input, out chan<- Event) error {
+	ctx = audit.WithSessionID(ctx, in.SessionID)
 	if s.strategy != nil {
 		return s.strategy.run(ctx, s, in, out)
 	}
@@ -117,6 +119,12 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 		}
 		st.msgs = append(st.msgs, llm.Message{Role: llm.RoleAssistant, Content: res.content, ToolCalls: []llm.ToolCall{*res.call}})
 		if terr := s.handleToolCall(ctx, in, st, res.call, out); terr != nil {
+			// appendToolError を通らずに返る経路 (ツール未検出、検証回数超過、承認機構のエラー) もここで 1 件残す
+			errContent := terr.Error()
+			if s.redactor != nil {
+				errContent = s.redactor.Redact(errContent)
+			}
+			s.emitter.ToolResult(ctx, res.call.ID, res.call.Name, errContent, true, 0)
 			return emitFail(out, terr)
 		}
 	}
@@ -240,9 +248,11 @@ func (s *service) runAutomaticWebFetch(ctx context.Context, in Input, st *reactS
 
 // invokeAutomaticTool 自動実行するツール呼び出しを履歴へ積みつつ実行し結果を通知する
 func (s *service) invokeAutomaticTool(ctx context.Context, sessionID string, st *reactState, call llm.ToolCall, out chan<- Event) ParallelOutcome {
+	s.emitter.ToolCall(ctx, call)
 	st.msgs = append(st.msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}})
 	out <- Event{Kind: EventToolCall, ToolCall: &call}
 	outcome := s.executeOne(ctx, sessionID, call)
+	s.emitter.ToolResult(ctx, outcome.CallID, outcome.Name, outcome.Content, outcome.IsError, outcome.Duration)
 	out <- Event{Kind: EventToolResult, ToolResult: &ToolResult{CallID: outcome.CallID, Name: outcome.Name, Content: outcome.Content, IsError: outcome.IsError}}
 	st.msgs = append(st.msgs, llm.Message{Role: llm.RoleTool, Content: outcome.Content, ToolCallID: call.ID, Name: call.Name})
 	return outcome
@@ -356,11 +366,12 @@ func (s *service) resolveAssistantContent(st *reactState, content string, out ch
 // 非 nil の戻り値はターンの打ち切りを意味する。nil はスキップ・実行のいずれでも
 // 次の hop へ進んでよいことを表す
 func (s *service) handleToolCall(ctx context.Context, in Input, st *reactState, call *llm.ToolCall, out chan<- Event) error {
+	s.emitter.ToolCall(ctx, *call)
 	t, ok := s.tools.Lookup(call.Name)
 	if !ok {
 		return fmt.Errorf("tool %q が見つかりません", call.Name)
 	}
-	proceed, verr := s.validateToolArgs(st, call, out)
+	proceed, verr := s.validateToolArgs(ctx, st, call, out)
 	if verr != nil || !proceed {
 		return verr
 	}
@@ -372,7 +383,13 @@ func (s *service) handleToolCall(ctx context.Context, in Input, st *reactState, 
 	// 拒否が最も安価かつ確実な安全弁であり、拒否された呼び出しに対して副作用のある
 	// 外部コマンドを起動しないため (09 番設計書 3.3 節)
 	if allowed, reason := s.hooks.RunPre(ctx, call.Name, call.Arguments); !allowed {
-		st.appendToolError(out, call, "tool execution blocked by pre_tool_use hook: "+reason)
+		content := "tool execution blocked by pre_tool_use hook: " + reason
+		emitContent := content
+		if s.redactor != nil {
+			emitContent = s.redactor.Redact(emitContent)
+		}
+		s.emitter.ToolResult(ctx, call.ID, call.Name, emitContent, true, 0)
+		st.appendToolError(out, call, content)
 		return nil
 	}
 	s.executeAndRecord(ctx, st, t, call, out)
@@ -381,7 +398,7 @@ func (s *service) handleToolCall(ctx context.Context, in Input, st *reactState, 
 
 // validateToolArgs JSON Schema 検証を行う。検証失敗は budget の範囲で
 // モデルへ訂正を促すツール結果を積み (proceed=false, err=nil)、budget 超過は err を返す
-func (s *service) validateToolArgs(st *reactState, call *llm.ToolCall, out chan<- Event) (bool, error) {
+func (s *service) validateToolArgs(ctx context.Context, st *reactState, call *llm.ToolCall, out chan<- Event) (bool, error) {
 	if s.validator == nil {
 		return true, nil
 	}
@@ -396,7 +413,13 @@ func (s *service) validateToolArgs(st *reactState, call *llm.ToolCall, out chan<
 	}
 	if st.validationRetries < st.maxValidationRetries {
 		st.validationRetries++
-		st.appendToolError(out, call, "schema validation failed: "+vmsg+" — please correct the arguments to match the JSON schema and try again")
+		content := "schema validation failed: " + vmsg + " — please correct the arguments to match the JSON schema and try again"
+		emitContent := content
+		if s.redactor != nil {
+			emitContent = s.redactor.Redact(emitContent)
+		}
+		s.emitter.ToolResult(ctx, call.ID, call.Name, emitContent, true, 0)
+		st.appendToolError(out, call, content)
 		return false, nil
 	}
 	if st.maxValidationRetries == 0 {
@@ -436,6 +459,11 @@ func (s *service) requestApproval(ctx context.Context, in Input, st *reactState,
 		if reason != "" {
 			content += ": " + reason
 		}
+		emitContent := content
+		if s.redactor != nil {
+			emitContent = s.redactor.Redact(emitContent)
+		}
+		s.emitter.ToolResult(ctx, call.ID, call.Name, emitContent, true, 0)
 		st.appendToolError(out, call, content)
 		return false, nil
 	}
@@ -467,6 +495,7 @@ func (s *service) executeAndRecord(ctx context.Context, st *reactState, t tool.T
 		content = s.redactor.Redact(content)
 	}
 	tr := &ToolResult{CallID: call.ID, Name: call.Name, Content: content, IsError: !ok}
+	s.emitter.ToolResult(ctx, tr.CallID, tr.Name, tr.Content, tr.IsError, time.Since(start))
 	out <- Event{Kind: EventToolResult, ToolResult: tr}
 	// 02 番設計書 履歴へ積むツール結果だけを上限文字数まで切り詰める。
 	// EventToolResult で通知済みの tr.Content (全文) は変更しない。

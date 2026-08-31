@@ -43,6 +43,28 @@ internal/agent/hooks.go:16:31 ARITHMETIC_BASE
 internal/transport/cliui/compact.go:16:25 ARITHMETIC_BASE
 internal/transport/cliui/lineedit/search.go:7:28 ARITHMETIC_BASE
 internal/transport/cliui/memory_cmd.go:15:34 ARITHMETIC_BASE
+# internal/audit/event.go:21 `const MaxPayloadBytes = 64 * 1000 * 1000` は
+# コンパイル時定数で実行時カバレッジが付かないため常に NOT COVERED になる。
+# TestMaxPayloadBytesMatchesIggySpec (internal/audit/event_test.go) が
+# 64000000 という具体値を直接 assert しており、演算子の取り違えを手動 kill 済み。
+internal/audit/event.go:21:35 ARITHMETIC_BASE
+internal/audit/event.go:21:28 ARITHMETIC_BASE
+
+# --- gremlins の死角: クロージャを引数に渡す if 初期化文 (テストは手動 kill 済み) ---
+# internal/audit/sender.go:244/253/269 の
+# `if err := s.withAuth(ctx, func() error { return ... }); err != nil {`
+# は `go tool cover -func` では該当行が 100% カバーされている
+# (go test -coverprofile で確認: count=1) にもかかわらず、gremlins はクロージャ内の
+# return と外側の err 判定の境界をカバレッジブロックに正しく対応付けられず
+# NOT COVERED と誤判定する。TestDrainRunPropagatesStageErrors
+# (internal/audit/sender_mutation_test.go) が ensureStream/ensureTopic/send
+# それぞれの失敗を個別に発生させ、対応するエラーメッセージが drainRun の
+# 戻り値まで伝播することを直接 assert しており、手動 kill 済み。
+# (2026-08-31 の監査プロデューサ最終修正で expiryJSONValue の簡略化 (行数 -2) により
+# 元の 217/226/242 から 244/253/269 へ行番号がずれた。コード・根拠とも変更なし)
+internal/audit/sender.go:244:85 CONDITIONALS_NEGATION
+internal/audit/sender.go:253:91 CONDITIONALS_NEGATION
+internal/audit/sender.go:269:92 CONDITIONALS_NEGATION
 
 # --- コンパイル不能な変異: パッケージレベル const の文字列連結 (実行可能な mutant が生成されない) ---
 cmd/agent/memorywire.go:26:136 ARITHMETIC_BASE
@@ -52,3 +74,21 @@ cmd/agent/memorywire.go:88:127 ARITHMETIC_BASE
 cmd/agent/memorywire.go:89:151 ARITHMETIC_BASE
 cmd/agent/memorywire.go:90:111 ARITHMETIC_BASE
 cmd/agent/memorywire.go:91:137 ARITHMETIC_BASE
+
+# --- 真の等価 mutant (internal/audit): 到達可能な値の範囲では
+# 境界の < / <= が同じ結果になる。手動 kill: 実際に値を差し込んで両条件の
+# 出力が一致することを確認済み (mutation-equivalents.md が本 worktree に
+# 存在しないため根拠はここに記す) ---
+# internal/audit/wal.go:76 `n < 0` (readCursor の負値判定): n は
+# strconv.ParseInt の結果で、境界値 n==0 では `n<0` も `n<=0` も
+# 「異常なしとして n をそのまま返す/0 を返す」のいずれでも最終的に 0 が
+# 返り区別できない (n==0 は既に返したい値そのもの)。
+internal/audit/wal.go:76:21 CONDITIONALS_BOUNDARY
+# internal/audit/sender.go:312 `backoff < 30*time.Second`: backoff は
+# 1s から 2 倍ずつ増える (1,2,4,8,16,32,...) ため 30s ちょうどを取ることが
+# 数学的にない。`<` と `<=` はどの到達可能な backoff 値でも同じ真偽値になる
+# (TestSenderRunBackoffGrowsOnRepeatedFailure で 1s→2s→4s の成長を確認済み、
+# キャップ判定自体は30s近辺まで到達しないと観測できないため個別には検証不能)。
+# (2026-08-31 の監査プロデューサ最終修正で元の行 315 から 312 へ行番号がずれた。
+# コード・根拠とも変更なし)
+internal/audit/sender.go:312:15 CONDITIONALS_BOUNDARY

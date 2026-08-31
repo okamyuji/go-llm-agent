@@ -236,7 +236,7 @@ func TestResolveModel(t *testing.T) {
 func TestLoadDeps_BuildsRegistries(t *testing.T) {
 	dir := t.TempDir()
 	path := writeChatConfig(t, dir, "")
-	cfg, reg, tools, store, err := loadDeps(context.Background(), path, false)
+	cfg, reg, tools, store, _, err := loadDeps(context.Background(), path, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestLoadDeps_BuildsRegistries(t *testing.T) {
 }
 
 func TestLoadDeps_ConfigErrorPropagates(t *testing.T) {
-	if _, _, _, _, err := loadDeps(context.Background(), filepath.Join(t.TempDir(), "missing.yaml"), false); err == nil {
+	if _, _, _, _, _, err := loadDeps(context.Background(), filepath.Join(t.TempDir(), "missing.yaml"), false); err == nil {
 		t.Fatal("設定読み込み失敗はエラー期待")
 	}
 }

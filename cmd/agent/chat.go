@@ -27,7 +27,7 @@ type chatSessionParams struct {
 
 // runChatSession 設定を読み REPL を起動する。flag の解釈は呼び出し元が済ませる
 func runChatSession(ctx context.Context, p chatSessionParams) error {
-	cfg, reg, tools, _, err := loadDeps(ctx, p.ConfigPath, false)
+	cfg, reg, tools, _, emitter, err := loadDeps(ctx, p.ConfigPath, false)
 	if err != nil {
 		return err
 	}
@@ -45,6 +45,7 @@ func runChatSession(ctx context.Context, p chatSessionParams) error {
 	if optsErr != nil {
 		return optsErr
 	}
+	opts = append(opts, agent.WithEmitter(emitter))
 	svc := agent.New(reg, tools, opts...)
 
 	outW := p.Out

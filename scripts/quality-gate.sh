@@ -52,7 +52,7 @@ gitleaks detect --no-git --source . --redact --no-banner --config .gitleaks.toml
 # E2E は外部ネットワーク非依存だが、コレクター起動や複数 go build を伴うため
 # pre-commit では skip し、CI と明示要求時のみ全件走らせる
 if [ "${RUN_E2E:-0}" = "1" ]; then
-  echo "==> e2e (28 scripts)"
+  echo "==> e2e (29 scripts)"
   # nullglob を有効化してマッチが 0 件のときにリテラルパターンを実行しないようにする
   shopt -s nullglob
   # 実行順序を決定論的にするため bash の glob ソート (デフォルトで lexical) を明示的に期待する

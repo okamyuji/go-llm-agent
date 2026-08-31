@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,5 +94,35 @@ func TestRunEvalSuite_FailingCaseWritesReportAndErrors(t *testing.T) {
 	}
 	if _, statErr := os.Stat(report); statErr != nil {
 		t.Fatalf("レポートは書かれている期待 got %v", statErr)
+	}
+}
+
+// runWithShutdown は auditEmitter.Shutdown が成功した (nil を返した) ときに
+// エラーログを出してはならない。err == nil を err != nil と誤判定すると、
+// 常に "audit shutdown:" 行を stderr に出すようになる。
+func TestRunWithShutdown_NoAuditShutdownErrorLogged(t *testing.T) {
+	prevEmitter := auditEmitter
+	auditEmitter = nil
+	t.Cleanup(func() { auditEmitter = prevEmitter })
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevStderr := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = prevStderr })
+
+	runWithShutdown()
+
+	if closeErr := w.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	var buf strings.Builder
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "audit shutdown:") {
+		t.Fatalf("Shutdown が nil を返したのに audit shutdown ログが出た: %q", buf.String())
 	}
 }

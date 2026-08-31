@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
+	"github.com/okamyuji/go-llm-agent/internal/audit"
 	"github.com/okamyuji/go-llm-agent/internal/billing"
 	"github.com/okamyuji/go-llm-agent/internal/config"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
@@ -19,6 +20,7 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/llm/openai"
 	"github.com/okamyuji/go-llm-agent/internal/memory"
 	"github.com/okamyuji/go-llm-agent/internal/obs"
+	"github.com/okamyuji/go-llm-agent/internal/safety"
 	"github.com/okamyuji/go-llm-agent/internal/secret"
 	"github.com/okamyuji/go-llm-agent/internal/storage"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
@@ -28,17 +30,26 @@ import (
 // isServe が true のとき、enabled_tools に "fs_edit" が含まれていても tool registry
 // から除外し、警告を stderr へ出す (03-fs-edit.md: read registry はプロセス単位で
 // scope するため、複数リクエストが混在する serve では既読チェックが破綻する)
-func loadDeps(ctx context.Context, configPath string, isServe bool) (*config.Config, llm.Registry, tool.Registry, storage.SessionStore, error) {
+func loadDeps(ctx context.Context, configPath string, isServe bool) (*config.Config, llm.Registry, tool.Registry, storage.SessionStore, *audit.Emitter, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	if terr := initTelemetry(ctx, cfg); terr != nil {
-		return nil, nil, nil, nil, terr
+		return nil, nil, nil, nil, nil, terr
 	}
 	provs, perr := buildProviders(cfg, secret.NewResolver(".env"))
 	if perr != nil {
-		return nil, nil, nil, nil, perr
+		return nil, nil, nil, nil, nil, perr
+	}
+	rd, rerr := buildRedactor(cfg)
+	if rerr != nil {
+		return nil, nil, nil, nil, nil, rerr
+	}
+	emitter := buildAuditEmitter(cfg, rd)
+	auditEmitter = emitter
+	for name, p := range provs {
+		provs[name] = audit.WrapProvider(p, emitter)
 	}
 	llmReg := buildLLMRegistry(cfg, provs)
 
@@ -47,12 +58,35 @@ func loadDeps(ctx context.Context, configPath string, isServe bool) (*config.Con
 	readReg := tool.NewReadRegistry()
 	tools, nerr := attachNoteTools(cfg, logger, buildToolList(cfg, logger, sb, readReg))
 	if nerr != nil {
-		return nil, nil, nil, nil, nerr
+		return nil, nil, nil, nil, nil, nerr
 	}
 	tools = attachMemoryTools(cfg, logger, tools)
 	toolReg := tool.NewRegistry(tools, resolveEnabledTools(cfg, isServe))
 	store := storage.NewSessionStore(expand(cfg.Storage.SessionsDir))
-	return cfg, llmReg, toolReg, store, nil
+	return cfg, llmReg, toolReg, store, emitter, nil
+}
+
+// buildAuditEmitter IGGY_PAT が無ければ nil を返して監査を無効にする。生成だけで I/O は起きない
+func buildAuditEmitter(cfg *config.Config, rd safety.Redactor) *audit.Emitter {
+	pat := os.Getenv("IGGY_PAT")
+	if pat == "" {
+		fmt.Fprintln(os.Stderr, "warn: IGGY_PAT が未設定のため監査イベントの送出を無効にします")
+		return nil
+	}
+	if cfg.Audit.IggyURL != "" {
+		if err := audit.ValidateIggyURL(cfg.Audit.IggyURL); err != nil {
+			fmt.Fprintln(os.Stderr, "warn: 監査イベントの送出を無効にします:", err)
+			return nil
+		}
+	}
+	return audit.NewEmitter(audit.Options{
+		WALDir:   expand(cfg.Audit.WALDir),
+		IggyURL:  cfg.Audit.IggyURL,
+		PAT:      pat,
+		Stream:   cfg.Audit.Stream,
+		Expiry:   cfg.Audit.MessageExpiry,
+		Redactor: rd,
+	})
 }
 
 // initTelemetry OTel が有効なときだけ初期化し、shutdown フックを差し替える。
@@ -226,7 +260,7 @@ type serviceDeps struct {
 // buildServiceDeps config の読み込みから agent.Service の生成までをまとめる。
 // modelOverride が空なら config の default_model を使う
 func buildServiceDeps(ctx context.Context, configPath, modelOverride string, isServe bool) (*serviceDeps, error) {
-	cfg, reg, tools, _, err := loadDeps(ctx, configPath, isServe)
+	cfg, reg, tools, _, emitter, err := loadDeps(ctx, configPath, isServe)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +272,7 @@ func buildServiceDeps(ctx context.Context, configPath, modelOverride string, isS
 	if optsErr != nil {
 		return nil, optsErr
 	}
+	opts = append(opts, agent.WithEmitter(emitter))
 	return &serviceDeps{
 		cfg:      cfg,
 		svc:      agent.New(reg, tools, opts...),
