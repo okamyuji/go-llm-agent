@@ -101,6 +101,14 @@ func TestEventsRejectedBySchema(t *testing.T) {
 	}
 }
 
+// TestMaxPayloadBytesMatchesIggySpec は Iggy 0.8.0 の MAX_PAYLOAD_SIZE
+// (64,000,000 バイト) と一致することを固定値で検証する。
+func TestMaxPayloadBytesMatchesIggySpec(t *testing.T) {
+	if MaxPayloadBytes != 64000000 {
+		t.Fatalf("MaxPayloadBytes=%d, want 64000000", MaxPayloadBytes)
+	}
+}
+
 func TestMarshalIsSingleLine(t *testing.T) {
 	e := baseEvent(KindUsage)
 	e.Payload = mustRaw(t, UsagePayload{})

@@ -1,8 +1,10 @@
 package audit
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -161,4 +163,48 @@ func TestEmitterShutdownWaitsForSenderDone(t *testing.T) {
 	if len(fi.received) != 2 {
 		t.Fatalf("received=%d, want 2 (sender.run must have drained before Shutdown returned)", len(fi.received))
 	}
+}
+
+// TestEmitDoesNotLogFailureOnSuccessfulAppend は WAL 追記成功時に
+// 「wal append failed」を誤ってログしないことを確認する
+// (emit の `if _, err := w.Append(ev); err != nil` の判定が壊れると
+// 成功時にも失敗ログが出る)。
+func TestEmitDoesNotLogFailureOnSuccessfulAppend(t *testing.T) {
+	dir := t.TempDir()
+	fi := newFakeIggy(t)
+	e := NewEmitter(Options{WALDir: dir, IggyURL: fi.srv.URL, PAT: "p"})
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	e.ToolCall(context.Background(), llm.ToolCall{ID: "c", Name: "x"})
+	_ = e.Shutdown(context.Background())
+
+	if bytes.Contains(buf.Bytes(), []byte("wal append failed")) {
+		t.Fatalf("successful append must not log a failure: %s", buf.String())
+	}
+	evs := readAllEvents(t, dir)
+	if len(evs) != 1 {
+		t.Fatalf("events=%d, want 1 (successful append must reach the WAL)", len(evs))
+	}
+}
+
+// TestEmitterShutdownReleasesLock は Shutdown が run lock ファイルを実際に
+// close することを確認する (`if e.lock != nil` が壊れると lock が保持され続け、
+// 同じ run のロックを他プロセスが取得できなくなる)。
+func TestEmitterShutdownReleasesLock(t *testing.T) {
+	dir := t.TempDir()
+	fi := newFakeIggy(t)
+	e := NewEmitter(Options{WALDir: dir, IggyURL: fi.srv.URL, PAT: "p"})
+	e.ToolCall(context.Background(), llm.ToolCall{ID: "c", Name: "x"}) // init() を確実に走らせて lock を取らせる
+	if err := e.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f, ok := tryLockRun(dir, e.RunID())
+	if !ok {
+		t.Fatal("run lock must be released after Shutdown")
+	}
+	_ = f.Close()
 }

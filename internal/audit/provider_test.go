@@ -112,3 +112,41 @@ func TestChatRecordsAndEmitsUsageOnlyWhenNonZero(t *testing.T) {
 		t.Fatalf("kinds=%v", kinds)
 	}
 }
+
+// TestChatEmitsUsageForOutputTokensOnly は InputTokens=0, OutputTokens>0 の
+// ケースを直接検証する。この組み合わせは
+// InputTokens+OutputTokens>0 (真) と InputTokens-OutputTokens>0 (偽) で
+// 判定が分かれるため、+ の取り違えを検出できる
+// (TestChatRecordsAndEmitsUsageOnlyWhenNonZero は InputTokens 側のみで
+// 両者が一致してしまい判別できない)。
+func TestChatEmitsUsageForOutputTokensOnly(t *testing.T) {
+	dir := t.TempDir()
+	fi := newFakeIggy(t)
+	e := NewEmitter(Options{WALDir: dir, IggyURL: fi.srv.URL, PAT: "p"})
+	p := &scriptedProvider{chat: &llm.ChatResponse{Message: llm.Message{Role: llm.RoleAssistant, Content: "sum"}, FinishReason: "stop"}}
+	wp := WrapProvider(p, e)
+	ctx := WithSessionID(context.Background(), "s")
+
+	if _, err := wp.Chat(ctx, llm.ChatRequest{Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if kinds := countKinds(readAllEvents(t, dir)); kinds[KindUsage] != 0 {
+		t.Fatalf("zero usage must not emit a usage event, kinds=%v", kinds)
+	}
+
+	p.chat.Usage = llm.Usage{OutputTokens: 5}
+	if _, err := wp.Chat(ctx, llm.ChatRequest{Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if kinds := countKinds(readAllEvents(t, dir)); kinds[KindUsage] != 1 {
+		t.Fatalf("output-tokens-only usage must emit exactly 1 usage event, kinds=%v", kinds)
+	}
+}
+
+func countKinds(evs []Event) map[Kind]int {
+	kinds := map[Kind]int{}
+	for _, ev := range evs {
+		kinds[ev.Kind]++
+	}
+	return kinds
+}

@@ -1,7 +1,9 @@
 package audit
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -110,6 +112,45 @@ func TestCursorAtomicWriteAndCorruptRead(t *testing.T) {
 	}
 	if got := readCursor(filepath.Join(dir, "missing")); got != 0 {
 		t.Fatalf("missing cursor must read as 0, got %d", got)
+	}
+}
+
+// TestReadFromRespectsMaxLimit は readFrom が max 件ちょうどで止まることを
+// 確認する (`for len(out) < max` が `<=` になると max+1 件読んでしまう)。
+func TestReadFromRespectsMaxLimit(t *testing.T) {
+	dir := t.TempDir()
+	w, _ := openWAL(dir, "s", "r")
+	for i := 0; i < 5; i++ {
+		_, _ = w.Append(newTestEvent(KindUsage))
+	}
+	recs, err := readFrom(walPath(dir, "s", "r"), 0, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 3 {
+		t.Fatalf("recs=%d, want exactly max=3", len(recs))
+	}
+}
+
+// TestReadFromCleanEOFDoesNotWarn は改行で終わる完全な WAL を末尾まで読んだとき
+// 「dropping partial tail line」を誤って警告しないことを確認する
+// (`if len(line) > 0` が壊れると、行の無い正常な EOF でも警告してしまう)。
+func TestReadFromCleanEOFDoesNotWarn(t *testing.T) {
+	dir := t.TempDir()
+	w, _ := openWAL(dir, "s", "r")
+	_, _ = w.Append(newTestEvent(KindUsage))
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	recs, err := readFrom(walPath(dir, "s", "r"), 0, 100)
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("recs=%d err=%v", len(recs), err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte("dropping partial tail line")) {
+		t.Fatalf("clean EOF must not warn about a partial tail: %s", buf.String())
 	}
 }
 
