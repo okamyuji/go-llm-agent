@@ -342,18 +342,31 @@ func flowRun(ctx context.Context, bin string) result {
 	if !containsInOrder(kinds, expectedKindOrder) {
 		return result{name, fmt.Errorf("イベント順序が不正: got=%v want (部分列として)=%v", kinds, expectedKindOrder)}
 	}
-	// tool_call / tool_result が call_id を共有すること
-	var toolCallID, toolResultID string
-	for _, e := range got {
-		if e.Kind == "tool_call" {
-			toolCallID = e.CallID
+	// seq が 0 起点で受信順に連番であること (この導線は 1 session/1 run しか使わない)
+	for i, e := range got {
+		if e.Seq != uint64(i) {
+			return result{name, fmt.Errorf("seq が連番でない: index=%d seq=%d (got=%+v)", i, e.Seq, got)}
 		}
-		if e.Kind == "tool_result" {
+	}
+	// tool_call / tool_result / (tool_call を伴う) llm_response が call_id を共有すること
+	var toolCallID, toolResultID, toolLLMResponseID string
+	for _, e := range got {
+		switch e.Kind {
+		case "tool_call":
+			toolCallID = e.CallID
+		case "tool_result":
 			toolResultID = e.CallID
+		case "llm_response":
+			if e.CallID != "" {
+				toolLLMResponseID = e.CallID
+			}
 		}
 	}
 	if toolCallID == "" || toolCallID != toolResultID {
 		return result{name, fmt.Errorf("tool_call/tool_result の call_id が一致しない: call=%q result=%q", toolCallID, toolResultID)}
+	}
+	if toolLLMResponseID != toolCallID {
+		return result{name, fmt.Errorf("ツール呼出を伴う llm_response の call_id が tool_call と一致しない: llm_response=%q tool_call=%q", toolLLMResponseID, toolCallID)}
 	}
 	// session_id が全イベントで同一・非空であること。run サブコマンドは Input.SessionID を
 	// 設定しないため、実装上は audit.NormalizeSessionID のフォールバック "run-<runID>" になる
