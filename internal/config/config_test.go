@@ -600,3 +600,18 @@ func TestLoad_ShellOSSandboxRejectsInvalidValue(t *testing.T) {
 		t.Fatalf("want os_sandbox error, got %v", err)
 	}
 }
+
+func TestAuditConfigLoads(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(p, []byte("default_model: m\naudit:\n  iggy_url: http://127.0.0.1:3100\n  wal_dir: /tmp/x\n  stream: s\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Audit.IggyURL != "http://127.0.0.1:3100" || cfg.Audit.WALDir != "/tmp/x" || cfg.Audit.Stream != "s" {
+		t.Fatalf("audit=%+v", cfg.Audit)
+	}
+}
