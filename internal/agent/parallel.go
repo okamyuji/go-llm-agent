@@ -126,10 +126,11 @@ func (s *service) executeOne(ctx context.Context, sessionID string, call llm.Too
 	execCtx, span := obs.StartToolSpan(execCtx, call.Name, call.ID)
 	start := time.Now()
 	res, terr := t.Execute(execCtx, call.Arguments)
+	d := time.Since(start)
 	ok2 := terr == nil && !res.IsError
-	obs.RecordToolOutcome(execCtx, call.Name, ok2, time.Since(start))
+	obs.RecordToolOutcome(execCtx, call.Name, ok2, d)
 	span.End()
-	s.hooks.RunPost(ctx, call.Name, call.Arguments, HookResult{IsError: !ok2, Content: res.Content, Duration: time.Since(start)})
+	s.hooks.RunPost(ctx, call.Name, call.Arguments, HookResult{IsError: !ok2, Content: res.Content, Duration: d})
 	content := res.Content
 	if terr != nil {
 		content = terr.Error()
@@ -140,5 +141,5 @@ func (s *service) executeOne(ctx context.Context, sessionID string, call llm.Too
 	if s.redactor != nil {
 		content = s.redactor.Redact(content)
 	}
-	return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: content, IsError: terr != nil || res.IsError, Duration: time.Since(start)}
+	return ParallelOutcome{CallID: call.ID, Name: call.Name, Content: content, IsError: terr != nil || res.IsError, Duration: d}
 }

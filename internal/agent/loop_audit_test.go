@@ -6,12 +6,26 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/audit"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
 )
+
+// slowTool ~20ms 実行にかかる偽ツール。tool_result の duration_ms が
+// Execute の実測を反映することを確認するために使う
+type slowTool struct{ name string }
+
+func (t slowTool) Spec() tool.Spec {
+	return tool.Spec{Name: t.name, Description: t.name, Schema: json.RawMessage(`{"type":"object"}`)}
+}
+
+func (t slowTool) Execute(_ context.Context, _ json.RawMessage) (tool.Result, error) {
+	time.Sleep(20 * time.Millisecond)
+	return tool.Result{Content: "slow done"}, nil
+}
 
 func readAuditEvents(t *testing.T, dir string) []audit.Event {
 	t.Helper()
@@ -172,6 +186,43 @@ func TestUnknownToolProducesToolResultAtCaller(t *testing.T) {
 	k := countKinds(readAuditEvents(t, dir))
 	if k[audit.KindToolCall] != 1 || k[audit.KindToolResult] != 1 {
 		t.Fatalf("kinds=%v", k)
+	}
+}
+
+// TestToolResultDurationReflectsExecuteTime executeOne (parallel.go) の Duration が
+// t.Execute の実測時間だけを含むことを検証する。自動 web_search 経路
+// (invokeAutomaticTool → executeOne) を通すことで、承認/hook を持たない
+// executeOne の生の Duration を tool_result の duration_ms 経由で観測できる
+func TestToolResultDurationReflectsExecuteTime(t *testing.T) {
+	e, dir := newAuditEmitterForTest(t)
+	prov := &fakeProvider{streams: [][]llm.StreamEvent{
+		{{DeltaText: "latest news is stable"}},
+	}}
+	tools := tool.NewRegistry([]tool.Tool{slowTool{name: "web_search"}}, []string{"web_search"})
+	svc := agent.New(newRegistryFor(prov), tools, agent.WithEmitter(e))
+	out := make(chan agent.Event, 100)
+	err := svc.Run(context.Background(), agent.Input{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "latest news"}}, SessionID: "s", MaxToolHops: 3}, out)
+	close(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = e.Shutdown(context.Background())
+	var found bool
+	for _, ev := range readAuditEvents(t, dir) {
+		if ev.Kind != audit.KindToolResult {
+			continue
+		}
+		var p audit.ToolResultPayload
+		if uerr := json.Unmarshal(ev.Payload, &p); uerr != nil {
+			t.Fatal(uerr)
+		}
+		found = true
+		if p.DurationMS < 20 {
+			t.Fatalf("duration_ms=%d, ツール実行 (~20ms sleep) を反映する期待 (下限のみ、上限なし)", p.DurationMS)
+		}
+	}
+	if !found {
+		t.Fatal("tool_result イベント期待")
 	}
 }
 
