@@ -33,20 +33,20 @@ type Options struct {
 // Emitter 監査イベントを WAL へ書き、送信 goroutine で Iggy へ送る。
 // 生成時には何も作らず、最初のイベントで sync.Once により初期化する
 type Emitter struct {
-	opts    Options
-	runID   string
-	once    sync.Once
+	opts  Options
+	runID string
+	once  sync.Once
 	// initDone init() の成功パス (cancel/sender 設定済み) の末尾でのみ true にする。
 	// atomic の Store/Load が cancel/sender の書き込みと Shutdown での読み出しとの間に
 	// happens-before の関係を作る
 	initDone atomic.Bool
 	initErr  error
 	lock     *os.File
-	walMu   sync.Mutex
-	wals    map[string]*walFile
-	sender  *sender
-	cancel  context.CancelFunc
-	warned  sync.Map
+	walMu    sync.Mutex
+	wals     map[string]*walFile
+	sender   *sender
+	cancel   context.CancelFunc
+	warned   sync.Map
 }
 
 // NewEmitter ファイルも goroutine も作らない
@@ -195,7 +195,8 @@ func (e *Emitter) LLMResponse(ctx context.Context, provider, model, content stri
 		ev.CallID = call.ID
 	}
 	if err != nil {
-		p.Error = err.Error()
+		// プロバイダの HTTP エラー本文はリクエスト内容を含みうるため content と同じく redactor を通す
+		p.Error = RedactString(err.Error(), e.opts.Redactor)
 	}
 	raw, _ := json.Marshal(p)
 	ev.Payload = raw
@@ -246,6 +247,9 @@ func (e *Emitter) Shutdown(ctx context.Context) error {
 	select {
 	case <-e.sender.done:
 	case <-ctx.Done():
+		// 送信ループがまだ最終ドレイン中なので run lock は握ったままにする。ここで解放すると
+		// 別プロセスの scanDeadRuns が同じ WAL を回収し始めて二重送信になる。lock はプロセス終了で外れる
+		return ctx.Err()
 	}
 	if e.lock != nil {
 		_ = e.lock.Close()

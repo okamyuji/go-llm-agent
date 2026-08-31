@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -39,7 +41,32 @@ type iggyClient struct {
 
 func newIggyClient(baseURL, pat, stream, expiry string) *iggyClient {
 	return &iggyClient{baseURL: strings.TrimRight(baseURL, "/"), pat: pat, stream: stream, expiry: expiry,
-		http: &http.Client{Timeout: 30 * time.Second}}
+		http: &http.Client{
+			Timeout: 30 * time.Second,
+			// PAT / Bearer を別ホスト・別スキームへ転送しないよう redirect は一切追わない
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}}
+}
+
+// ValidateIggyURL 資格情報を平文で送らないための事前検査。https か、ループバック宛の http だけを許す
+func ValidateIggyURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("iggy url: %w", err)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		ip := net.ParseIP(host)
+		if host == "localhost" || (ip != nil && ip.IsLoopback()) {
+			return nil
+		}
+		return fmt.Errorf("iggy url: %q は平文 http のリモート宛です。https か 127.0.0.1 を使ってください", raw)
+	default:
+		return fmt.Errorf("iggy url: 未対応のスキーム %q", u.Scheme)
+	}
 }
 
 var errUnauthorized = errors.New("iggy: unauthorized")

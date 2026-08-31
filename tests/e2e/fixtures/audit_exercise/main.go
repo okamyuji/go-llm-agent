@@ -481,7 +481,7 @@ func flowServe(ctx context.Context, bin string) result {
 	var headeredCount int
 	// 送信順は保証されないため、session_id の値で仕分けする
 	seen := map[string]bool{}
-	var uuids []string
+	var uuids, unexpected []string
 	for _, e := range got {
 		switch {
 		case e.SessionID == "e2e-abc":
@@ -489,13 +489,15 @@ func flowServe(ctx context.Context, bin string) result {
 		case len(e.SessionID) == 36:
 			uuids = append(uuids, e.SessionID)
 			seen[e.SessionID] = true
+		default:
+			unexpected = append(unexpected, e.SessionID)
 		}
 	}
 	if headeredCount == 0 {
 		return result{name, fmt.Errorf("X-Session-Id ヘッダが伝播していない")}
 	}
-	if strings.Contains(strings.Join(uuids, ","), "../") {
-		return result{name, fmt.Errorf("不正ヘッダの ../ が session_id に混入した: %v", uuids)}
+	if len(unexpected) > 0 {
+		return result{name, fmt.Errorf("ヘッダ値でも UUID でもない session_id が混入した（不正ヘッダの素通し）: %v", unexpected)}
 	}
 	if len(seen) < 2 {
 		return result{name, fmt.Errorf("ヘッダ無し/不正ヘッダの session_id が UUID として 2 種類に分かれていない: %v", uuids)}
@@ -709,7 +711,9 @@ func flowNoPAT(ctx context.Context, bin string) result {
 }
 
 func main() {
-	ctx := context.Background()
+	// 子プロセスは全て exec.CommandContext(ctx) なので、この上限が agent の hang を止める最後の砦
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 	root, err := os.MkdirTemp("", "audit-e2e-*")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mkdtemp:", err)

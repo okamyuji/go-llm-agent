@@ -73,6 +73,12 @@ func buildAuditEmitter(cfg *config.Config, rd safety.Redactor) *audit.Emitter {
 		fmt.Fprintln(os.Stderr, "warn: IGGY_PAT が未設定のため監査イベントの送出を無効にします")
 		return nil
 	}
+	if cfg.Audit.IggyURL != "" {
+		if err := audit.ValidateIggyURL(cfg.Audit.IggyURL); err != nil {
+			fmt.Fprintln(os.Stderr, "warn: 監査イベントの送出を無効にします:", err)
+			return nil
+		}
+	}
 	return audit.NewEmitter(audit.Options{
 		WALDir:   expand(cfg.Audit.WALDir),
 		IggyURL:  cfg.Audit.IggyURL,

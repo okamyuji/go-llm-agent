@@ -45,10 +45,10 @@ type HookConfig struct {
 
 // AuditConfig 監査イベント送出の設定。PAT は環境変数 IGGY_PAT からだけ読む
 type AuditConfig struct {
-	IggyURL       string `yaml:"iggy_url"`        // 既定 http://127.0.0.1:3000
-	WALDir        string `yaml:"wal_dir"`         // 既定 ~/.go-llm-agent/audit-wal
-	MessageExpiry string `yaml:"message_expiry"`  // マイクロ秒。空なら 90 日 (7776000000000)
-	Stream        string `yaml:"stream"`          // 既定 agent-audit
+	IggyURL       string `yaml:"iggy_url"`       // 既定 http://127.0.0.1:3000
+	WALDir        string `yaml:"wal_dir"`        // 既定 ~/.go-llm-agent/audit-wal
+	MessageExpiry string `yaml:"message_expiry"` // マイクロ秒。空なら 90 日 (7776000000000)
+	Stream        string `yaml:"stream"`         // 既定 agent-audit
 }
 
 // SafetyConfig 入出力フィルタとリダクタの設定

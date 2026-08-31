@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/okamyuji/go-llm-agent/internal/llm"
@@ -60,15 +61,22 @@ type auditStream struct {
 	call     *llm.ToolCall
 	finish   string
 	done     bool
+	// completed は inner が終端（EOF か Err）を返したときだけ true。終端前の Close は
+	// モデル出力の途中打ち切りなので、成功として記録せず error 付きで残す
+	completed bool
 }
+
+var errStreamClosedEarly = errors.New("stream closed before completion")
 
 func (s *auditStream) Recv() (llm.StreamEvent, bool) {
 	ev, ok := s.inner.Recv()
 	if !ok {
+		s.completed = true
 		s.finishOnce(nil)
 		return ev, ok
 	}
 	if ev.Err != nil {
+		s.completed = true
 		s.finishOnce(ev.Err)
 		return ev, ok
 	}
@@ -99,6 +107,10 @@ func (s *auditStream) finishOnce(err error) {
 }
 
 func (s *auditStream) Close() error {
-	s.finishOnce(nil)
+	if s.completed {
+		s.finishOnce(nil)
+	} else {
+		s.finishOnce(errStreamClosedEarly)
+	}
 	return s.inner.Close()
 }
