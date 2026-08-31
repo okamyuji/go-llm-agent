@@ -189,8 +189,8 @@ type sender struct {
 	dir    string
 	runID  string
 	client *iggyClient
-	wake   chan struct{} // nolint:unused // Task 6 で run() を起動する側から Append 後に叩く
-	done   chan struct{} // nolint:unused // Task 6 で run() の終了待ちに使う
+	wake   chan struct{}
+	done   chan struct{}
 }
 
 // withAuth 401 のとき 1 回だけ再ログインして f をやり直す
@@ -292,13 +292,18 @@ func (s *sender) scanDeadRuns(ctx context.Context) {
 }
 
 // run 送信ループ。wake か 1 秒ごとに自 run を drain し、失敗時は指数バックオフ（最大 30 秒）
-// nolint:unused // Task 6 で送信ループの起動側から呼ばれる
 func (s *sender) run(ctx context.Context) {
 	defer close(s.done)
-	s.scanDeadRuns(ctx)
+	// scanDeadRuns と通常ループの drainRun は呼び出し元 ctx で中断させない。中断すると
+	// 「サーバ側は処理済みだがクライアントは失敗と判断」のケースが生まれ、次の送信（ここでは
+	// 直後の shutdown drain）が同じバッチを二重送信する。ループの停止判定は下の select の
+	// ctx.Done() 側だけで行い、実際の送信は HTTP クライアントのタイムアウトにのみ委ねる
+	//nolint:contextcheck // 上記理由により意図的に独立させる
+	s.scanDeadRuns(context.Background())
 	backoff := time.Second
 	for {
-		err := s.drainRun(ctx, s.sessionDirs(), s.runID)
+		//nolint:contextcheck // 上記理由により意図的に独立させる
+		err := s.drainRun(context.Background(), s.sessionDirs(), s.runID)
 		if err != nil {
 			slog.Warn("audit: send failed, will retry", "err", err, "backoff", backoff)
 		} else {
