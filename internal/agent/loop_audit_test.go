@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/audit"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
+	"github.com/okamyuji/go-llm-agent/internal/safety"
 	"github.com/okamyuji/go-llm-agent/internal/tool"
 )
 
@@ -171,6 +173,46 @@ func TestDeniedToolCallStillGetsToolResult(t *testing.T) {
 				t.Fatal("denied call must produce is_error=true")
 			}
 		}
+	}
+}
+
+// TestApprovalDenialReasonRedactedInAuditToolResult 承認拒否理由に含まれる機微情報が
+// 監査ログ (WAL) の tool_result content には現れず (redactor 適用済み)、
+// モデル履歴側 (appendToolError 経由) は非 redaction のまま残ることを確認する
+func TestApprovalDenialReasonRedactedInAuditToolResult(t *testing.T) {
+	e, dir := newAuditEmitterForTest(t)
+	prov := newScriptedProviderForAudit(t)
+	tools := newToolRegistryForAudit(t)
+	redactor, rerr := safety.NewRedactorFromConfig(safety.OutputRedactorConfig{
+		Enabled: true,
+		Rules:   []safety.OutputRedactorRule{{ID: "secret", Regex: `sk-[a-z]+`, Replacement: "[REDACTED]"}},
+	})
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	svc := agent.New(newRegistryFor(prov), tools, agent.WithEmitter(e), agent.WithRedactor(redactor),
+		agent.WithApprovalDecider(agent.AutoDecider{Allow: false, Reason: "leaked key sk-abcdef found"}, []string{"shell"}, 0))
+	out := make(chan agent.Event, 100)
+	_ = svc.Run(context.Background(), agent.Input{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "go"}}, SessionID: "s", MaxToolHops: 3, EnabledTools: []string{"shell"}}, out)
+	close(out)
+	_ = e.Shutdown(context.Background())
+	evs := readAuditEvents(t, dir)
+	var found bool
+	for _, ev := range evs {
+		if ev.Kind != audit.KindToolResult {
+			continue
+		}
+		var p audit.ToolResultPayload
+		if uerr := json.Unmarshal(ev.Payload, &p); uerr != nil {
+			t.Fatal(uerr)
+		}
+		found = true
+		if strings.Contains(p.Content, "sk-abcdef") {
+			t.Fatalf("WAL tool_result content に機微情報が残っている: %q", p.Content)
+		}
+	}
+	if !found {
+		t.Fatal("tool_result イベント期待")
 	}
 }
 

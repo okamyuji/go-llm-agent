@@ -151,18 +151,22 @@ func TestEnsureTopicPaths(t *testing.T) {
 	}
 }
 
-// TestExpiryJSONValue は数値文字列を uint64 に、非数値文字列をそのまま
-// 文字列で返すことを検証する (`err == nil` の判定取り違えを検出する)。
+// TestExpiryJSONValue は数値文字列を uint64 に復元することを検証する
+// (`err == nil` の判定取り違えを検出する)。
 func TestExpiryJSONValue(t *testing.T) {
 	c := newIggyClient("http://example.invalid", "pat", "s", "7776000000000")
-	v, ok := c.expiryJSONValue().(uint64)
-	if !ok || v != 7776000000000 {
-		t.Fatalf("numeric expiry must decode to uint64, got %#v", c.expiryJSONValue())
+	if v := c.expiryJSONValue(); v != 7776000000000 {
+		t.Fatalf("numeric expiry must decode to uint64, got %#v", v)
 	}
-	c2 := newIggyClient("http://example.invalid", "pat", "s", "not-a-number")
-	v2, ok := c2.expiryJSONValue().(string)
-	if !ok || v2 != "not-a-number" {
-		t.Fatalf("non-numeric expiry must pass through as string, got %#v", c2.expiryJSONValue())
+}
+
+// TestNewEmitterFallsBackToDefaultExpiryOnInvalidValue は Options.Expiry に
+// 数値として解釈できない値が渡された場合、既定値 (90 日) にフォールバックする
+// ことを検証する (invalid config value → default used)。
+func TestNewEmitterFallsBackToDefaultExpiryOnInvalidValue(t *testing.T) {
+	e := NewEmitter(Options{WALDir: t.TempDir(), Expiry: "not-a-number"})
+	if e.opts.Expiry != defaultExpiry {
+		t.Fatalf("invalid Expiry must fall back to default, got %q", e.opts.Expiry)
 	}
 }
 

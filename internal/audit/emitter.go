@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +16,9 @@ import (
 	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/safety"
 )
+
+// defaultExpiry message_expiry の既定値 (90 日、マイクロ秒)。Iggy 0.8.0 は u64 を要求する
+const defaultExpiry = "7776000000000"
 
 // Options Emitter の設定
 type Options struct {
@@ -31,8 +36,12 @@ type Emitter struct {
 	opts    Options
 	runID   string
 	once    sync.Once
-	initErr error
-	lock    *os.File
+	// initDone init() の成功パス (cancel/sender 設定済み) の末尾でのみ true にする。
+	// atomic の Store/Load が cancel/sender の書き込みと Shutdown での読み出しとの間に
+	// happens-before の関係を作る
+	initDone atomic.Bool
+	initErr  error
+	lock     *os.File
 	walMu   sync.Mutex
 	wals    map[string]*walFile
 	sender  *sender
@@ -53,7 +62,10 @@ func NewEmitter(o Options) *Emitter {
 		o.Stream = "agent-audit"
 	}
 	if o.Expiry == "" {
-		o.Expiry = "7776000000000" // 90 日 (マイクロ秒)。Iggy 0.8.0 は u64 を要求する
+		o.Expiry = defaultExpiry
+	} else if _, err := strconv.ParseUint(o.Expiry, 10, 64); err != nil {
+		slog.Warn("audit: invalid Expiry, using default", "expiry", o.Expiry, "err", err)
+		o.Expiry = defaultExpiry
 	}
 	return &Emitter{opts: o, runID: uuid.NewString(), wals: map[string]*walFile{}}
 }
@@ -83,6 +95,7 @@ func (e *Emitter) init() error {
 			done:   make(chan struct{}),
 		}
 		go e.sender.run(ctx)
+		e.initDone.Store(true)
 	})
 	return e.initErr
 }
@@ -218,7 +231,15 @@ func (e *Emitter) Usage(ctx context.Context, provider, model string, u llm.Usage
 
 // Shutdown 送信中の 1 件を待ってから戻る。未初期化なら何もしない
 func (e *Emitter) Shutdown(ctx context.Context) error {
-	if e == nil || e.cancel == nil {
+	if e == nil {
+		return nil
+	}
+	// initDone.Load() が false の場合、まだ (これまでのところ) 誰も init() を完了させて
+	// いないので cancel/sender は未設定として no-op で戻る。true の場合は init() の
+	// 成功パス末尾の Store と happens-before の関係を持つため、以降の cancel/sender の
+	// 読み出しは安全 (Once 自体は Do を呼んだ goroutine 間でしか同期を保証しないため、
+	// 直接 e.cancel を読むだけでは -race が競合を検出する)
+	if !e.initDone.Load() {
 		return nil
 	}
 	e.cancel()

@@ -143,6 +143,43 @@ func TestChatEmitsUsageForOutputTokensOnly(t *testing.T) {
 	}
 }
 
+// TestStreamEmptyCompletionSatisfiesSchema Recv が即 (StreamEvent{}, false) を返す
+// (デルタなし・tool_call なし・エラーなし) ケースでも llm_response の content が
+// 空文字列のまま出力され、schema の anyOf (content|tool_call|error) を満たすことを検証する
+func TestStreamEmptyCompletionSatisfiesSchema(t *testing.T) {
+	dir := t.TempDir()
+	fi := newFakeIggy(t)
+	e := NewEmitter(Options{WALDir: dir, IggyURL: fi.srv.URL, PAT: "p"})
+	p := &scriptedProvider{events: nil}
+	wp := WrapProvider(p, e)
+	ctx := WithSessionID(context.Background(), "s")
+	st, err := wp.Stream(ctx, llm.ChatRequest{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, ok := st.Recv(); !ok {
+			break
+		}
+	}
+	_ = st.Close()
+	_ = e.Shutdown(context.Background())
+	s := loadSchema(t)
+	var found bool
+	for _, ev := range readAllEvents(t, dir) {
+		if ev.Kind != KindLLMResponse {
+			continue
+		}
+		found = true
+		if verr := validate(t, s, ev); verr != nil {
+			t.Errorf("llm_response with empty completion must satisfy schema: %v", verr)
+		}
+	}
+	if !found {
+		t.Fatal("llm_response event expected")
+	}
+}
+
 func countKinds(evs []Event) map[Kind]int {
 	kinds := map[Kind]int{}
 	for _, ev := range evs {

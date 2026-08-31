@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/okamyuji/go-llm-agent/internal/llm"
 )
 
 type fakeIggy struct {
@@ -136,6 +139,36 @@ func TestSenderRetriesAfter5xxAndReloginsOn401(t *testing.T) {
 	}
 	if len(fi.received) != 1 || fi.logins.Load() < 1 {
 		t.Fatalf("received=%d logins=%d", len(fi.received), fi.logins.Load())
+	}
+}
+
+// TestSenderBackoffIgnoresWakeWhileFailing は送信が 500 で失敗し続けている間、
+// emit のたびに飛ぶ wake が backoff の待ち時間を短縮しないことを確認する。
+// 修正前は wake が backoff 中も有効なため、イベント数にほぼ比例して送信試行が
+// 増える (リトライ間隔が実質縮む)
+func TestSenderBackoffIgnoresWakeWhileFailing(t *testing.T) {
+	dir := t.TempDir()
+	fi := newFakeIggy(t)
+	fi.failSends.Store(100000) // テスト時間内は常に 500 を返す
+	e := NewEmitter(Options{WALDir: dir, IggyURL: fi.srv.URL, PAT: "p"})
+	ctx := WithSessionID(context.Background(), "s")
+
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for i := 0; i < 50; i++ {
+		e.Usage(ctx, "p", "m", llm.Usage{InputTokens: 1})
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(1500 * time.Millisecond / 50)
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := e.Shutdown(shutdownCtx); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 100000 - fi.failSends.Load()
+	if attempts > 6 {
+		t.Fatalf("send attempts=%d, want <=6 (backoff must not shorten under wake pressure)", attempts)
 	}
 }
 

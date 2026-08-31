@@ -165,6 +165,30 @@ func TestEmitterShutdownWaitsForSenderDone(t *testing.T) {
 	}
 }
 
+// TestEmitterShutdownRacesWithFirstEmit は最初の emit (init() を初めて
+// トリガする) と Shutdown が並行しても -race で検出される競合や
+// デッドロックが起きないことを確認する
+func TestEmitterShutdownRacesWithFirstEmit(t *testing.T) {
+	dir := t.TempDir()
+	fi := newFakeIggy(t)
+	e := NewEmitter(Options{WALDir: dir, IggyURL: fi.srv.URL, PAT: "p"})
+	ctx := WithSessionID(context.Background(), "s")
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		e.Usage(ctx, "p", "m", llm.Usage{InputTokens: 1})
+	}()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := e.Shutdown(shutdownCtx); err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+}
+
 // TestEmitDoesNotLogFailureOnSuccessfulAppend は WAL 追記成功時に
 // 「wal append failed」を誤ってログしないことを確認する
 // (emit の `if _, err := w.Append(ev); err != nil` の判定が壊れると

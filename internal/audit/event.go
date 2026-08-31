@@ -61,7 +61,7 @@ type LLMRequestPayload struct {
 
 // LLMResponsePayload llm_response の payload
 type LLMResponsePayload struct {
-	Content  string           `json:"content,omitempty"`
+	Content  string           `json:"content"`
 	ToolCall *ToolCallPayload `json:"tool_call,omitempty"`
 	Finish   string           `json:"finish,omitempty"`
 	Error    string           `json:"error,omitempty"`

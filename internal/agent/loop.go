@@ -120,7 +120,11 @@ func (s *service) runReAct(ctx context.Context, in Input, out chan<- Event) erro
 		st.msgs = append(st.msgs, llm.Message{Role: llm.RoleAssistant, Content: res.content, ToolCalls: []llm.ToolCall{*res.call}})
 		if terr := s.handleToolCall(ctx, in, st, res.call, out); terr != nil {
 			// appendToolError を通らずに返る経路 (ツール未検出、検証回数超過、承認機構のエラー) もここで 1 件残す
-			s.emitter.ToolResult(ctx, res.call.ID, res.call.Name, terr.Error(), true, 0)
+			errContent := terr.Error()
+			if s.redactor != nil {
+				errContent = s.redactor.Redact(errContent)
+			}
+			s.emitter.ToolResult(ctx, res.call.ID, res.call.Name, errContent, true, 0)
 			return emitFail(out, terr)
 		}
 	}
@@ -380,7 +384,11 @@ func (s *service) handleToolCall(ctx context.Context, in Input, st *reactState, 
 	// 外部コマンドを起動しないため (09 番設計書 3.3 節)
 	if allowed, reason := s.hooks.RunPre(ctx, call.Name, call.Arguments); !allowed {
 		content := "tool execution blocked by pre_tool_use hook: " + reason
-		s.emitter.ToolResult(ctx, call.ID, call.Name, content, true, 0)
+		emitContent := content
+		if s.redactor != nil {
+			emitContent = s.redactor.Redact(emitContent)
+		}
+		s.emitter.ToolResult(ctx, call.ID, call.Name, emitContent, true, 0)
 		st.appendToolError(out, call, content)
 		return nil
 	}
@@ -406,7 +414,11 @@ func (s *service) validateToolArgs(ctx context.Context, st *reactState, call *ll
 	if st.validationRetries < st.maxValidationRetries {
 		st.validationRetries++
 		content := "schema validation failed: " + vmsg + " — please correct the arguments to match the JSON schema and try again"
-		s.emitter.ToolResult(ctx, call.ID, call.Name, content, true, 0)
+		emitContent := content
+		if s.redactor != nil {
+			emitContent = s.redactor.Redact(emitContent)
+		}
+		s.emitter.ToolResult(ctx, call.ID, call.Name, emitContent, true, 0)
 		st.appendToolError(out, call, content)
 		return false, nil
 	}
@@ -447,7 +459,11 @@ func (s *service) requestApproval(ctx context.Context, in Input, st *reactState,
 		if reason != "" {
 			content += ": " + reason
 		}
-		s.emitter.ToolResult(ctx, call.ID, call.Name, content, true, 0)
+		emitContent := content
+		if s.redactor != nil {
+			emitContent = s.redactor.Redact(emitContent)
+		}
+		s.emitter.ToolResult(ctx, call.ID, call.Name, emitContent, true, 0)
 		st.appendToolError(out, call, content)
 		return false, nil
 	}

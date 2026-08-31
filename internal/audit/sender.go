@@ -113,13 +113,10 @@ func (c *iggyClient) ensureStream(ctx context.Context) error {
 }
 
 // expiryJSONValue message_expiry はマイクロ秒の JSON 数値（文字列不可、Step 0 参照）。
-// 数値として解釈できない値は実サーバでは拒否されるが、テスト用のプレースホルダなどをそのまま
-// 落とさないよう、パースできない場合のみ元の文字列を渡す
-func (c *iggyClient) expiryJSONValue() any {
-	if n, err := strconv.ParseUint(c.expiry, 10, 64); err == nil {
-		return n
-	}
-	return c.expiry
+// c.expiry は NewEmitter で検証済みのため、ここでの ParseUint は失敗しない
+func (c *iggyClient) expiryJSONValue() uint64 {
+	n, _ := strconv.ParseUint(c.expiry, 10, 64)
+	return n
 }
 
 func (c *iggyClient) ensureTopic(ctx context.Context, topic string) error {
@@ -316,13 +313,19 @@ func (s *sender) run(ctx context.Context) {
 				backoff *= 2
 			}
 		}
+		// backoff 中 (err != nil) は wake を無効化する。有効なままだと emit の
+		// たびに wake が飛び、失敗中のリトライ間隔が実質縮まってしまう
+		var wake <-chan struct{}
+		if err == nil {
+			wake = s.wake
+		}
 		select {
 		case <-ctx.Done():
 			// ctx が閉じた後の最終ドレインは shutdown 猶予として意図的に独立させる
 			//nolint:contextcheck // shutdown drain: ctx はもう Done なので新しい context で送り切る
 			_ = s.drainRun(context.Background(), s.sessionDirs(), s.runID)
 			return
-		case <-s.wake:
+		case <-wake:
 		case <-time.After(wait):
 		}
 	}
