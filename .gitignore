@@ -38,3 +38,7 @@
 /_docs/referent-table-codex-router-install.md
 /referent-table-codex-stop-hook-json.md
 /referent-table-gremlins-mcp-model-cleanup.md
+
+# superpowers の作業用ディレクトリ
+.worktrees/
+.superpowers/
