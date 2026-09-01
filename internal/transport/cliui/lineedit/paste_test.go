@@ -130,6 +130,22 @@ func TestReadLine_EscBytesInsidePasteDoNotSwallowPasteEnd(t *testing.T) {
 	}
 }
 
+// TestFinishPaste_TokenNotInsertedWhenLineNearFull 行の残り容量にトークン全体が
+// 収まらないときは、部分挿入で展開不能なゴミを残さずペーストを取り込まない
+func TestFinishPaste_TokenNotInsertedWhenLineNearFull(t *testing.T) {
+	prefix := strings.Repeat("x", maxLineLength-3)
+	c := &MockTerminal{toSend: []byte(prefix + pasteWrap("a\rb") + "\r")}
+	ss := NewTerminal(c, "> ")
+	line, err := ss.ReadLine()
+	if err != nil {
+		t.Fatalf("ReadLine err=%v", err)
+	}
+	if line != prefix {
+		t.Fatalf("len(line)=%d, want %d (トークンの部分挿入や原文欠落が無いこと): tail=%q",
+			len(line), len(prefix), line[len(prefix)-3:])
+	}
+}
+
 // TestAddPasteRune_CapsAtPasteMaxRunes 取り込み上限に達したら超過分を破棄する
 func TestAddPasteRune_CapsAtPasteMaxRunes(t *testing.T) {
 	ss := NewTerminal(&MockTerminal{}, "> ")

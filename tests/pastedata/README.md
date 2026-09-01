@@ -16,7 +16,7 @@ REPLのペースト処理を検証するためのサンプルデータです。�
 
 | ファイル | 内容 | 確認する症状 |
 |---|---|---|
-| agent-output-with-prompt.txt | `>> `プロンプト行を含むagent出力のコピー | 各行が個別プロンプトとして誤発火しないこと |
+| agent-output-with-prompt.txt | `>>`プロンプト行を含むagent出力のコピー | 各行が個別プロンプトとして誤発火しないこと |
 | multiline-plain.txt | 40行のプレーンテキスト | 行単位分割の再発防止 |
 | long-single-line.txt | 5200文字の1行 | 4096文字の行長上限で切り捨てられないこと |
 | ansi-escape-log.txt | ANSIエスケープ列と末尾の単独ESCバイトを含むログ | ペースト後に/quitとCtrl-Cが効き続けること |

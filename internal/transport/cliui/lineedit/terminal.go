@@ -682,10 +682,16 @@ func (t *Terminal) finishPaste() {
 		t.insertRunes([]rune(content))
 		return
 	}
+	token := fmt.Sprintf("[pasted #%d %d行]", t.pasteSeq+1, countPastedLines(content))
+	tokenRunes := []rune(token)
+	// トークン全体が行へ収まるときだけ登録・挿入する。部分挿入すると
+	// 展開時に一致せず、確定行に断片が残ったまま原文が失われる
+	if len(t.line)+len(tokenRunes) > maxLineLength {
+		return
+	}
 	t.pasteSeq++
-	token := fmt.Sprintf("[pasted #%d %d行]", t.pasteSeq, countPastedLines(content))
 	t.pastes = append(t.pastes, pasteEntry{token: token, content: content})
-	t.insertRunes([]rune(token))
+	t.insertRunes(tokenRunes)
 }
 
 // isInlinePastable content が改行も制御文字も含まず行へ直接挿入できるとき true

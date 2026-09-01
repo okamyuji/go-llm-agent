@@ -1,6 +1,7 @@
 package cliui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -562,6 +563,9 @@ type turnState struct {
 	// usageLastIn 最後に届いた EventUsage の InputTokens (圧縮の閾値判定用)
 	usageLastIn int
 	interrupted bool
+	// pasteActive 生成中の入力ストリームが bracketed paste の内側にあるとき true。
+	// ペースト本文中の単独 ESC を中断キーとして食い潰さないための追跡
+	pasteActive bool
 }
 
 // handleTurnEvent ch から届いた 1 件の agent.Event を処理し st を更新する
@@ -631,6 +635,49 @@ func suppressTurnError(ctx context.Context, interrupted bool, err error) bool {
 // 単独 ESC と判定できる
 const escSequenceGrace = 50 * time.Millisecond
 
+// turnPasteStart / turnPasteEnd bracketed paste の開始・終了マーカー
+var (
+	turnPasteStart = []byte("\x1b[200~")
+	turnPasteEnd   = []byte("\x1b[201~")
+)
+
+// readPumpByte pump.ch から 1 バイトを grace 以内で読む。届かないか close なら false
+func readPumpByte(pump *bytePump, grace time.Duration) (byte, bool) {
+	select {
+	case b, ok := <-pump.ch:
+		return b, ok
+	case <-time.After(grace):
+		return 0, false
+	}
+}
+
+// passThroughEscSequence 生成中に届いたエスケープ列 (ESC + intro 以降) を終端
+// ([a-zA-Z~]) まで読み、列全体を次の行編集へ引き継ぐ。ペーストマーカーなら
+// st.pasteActive を更新する。終端が届かない場合は読めた分だけを引き継ぐ
+func (r *REPL) passThroughEscSequence(pump *bytePump, intro byte, st *turnState) {
+	seq := []byte{0x1b, intro}
+	const maxSeqLen = 8 // CSI 列は "1;3C" 等で十分、マーカー "200~" も収まる
+	for len(seq) < maxSeqLen {
+		b, ok := readPumpByte(pump, escSequenceGrace)
+		if !ok {
+			break
+		}
+		seq = append(seq, b)
+		if b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b == '~' {
+			break
+		}
+	}
+	for _, b := range seq {
+		pump.pushback(b)
+	}
+	switch {
+	case bytes.Equal(seq, turnPasteStart):
+		st.pasteActive = true
+	case bytes.Equal(seq, turnPasteEnd):
+		st.pasteActive = false
+	}
+}
+
 // handleTurnKey 生成中に届いた 1 バイトを処理する。単独の ESC はこのターンだけ
 // 中断し、後続バイトを伴う ESC はエスケープ列 (bracketed paste マーカー等) として
 // 列ごと次の行編集へ引き継ぐ。Ctrl-C は中断のうえセッション終了を要求する
@@ -640,23 +687,21 @@ func (r *REPL) handleTurnKey(b byte, pump *bytePump, cancelTurn context.CancelFu
 	case 0x1b: // ESC: 単独ならこのターンだけ中断、CSI/SS3 導入子が続けばエスケープ列
 		// 生成中に届いたペーストの ESC を中断キーとして食い潰すと、マーカーを
 		// 失った本文が次のプロンプトで行ごとに分割実行される (コピーした
-		// ">> " 行の誤発火) ため、直後のバイトを短時間だけ覗いて区別する。
-		// '[' / 'O' が続くときだけエスケープ列 (bracketed paste マーカー・
-		// 矢印キー等) として列ごと次の行編集へ引き継ぐ
-		var next byte
-		hasNext := false
-		select {
-		case b2, ok := <-pump.ch:
-			if ok {
-				if b2 == '[' || b2 == 'O' {
-					pump.pushback(0x1b)
-					pump.pushback(b2)
-					return false
-				}
-				next = b2
-				hasNext = true
+		// ">> " 行の誤発火) ため、直後のバイトを短時間だけ覗いて区別する
+		next, hasNext := readPumpByte(pump, escSequenceGrace)
+		if hasNext && (next == '[' || next == 'O') {
+			// エスケープ列 (bracketed paste マーカー・矢印キー等) を列ごと
+			// 次の行編集へ引き継ぎ、ペーストマーカーなら内外状態を更新する
+			r.passThroughEscSequence(pump, next, st)
+			return false
+		}
+		if st.pasteActive {
+			// ペースト本文中の単独 ESC は入力データとして次の行編集へ渡す
+			pump.pushback(0x1b)
+			if hasNext {
+				return r.handleTurnKey(next, pump, cancelTurn, st)
 			}
-		case <-time.After(escSequenceGrace):
+			return false
 		}
 		if !st.interrupted {
 			st.interrupted = true

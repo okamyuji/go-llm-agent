@@ -42,6 +42,12 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 	return s.b.Write(p)
 }
 
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
 // blockingTurnSvc 最初のターンだけ started を通知して release まで待つ。
 // 2 ターン目以降は即座に final を返す
 type blockingTurnSvc struct {
@@ -152,6 +158,63 @@ func TestREPL_PasteDuringTurn_NotSplitIntoLineTurns(t *testing.T) {
 	got := lastUserContent(svc.inputs[1])
 	if got != strings.TrimSuffix(want, "\n") && got != want {
 		t.Fatalf("2 ターン目の入力がペースト全文でない:\ngot=%q", got)
+	}
+}
+
+// TestREPL_PasteWithEscBytesDuringTurn_NotInterrupted 生成中に届いた
+// ESC バイト入りペーストがターンを中断せず、本文の ESC も失わずに
+// 次のプロンプトで 1 件の入力にまとまる
+func TestREPL_PasteWithEscBytesDuringTurn_NotInterrupted(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Fatalf("pty.Open err=%v", err)
+	}
+	t.Cleanup(func() { _ = ptmx.Close(); _ = tty.Close() })
+
+	svc := &blockingTurnSvc{started: make(chan struct{}, 1), release: make(chan struct{}, 1)}
+	out := &syncBuffer{}
+	r := NewREPL(svc, Options{Model: "test/m", In: tty, Out: out, DisableSpinner: true})
+
+	done := make(chan error, 1)
+	go func() { done <- r.Run(context.Background()) }()
+
+	if _, err := ptmx.WriteString("hello\r"); err != nil {
+		t.Fatalf("write err=%v", err)
+	}
+	select {
+	case <-svc.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("最初のターンが開始しない")
+	}
+
+	want := pasteFixture(t, "ansi-escape-log.txt")
+	if _, err := ptmx.WriteString(asPasteBytes(want) + "\r/quit\r"); err != nil {
+		t.Fatalf("write err=%v", err)
+	}
+	// ペーストバイトがターン実行中の入力監視で消費されるのを待ってから解放する
+	time.Sleep(300 * time.Millisecond)
+	svc.release <- struct{}{}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run err=%v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("REPL が終了しない")
+	}
+
+	if s := out.String(); strings.Contains(s, "中断しました") {
+		t.Fatalf("ペースト本文中の ESC でターンが誤中断された: %q", s)
+	}
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	if len(svc.inputs) != 2 {
+		t.Fatalf("ターン数=%d, want 2 (本文中の ESC で中断・誤発火した疑い)", len(svc.inputs))
+	}
+	got := lastUserContent(svc.inputs[1])
+	if got != strings.TrimSuffix(want, "\n") && got != want {
+		t.Fatalf("2 ターン目の入力が ESC 込みの全文でない:\ngot=%q\nwant=%q", got, want)
 	}
 }
 
