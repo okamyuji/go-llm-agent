@@ -1,0 +1,11 @@
+[32mINFO[0m step 1 completed [1mOK[0m
+[32mINFO[0m step 2 completed [1mOK[0m
+[32mINFO[0m step 3 completed [1mOK[0m
+[32mINFO[0m step 4 completed [1mOK[0m
+[32mINFO[0m step 5 completed [1mOK[0m
+[32mINFO[0m step 6 completed [1mOK[0m
+[32mINFO[0m step 7 completed [1mOK[0m
+[32mINFO[0m step 8 completed [1mOK[0m
+[32mINFO[0m step 9 completed [1mOK[0m
+[32mINFO[0m step 10 completed [1mOK[0m
+[31mERROR[0m truncated sequence follows: 
