@@ -43,6 +43,7 @@ internal/agent/hooks.go:16:31 ARITHMETIC_BASE
 internal/transport/cliui/compact.go:16:25 ARITHMETIC_BASE
 internal/transport/cliui/lineedit/search.go:7:28 ARITHMETIC_BASE
 internal/transport/cliui/memory_cmd.go:15:34 ARITHMETIC_BASE
+internal/transport/cliui/repl.go:632:29 ARITHMETIC_BASE
 # internal/audit/event.go:21 `const MaxPayloadBytes = 64 * 1000 * 1000` は
 # コンパイル時定数で実行時カバレッジが付かないため常に NOT COVERED になる。
 # TestMaxPayloadBytesMatchesIggySpec (internal/audit/event_test.go) が

@@ -94,6 +94,14 @@ func lastUserContent(in agent.Input) string {
 	return ""
 }
 
+// TestEscSequenceGrace_Range 生成中の単独 ESC 判定の待ち時間は、エスケープ列の
+// 後続バイトを取りこぼさない下限と、中断の体感遅延を悪化させない上限に収まる
+func TestEscSequenceGrace_Range(t *testing.T) {
+	if escSequenceGrace < 10*time.Millisecond || escSequenceGrace > 200*time.Millisecond {
+		t.Fatalf("escSequenceGrace=%v, want 10ms..200ms", escSequenceGrace)
+	}
+}
+
 // TestREPL_PasteDuringTurn_NotSplitIntoLineTurns 生成中に届いた複数行ペーストが
 // 行ごとの個別ターンとして誤発火せず、次のプロンプトで 1 件の入力にまとまる。
 // コピーした ">> " 付き agent 出力の再ペーストという報告症状の再現
