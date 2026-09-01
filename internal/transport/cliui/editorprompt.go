@@ -2,33 +2,17 @@ package cliui
 
 import (
 	"context"
-	"errors"
 	"io"
-	"strings"
 
 	"github.com/okamyuji/go-llm-agent/internal/transport/cliui/lineedit"
 )
 
 // readEditorPrompt は lineedit.Terminal から 1 プロンプト分の入力を読む。
-// bracketed paste で貼り付けられた行は ErrPasteIndicator 付きで届くため、
-// 通常の Enter で確定した行が届くまで改行で結合し続ける。これにより
-// 改行込みの長文ペーストがタイミングに依存せず 1 プロンプトへまとまる
-// (貼り付け後、Enter で送信する操作感になる)。
+// bracketed paste は lineedit.Terminal 側で 1 プロンプトへまとまる
+// (複数行ペーストは短縮表示になり、Enter で原文へ展開されて届く)。
 // Ctrl-C / Ctrl-D は lineedit.Terminal が io.EOF として返す。
 func readEditorPrompt(t *lineedit.Terminal) (string, error) {
-	var parts []string
-	for {
-		line, err := t.ReadLine()
-		switch {
-		case err == nil:
-			parts = append(parts, line)
-			return strings.Join(parts, "\n"), nil
-		case errors.Is(err, lineedit.ErrPasteIndicator):
-			parts = append(parts, line)
-		default:
-			return "", err
-		}
-	}
+	return t.ReadLine()
 }
 
 // pumpReader は bytePump を io.Reader として lineedit.Terminal へ渡すアダプタ。

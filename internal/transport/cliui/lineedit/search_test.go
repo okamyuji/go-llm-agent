@@ -341,10 +341,10 @@ func TestSearchKeyConstantValues(t *testing.T) {
 	}
 }
 
-// paste 中の 0x12 / 0x07 は制御キーではなく本文として行へ入る。
+// paste 中の 0x12 / 0x07 は制御キーではなく本文として取り込まれる。
 func TestSearchKeysAreLiteralDuringPaste(t *testing.T) {
 	_, line, _, err := runSearch("\x1b[200~a\x12b\x07c\x1b[201~\r", newStubHistory())
-	if err != nil && !errors.Is(err, ErrPasteIndicator) {
+	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	if line != "a\x12b\x07c" {

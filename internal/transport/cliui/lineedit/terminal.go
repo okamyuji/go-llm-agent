@@ -5,6 +5,15 @@
 // This file is a fork of golang.org/x/term v0.45.0 terminal.go,
 // modified to compute display width with mattn/go-runewidth and to add
 // reverse incremental history search.
+//
+// Paste handling diverges from upstream: pasted bytes accumulate in a
+// buffer instead of the edit line, multi-line or long pastes collapse to
+// a "[pasted #N M行]" placeholder that expands to the original content on
+// Enter, Ctrl-C aborts an in-progress paste, and ESC bytes inside a paste
+// are kept as content instead of being parsed as key sequences (upstream
+// could swallow the paste-end marker and leave pasteActive stuck, which
+// made Ctrl-C and Enter dead for the rest of the session).
+// ErrPasteIndicator is removed: ReadLine always returns one whole prompt.
 
 package lineedit
 
@@ -13,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"sync"
 	"unicode/utf8"
 )
@@ -56,6 +66,18 @@ type Terminal struct {
 	// pasteActive is true iff there is a bracketed paste operation in
 	// progress.
 	pasteActive bool
+	// pasteBuf accumulates the content of the paste in progress. Pasted
+	// bytes never enter line directly, so a paste cannot fire per-line
+	// submissions or per-rune echo storms.
+	pasteBuf []rune
+	// pasteLastCR is true when the previous pasted key was CR, so that a
+	// CRLF pair split across reads still collapses to a single newline.
+	pasteLastCR bool
+	// pastes holds the collapsed pastes of the current line, in insertion
+	// order. Enter expands each token back to its content.
+	pastes []pasteEntry
+	// pasteSeq numbers collapsed pastes within the current line.
+	pasteSeq int
 
 	// cursorX contains the current X value of the cursor where the left
 	// edge is 0. cursorY contains the row number where the first row of
@@ -187,6 +209,21 @@ func bytesToKey(b []byte, pasteActive bool) (rune, []byte) {
 		return r, b[l:]
 	}
 
+	if pasteActive {
+		// ペースト中の ESC は終了マーカーの先頭としてだけ解釈する。
+		// マーカー前縁との部分一致は追加バイトを待ち、それ以外の ESC は
+		// 内容の 1 バイトとして返す。終端探索 (末尾の [a-zA-Z~] スキャン) へ
+		// 流すと本文中の ESC が後続の終了マーカーごと食い潰され、
+		// pasteActive が残留してセッションが操作不能になる
+		if bytes.HasPrefix(b, pasteEnd) {
+			return keyPasteEnd, b[len(pasteEnd):]
+		}
+		if len(b) < len(pasteEnd) && bytes.HasPrefix(pasteEnd, b) {
+			return utf8.RuneError, b
+		}
+		return rune(keyEscape), b[1:]
+	}
+
 	if !pasteActive && len(b) >= 3 && b[0] == keyEscape && b[1] == '[' {
 		switch b[2] {
 		case 'A':
@@ -219,10 +256,6 @@ func bytesToKey(b []byte, pasteActive bool) (rune, []byte) {
 
 	if !pasteActive && len(b) >= 6 && bytes.Equal(b[:6], pasteStart) {
 		return keyPasteStart, b[6:]
-	}
-
-	if pasteActive && len(b) >= 6 && bytes.Equal(b[:6], pasteEnd) {
-		return keyPasteEnd, b[6:]
 	}
 
 	// If we get here then we have a key that we don't recognise, or a
@@ -460,8 +493,8 @@ func (t *Terminal) historyAdd(entry string) {
 // handleKey processes the given key and, optionally, returns a line of text
 // that the user has entered.
 func (t *Terminal) handleKey(key rune) (line string, ok bool) {
-	if t.pasteActive && key != keyEnter && key != keyLF {
-		t.addKeyToLine(key)
+	if t.pasteActive {
+		t.addPasteRune(key)
 		return
 	}
 	if t.search.active {
@@ -603,6 +636,108 @@ func (t *Terminal) handleKey(key rune) (line string, ok bool) {
 	return
 }
 
+// pasteEntry 短縮表示トークンと、その展開先であるペースト原文の対
+type pasteEntry struct {
+	token   string
+	content string
+}
+
+const (
+	// pasteInlineMaxRunes 改行を含まずこの文字数以下の印字可能なペーストは
+	// 短縮せず行へそのまま挿入する
+	pasteInlineMaxRunes = 80
+	// pasteMaxRunes 1 回のペーストで取り込む上限。
+	// ponytail: 超過分は黙って切り捨てる。警告表示が要る規模になったら足す
+	pasteMaxRunes = 1 << 20
+)
+
+// addPasteRune ペースト中の 1 キーを pasteBuf へ積む。CR / LF は改行 1 個へ
+// 正規化し、読み取り境界で分割された CRLF も 1 個に保つ
+func (t *Terminal) addPasteRune(key rune) {
+	isLF := key == keyLF
+	wasCR := t.pasteLastCR
+	t.pasteLastCR = key == keyEnter
+	if isLF && wasCR {
+		return // CRLF の LF: CR の時点で改行を取り込み済み
+	}
+	if len(t.pasteBuf) >= pasteMaxRunes {
+		return
+	}
+	if key == keyEnter || isLF {
+		key = '\n'
+	}
+	t.pasteBuf = append(t.pasteBuf, key)
+}
+
+// finishPaste ペースト終了時に取り込んだ内容を行へ反映する。改行なしの短い
+// 印字可能テキストはそのまま挿入し、それ以外は短縮表示トークンへ畳む
+func (t *Terminal) finishPaste() {
+	content := string(t.pasteBuf)
+	t.pasteBuf = t.pasteBuf[:0]
+	t.pasteLastCR = false
+	if content == "" {
+		return
+	}
+	if utf8.RuneCountInString(content) <= pasteInlineMaxRunes && isInlinePastable(content) {
+		t.insertRunes([]rune(content))
+		return
+	}
+	t.pasteSeq++
+	token := fmt.Sprintf("[pasted #%d %d行]", t.pasteSeq, countPastedLines(content))
+	t.pastes = append(t.pastes, pasteEntry{token: token, content: content})
+	t.insertRunes([]rune(token))
+}
+
+// isInlinePastable content が改行も制御文字も含まず行へ直接挿入できるとき true
+func isInlinePastable(content string) bool {
+	for _, r := range content {
+		if !isPrintable(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// countPastedLines ペースト内容の行数を返す。末尾改行は行として数えない
+func countPastedLines(content string) int {
+	n := strings.Count(content, "\n")
+	if !strings.HasSuffix(content, "\n") {
+		n++
+	}
+	return n
+}
+
+// insertRunes rs を現在位置へ順に挿入する。maxLineLength で打ち切る
+func (t *Terminal) insertRunes(rs []rune) {
+	for _, r := range rs {
+		if len(t.line) == maxLineLength {
+			return
+		}
+		t.addKeyToLine(r)
+	}
+}
+
+// expandPastes 確定した表示行の短縮トークンをペースト原文へ展開し、
+// 行内ペースト状態をリセットする。
+// ponytail: 単純な文字列置換。トークンをユーザーが編集した場合はその文字列が
+// そのまま送られる。必要になったらトークンを不可分な編集単位にする
+func (t *Terminal) expandPastes(displayed string) string {
+	line := displayed
+	for _, e := range t.pastes {
+		line = strings.Replace(line, e.token, e.content, 1)
+	}
+	t.pastes = nil
+	t.pasteSeq = 0
+	return line
+}
+
+// abortPaste ペースト中の Ctrl-C で取り込み中の内容を破棄する
+func (t *Terminal) abortPaste() {
+	t.pasteActive = false
+	t.pasteBuf = t.pasteBuf[:0]
+	t.pasteLastCR = false
+}
+
 // addKeyToLine inserts the given key at the current position in the current
 // line.
 func (t *Terminal) addKeyToLine(key rune) {
@@ -716,8 +851,6 @@ func (t *Terminal) readLine() (line string, err error) {
 		t.outBuf = t.outBuf[:0]
 	}
 
-	lineIsPasted := t.pasteActive
-
 	for {
 		rest := t.remainder
 		lineOk := false
@@ -741,17 +874,24 @@ func (t *Terminal) readLine() (line string, err error) {
 				if key == keyPasteStart {
 					t.endSearchIfActive()
 					t.pasteActive = true
-					if len(t.line) == 0 {
-						lineIsPasted = true
-					}
+					t.pasteBuf = t.pasteBuf[:0]
+					t.pasteLastCR = false
 					continue
 				}
-			} else if key == keyPasteEnd {
-				t.pasteActive = false
-				continue
-			}
-			if !t.pasteActive {
-				lineIsPasted = false
+			} else {
+				// ペースト中の Ctrl-C は取り込みを破棄して中断する。
+				// マーカー欠落等で pasteActive が残留しても、ここが常に
+				// 効くため Ctrl-C が二度と効かなくなる事故には至らない
+				if key == keyCtrlC {
+					t.abortPaste()
+					t.exitSearchState()
+					return "", io.EOF
+				}
+				if key == keyPasteEnd {
+					t.pasteActive = false
+					t.finishPaste()
+					continue
+				}
 			}
 			// If we have CR, consume LF if present (CRLF sequence) to avoid returning an extra empty line.
 			if key == keyEnter && len(rest) > 0 && rest[0] == keyLF {
@@ -768,13 +908,13 @@ func (t *Terminal) readLine() (line string, err error) {
 		t.c.Write(t.outBuf)
 		t.outBuf = t.outBuf[:0]
 		if lineOk {
+			// 履歴には短縮表示のままの行を残す (履歴ファイルは 1 行 1 エントリ)。
+			// 返す行だけをペースト原文へ展開する
 			if t.echo {
 				t.historyIndex = -1
 				t.historyAdd(line)
 			}
-			if lineIsPasted {
-				err = ErrPasteIndicator
-			}
+			line = t.expandPastes(line)
 			return
 		}
 
@@ -868,23 +1008,11 @@ func (t *Terminal) SetSize(width, height int) error {
 	return err
 }
 
-type pasteIndicatorError struct{}
-
-func (pasteIndicatorError) Error() string {
-	return "terminal: ErrPasteIndicator not correctly handled"
-}
-
-// ErrPasteIndicator may be returned from ReadLine as the error, in addition
-// to valid line data. It indicates that bracketed paste mode is enabled and
-// that the returned line consists only of pasted data. Programs may wish to
-// interpret pasted data more literally than typed data.
-var ErrPasteIndicator = pasteIndicatorError{}
-
 // SetBracketedPasteMode requests that the terminal bracket paste operations
-// with markers. Not all terminals support this but, if it is supported, then
-// enabling this mode will stop any autocomplete callback from running due to
-// pastes. Additionally, any lines that are completely pasted will be returned
-// from ReadLine with the error set to ErrPasteIndicator.
+// with markers. Not all terminals support this but, if it is supported,
+// pasted content is buffered whole: multi-line or long pastes collapse to a
+// placeholder on screen and expand back to the original content when the
+// line is submitted with Enter.
 func (t *Terminal) SetBracketedPasteMode(on bool) {
 	if on {
 		io.WriteString(t.c, "\x1b[?2004h")

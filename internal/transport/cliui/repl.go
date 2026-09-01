@@ -128,7 +128,7 @@ func (r *REPL) Run(ctx context.Context) error {
 
 	out, editor, closeEditor := r.setupEditor(ctx, pump)
 	defer closeEditor()
-	fmt.Fprintln(out, "go-llm-agent REPL  /quit で終了（生成中は ESC で中断、複数行ペーストは Enter で送信、/tools off でツール無効化）")
+	fmt.Fprintln(out, "go-llm-agent REPL  /quit で終了（生成中は ESC で中断、複数行ペーストは [pasted #N] に短縮され Enter で送信、/tools off でツール無効化）")
 	if r.opt.AgentsMDPath != "" {
 		fmt.Fprintf(out, "AGENTS.md: %s を読み込みました\n", r.opt.AgentsMDPath)
 	}
@@ -625,18 +625,50 @@ func suppressTurnError(ctx context.Context, interrupted bool, err error) bool {
 	return ctx.Err() != nil
 }
 
-// handleTurnKey 生成中に届いた 1 バイトを処理する。ESC はこのターンだけ中断し、
-// Ctrl-C は中断のうえセッション終了を要求する (戻り値 true)。それ以外のバイトは
-// 次の行編集へ引き継ぐ
+// escSequenceGrace 生成中に届いた ESC が単独のキー押下か、エスケープ列
+// (bracketed paste マーカー・矢印キー等) の先頭かを見分けるための待ち時間。
+// 端末はエスケープ列を連続バイトで送るため、この時間内に後続が無ければ
+// 単独 ESC と判定できる
+const escSequenceGrace = 50 * time.Millisecond
+
+// handleTurnKey 生成中に届いた 1 バイトを処理する。単独の ESC はこのターンだけ
+// 中断し、後続バイトを伴う ESC はエスケープ列 (bracketed paste マーカー等) として
+// 列ごと次の行編集へ引き継ぐ。Ctrl-C は中断のうえセッション終了を要求する
+// (戻り値 true)。それ以外のバイトは次の行編集へ引き継ぐ
 func (r *REPL) handleTurnKey(b byte, pump *bytePump, cancelTurn context.CancelFunc, st *turnState) bool {
 	switch b {
-	case 0x1b: // ESC: このターンだけ中断
+	case 0x1b: // ESC: 単独ならこのターンだけ中断、CSI/SS3 導入子が続けばエスケープ列
+		// 生成中に届いたペーストの ESC を中断キーとして食い潰すと、マーカーを
+		// 失った本文が次のプロンプトで行ごとに分割実行される (コピーした
+		// ">> " 行の誤発火) ため、直後のバイトを短時間だけ覗いて区別する。
+		// '[' / 'O' が続くときだけエスケープ列 (bracketed paste マーカー・
+		// 矢印キー等) として列ごと次の行編集へ引き継ぐ
+		var next byte
+		hasNext := false
+		select {
+		case b2, ok := <-pump.ch:
+			if ok {
+				if b2 == '[' || b2 == 'O' {
+					pump.pushback(0x1b)
+					pump.pushback(b2)
+					return false
+				}
+				next = b2
+				hasNext = true
+			}
+		case <-time.After(escSequenceGrace):
+		}
 		if !st.interrupted {
 			st.interrupted = true
 			cancelTurn()
 			r.stopSpinner()
 			_ = st.safeOut.Flush()
 			fmt.Fprint(st.out, "\n[中断しました]\n")
+		}
+		if hasNext {
+			// 覗き見た後続バイトは通常のターン内キーとして処理する
+			// (ESC 直後の Ctrl-C を失わないため)
+			return r.handleTurnKey(next, pump, cancelTurn, st)
 		}
 		return false
 	case 0x03: // Ctrl-C: 中断してセッション終了 (raw では SIGINT にならずキーとして届く)

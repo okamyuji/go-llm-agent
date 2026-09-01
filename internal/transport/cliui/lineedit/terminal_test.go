@@ -209,28 +209,24 @@ var keyPressTests = []struct {
 		line: "abcde\177",
 	},
 	{
-		// Enter in bracketed paste mode should still work.
-		in:             "abc\x1b[200~d\refg\x1b[201~h\r",
-		line:           "efgh",
-		throwAwayLines: 1,
+		// CR in bracketed paste is captured as a newline, not a submit.
+		in:   "abc\x1b[200~d\refg\x1b[201~h\r",
+		line: "abcd\nefgh",
 	},
 	{
-		// Newline in bracketed paste mode should still work.
-		in:             "abc\x1b[200~d\nefg\x1b[201~h\r",
-		line:           "efgh",
-		throwAwayLines: 1,
+		// Newline in bracketed paste collapses to a placeholder and expands on Enter.
+		in:   "abc\x1b[200~d\nefg\x1b[201~h\r",
+		line: "abcd\nefgh",
 	},
 	{
-		// Lines consisting entirely of pasted data should be indicated as such.
-		in:   "\x1b[200~a\r",
+		// A short pasted fragment is inserted literally.
+		in:   "\x1b[200~a\x1b[201~\r",
 		line: "a",
-		err:  ErrPasteIndicator,
 	},
 	{
-		// Lines consisting entirely of pasted data should be indicated as such (\n paste).
-		in:   "\x1b[200~a\n",
+		// A short pasted fragment submitted with LF.
+		in:   "\x1b[200~a\x1b[201~\n",
 		line: "a",
-		err:  ErrPasteIndicator,
 	},
 	{
 		// Ctrl-C terminates readline
@@ -375,9 +371,8 @@ var keyPressTests = []struct {
 	},
 	{
 		// bracketed paste 中の CJK
-		in:   "\x1b[200~日本語\r",
+		in:   "\x1b[200~日本語\x1b[201~\r",
 		line: "日本語",
-		err:  ErrPasteIndicator,
 	},
 }
 
@@ -638,9 +633,9 @@ func TestCtrlUErasesCellWidth(t *testing.T) {
 }
 
 func TestPastedCJKKeepsCellPosition(t *testing.T) {
-	term, line, _, err := runCJK("\x1b[200~日本語\r", 0, nil)
-	if !errors.Is(err, ErrPasteIndicator) {
-		t.Fatalf("err = %v, want ErrPasteIndicator", err)
+	term, line, _, err := runCJK("\x1b[200~日本語\x1b[201~\r", 0, nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
 	}
 	if line != "日本語" {
 		t.Fatalf("line = %q", line)
