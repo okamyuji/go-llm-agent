@@ -74,7 +74,8 @@ logging:
 EOF
 
 # 1) 単体テスト一式
-check "unit tests (go test -race ./...)" bash -c "go test -race -count=1 ./... >/dev/null"
+# 成功時は静かに、失敗時はどのテストが落ちたか分かるよう末尾を stderr へ出す
+check "unit tests (go test -race ./...)" bash -c "go test -race -count=1 ./... >\"$WORK/gotest.out\" 2>&1 || { tail -n 120 \"$WORK/gotest.out\" >&2; exit 1; }"
 
 # 2) ビルド
 BIN="$WORK/agent"
