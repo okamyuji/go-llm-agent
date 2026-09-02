@@ -33,6 +33,9 @@ echo "==> release build smoke (go build -o bin/agent)"
 mkdir -p bin
 go build -o bin/agent ./cmd/agent
 
+echo "==> cross-compile smoke (windows/amd64: unix 専用 syscall の混入を release 前に検出)"
+GOOS=windows GOARCH=amd64 go build ./...
+
 echo "==> staged-secret-files-guard"
 # .env / config.yaml が staged されているとローカル機密がコミットされる可能性がある。
 # .gitignore に登録済みだが git add -f で強制 stage する経路を遮断する。
