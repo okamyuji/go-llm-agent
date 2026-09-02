@@ -187,6 +187,11 @@ func TestEmitterShutdownRacesWithFirstEmit(t *testing.T) {
 		t.Fatal(err)
 	}
 	wg.Wait()
+	// 上の Shutdown が init 完了より先に走ると initDone=false で no-op になり、その後に
+	// 起動した sender が残る。止めずに終えると次のテストが差し替えた slog 先へ書いて race になる
+	if err := e.Shutdown(shutdownCtx); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestEmitDoesNotLogFailureOnSuccessfulAppend は WAL 追記成功時に

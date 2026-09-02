@@ -510,7 +510,7 @@ llama-server -m model.gguf --jinja -c 8192 --port 8080
 - `think` はポインタ型で、`false` のとき `chat_template_kwargs.enable_thinking=false` を送信し Qwen 系 reasoning モデルの thinking を抑制します。未指定なら送信しません。Mistral 系など非 reasoning モデルでは不要です。
 - `tool_call_id_format: "alnum9"` は tool_call_id を 9 文字英数字へ決定的に書き換えます。Mistral-Nemo 系 (Shisa 等) のチャットテンプレートは tool_call_id に「9 文字英数字」を強制し、llama-server が生成する 32 文字 ID を 2 ターン目で拒否するため、その回避に使います。Qwen 系などこの制約を持たないモデルでは未指定にします。
 
-常用する場合は、日本語品質で勝る **Shisa v2 (Mistral-Nemo 12B) + `tool_call_id_format: "alnum9"`** 構成を実運用の第一候補として推奨します。Qwen 系 (`think: false`) は tool_call_id の制約が無く導入が単純ですが、日本語出力の品質は Shisa に劣ります。
+常用する場合は、チャットテンプレートが tool calling をネイティブサポートする Gemma 4 12B 系 (実測構成は igorls/gemma-4-12B-it-heretic の Q8_0) を第一候補として推奨します。tool_call_id の形式制約が無いため `tool_call_id_format` は不要で、thinking は llama-server 側の `--reasoning off` で抑制できます。冗長な回答をしがちな傾向は、システムプロンプトに回答スタイルの制約を書くと抑えられます。実測ではツール往復、複数ターンの指示追従、15K トークン履歴でのセッション継続を確認済みです。Qwen 系 (`think: false`) も tool_call_id 制約が無く動きますが、Mistral-Nemo 系 (Shisa 等) は後述の指示追従問題があるため tool calling との併用には向きません。
 
 ### 注意: ツール定義が小型モデルの指示追従を壊す
 

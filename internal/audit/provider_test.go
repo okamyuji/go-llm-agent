@@ -123,6 +123,7 @@ func TestChatEmitsUsageForOutputTokensOnly(t *testing.T) {
 	dir := t.TempDir()
 	fi := newFakeIggy(t)
 	e := NewEmitter(Options{WALDir: dir, IggyURL: fi.srv.URL, PAT: "p"})
+	t.Cleanup(func() { _ = e.Shutdown(context.Background()) })
 	p := &scriptedProvider{chat: &llm.ChatResponse{Message: llm.Message{Role: llm.RoleAssistant, Content: "sum"}, FinishReason: "stop"}}
 	wp := WrapProvider(p, e)
 	ctx := WithSessionID(context.Background(), "s")

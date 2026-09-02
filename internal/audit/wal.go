@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
-	"syscall"
 )
 
 type walFile struct {
@@ -133,7 +132,7 @@ func flockFile(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockNB(f); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("flock %s: %w", path, err)
 	}
