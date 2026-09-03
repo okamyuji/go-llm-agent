@@ -42,3 +42,4 @@
 # superpowers の作業用ディレクトリ
 .worktrees/
 .superpowers/
+.code-review-graph/
