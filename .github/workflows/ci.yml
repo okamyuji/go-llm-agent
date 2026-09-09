@@ -45,9 +45,11 @@ jobs:
         run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
 
       - name: Install golangci-lint
+        # v2.12 以前は package facts のキャッシュ不整合で _test.go の t.Fatal 後に
+        # SA5011 の誤検出が間欠的に出る (golangci/golangci-lint#5979)。v2.13.0 で修正済み
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.13.2
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
@@ -88,9 +90,11 @@ jobs:
         run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
 
       - name: Install golangci-lint
+        # v2.12 以前は package facts のキャッシュ不整合で _test.go の t.Fatal 後に
+        # SA5011 の誤検出が間欠的に出る (golangci/golangci-lint#5979)。v2.13.0 で修正済み
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.13.2
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
