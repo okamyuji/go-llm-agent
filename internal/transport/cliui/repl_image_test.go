@@ -35,11 +35,16 @@ func TestREPL_ImageSendsImageWithQuestion(t *testing.T) {
 
 func TestREPL_ImageRejectsBadInputWithoutSending(t *testing.T) {
 	p := writePNG(t)
+	// 実在する空白入りファイルでも、先頭トークン (存在しない "a") をパスとして扱い何も送らない
+	spaced := filepath.Join(t.TempDir(), "a b.png")
+	if err := os.WriteFile(spaced, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cases := map[string]string{
 		"no args":      "/image\n",
 		"no question":  "/image " + p + "\n",
 		"missing file": "/image " + filepath.Join(t.TempDir(), "x.png") + " q\n",
-		"spaced path":  "/image " + filepath.Join(t.TempDir(), "a b.png") + " q\n",
+		"spaced path":  "/image " + spaced + " q\n",
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {

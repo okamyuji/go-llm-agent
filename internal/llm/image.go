@@ -10,7 +10,7 @@ import (
 	"slices"
 )
 
-// MaxImageBytes 1 枚の画像の上限。OpenAI の画像入力上限 20MB に合わせる
+// MaxImageBytes 1 枚の画像の上限。履歴の画像は毎ターン base64 で送り直すため、メモリと送信量を抑える値にする
 const MaxImageBytes = 20 << 20
 
 // ErrImagesUnsupported 画像入力に対応しない provider が返すエラー
