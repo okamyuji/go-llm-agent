@@ -232,7 +232,7 @@ func messageContent(m llm.Message) any {
 	if len(m.Images) == 0 {
 		return m.Content
 	}
-	parts := make([]contentPart, 0, len(m.Images)+1)
+	var parts []contentPart
 	if m.Content != "" {
 		parts = append(parts, contentPart{Type: "text", Text: m.Content})
 	}
