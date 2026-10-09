@@ -109,7 +109,7 @@ bash scripts/verify-hardening.sh
 | コマンド | 説明 |
 |---------|------|
 | `agent chat`   | 対話 REPL を起動します（`-no-spinner` で進捗インジケータとターン要約を無効化、`-resume` で直近セッションを再開） |
-| `agent run -p` | ワンショットでプロンプトを1回送信します |
+| `agent run -p` | ワンショットでプロンプトを1回送信します（`-image <path>`で画像を添付） |
 | `agent serve`  | OpenAI互換HTTP APIを起動します |
 | `agent tools`  | 有効な内蔵ツールを一覧表示します |
 | `agent config` | 設定ファイルの内容をダンプします |
@@ -129,6 +129,7 @@ bash scripts/verify-hardening.sh
 - **/compact**: 会話履歴を手動で圧縮します（下記「会話履歴の圧縮 (compaction)」参照）
 - **/cost**: セッション累計の入出力トークン数と、pricing 設定があれば概算コストを表示します
 - **/tools off | on**: ツール定義をリクエストに含めるかをセッション中に切り替えます。翻訳・要約など純粋な対話は off が安定します（下記「注意: ツール定義が小型モデルの指示追従を壊す」参照）。`/tool` でも可
+- **/image <path> <質問>**: 画像を添付して質問します。対応する形式はPNG、JPEG、GIF、WebPで、上限は20MBです。送れるproviderはllamacppとopenaiだけで、llama-serverは`--mmproj`付きで起動する必要があります（下記「画像入力」参照）
 - **/clear**: 会話履歴を破棄し、セッション累計トークンをリセットして新しいセッションファイルへ切り替えます。モデルの回答が変な書式や話題に固定化したときの復旧手段です
 - **/quit** と **/exit**: セッションを終了します
 - `/` で始まる未知の入力はコマンド一覧を表示し、LLM へは送りません（タイプミスした行が質問として履歴に入り、以後の回答を汚染する事故を防ぐため）
@@ -136,6 +137,19 @@ bash scripts/verify-hardening.sh
 ```bash
 ./bin/agent chat -config /path/to/config.yaml
 ```
+
+### 画像入力
+
+REPLの`/image <path> <質問>`と`agent run -image <path> -p <質問>`で、画像を1枚添付して質問できます。
+
+```bash
+./bin/agent run -config /path/to/config.yaml -image ./photo.png -p "何が写っていますか"
+```
+
+- llamacppとopenaiは、画像をdata URIの`image_url`としてOpenAI互換のcontent配列で送ります。anthropic、gemini、ollamaは送信前にエラーを返します
+- 形式はファイルの中身で判定します。拡張子が`.png`でも中身がテキストなら拒否します
+- パスに空白を含むファイルは`/image`で指定できません
+- 添付した画像は会話履歴に残り、以後のターンでも送ります。セッション記録（JSONL）には画像の本体を保存せず、`[画像: <path>]`の行だけを残します。`-resume`で再開した会話や、`/compact`で圧縮した区間には画像が含まれません
 
 ### セッション記録と再開
 

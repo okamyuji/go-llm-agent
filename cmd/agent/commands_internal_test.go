@@ -186,3 +186,16 @@ func TestReportEvalResults_WriteErrorPropagates(t *testing.T) {
 		t.Fatal("レポート書き出し失敗はエラー期待")
 	}
 }
+
+// TestCmdRun_ImageLoadErrorStopsBeforeConfig -image の読み込み失敗は設定読み込みより先に返り、LLM を呼ばない
+func TestCmdRun_ImageLoadErrorStopsBeforeConfig(t *testing.T) {
+	dir := t.TempDir()
+	err := cmdRun(context.Background(), []string{
+		"-config", filepath.Join(dir, "missing.yaml"),
+		"-image", filepath.Join(dir, "missing.png"),
+		"-p", "q",
+	})
+	if err == nil || !strings.HasPrefix(err.Error(), "image:") {
+		t.Errorf("err = %v, want image load error", err)
+	}
+}

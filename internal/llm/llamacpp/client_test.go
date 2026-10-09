@@ -947,3 +947,89 @@ func TestStreamParsesSSEDeltas(t *testing.T) {
 		t.Errorf("finish = %q, want stop", finish)
 	}
 }
+
+// TestChatSendsImagesAsContentParts 画像付きメッセージだけ content を parts 配列で送り、
+// 前後の画像なしメッセージは文字列のまま送る
+func TestChatSendsImagesAsContentParts(t *testing.T) {
+	var gotBody struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+
+	img := llm.Image{MIMEType: "image/png", Data: []byte("ab")}
+	c := llamacpp.New(llamacpp.Options{BaseURL: srv.URL})
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Model: "m",
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: "何色?", Images: []llm.Image{img, img}},
+			{Role: llm.RoleAssistant, Content: "赤"},
+			{Role: llm.RoleUser, Content: "", Images: []llm.Image{img}},
+			{Role: llm.RoleUser, Content: "次"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	parts, ok := gotBody.Messages[0]["content"].([]any)
+	if !ok || len(parts) != 3 {
+		t.Fatalf("content[0] = %#v, want 3 parts", gotBody.Messages[0]["content"])
+	}
+	if p := parts[0].(map[string]any); p["type"] != "text" || p["text"] != "何色?" {
+		t.Errorf("text part = %v", p)
+	}
+	for _, raw := range parts[1:] {
+		p := raw.(map[string]any)
+		u := p["image_url"].(map[string]any)["url"]
+		if p["type"] != "image_url" || u != "data:image/png;base64,YWI=" {
+			t.Errorf("image part = %v", p)
+		}
+	}
+	if s, ok := gotBody.Messages[1]["content"].(string); !ok || s != "赤" {
+		t.Errorf("assistant content = %#v, want string", gotBody.Messages[1]["content"])
+	}
+	empty, ok := gotBody.Messages[2]["content"].([]any)
+	if !ok || len(empty) != 1 || empty[0].(map[string]any)["type"] != "image_url" {
+		t.Errorf("empty-text image message = %#v, want only image part", gotBody.Messages[2]["content"])
+	}
+	if s, ok := gotBody.Messages[3]["content"].(string); !ok || s != "次" {
+		t.Errorf("trailing user content = %#v, want string", gotBody.Messages[3]["content"])
+	}
+}
+
+func TestStreamSendsImagesAsContentParts(t *testing.T) {
+	var gotBody struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	c := llamacpp.New(llamacpp.Options{BaseURL: srv.URL})
+	st, err := c.Stream(context.Background(), llm.ChatRequest{
+		Model:    "m",
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "q", Images: []llm.Image{{MIMEType: "image/png", Data: []byte("ab")}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for {
+		if _, ok := st.Recv(); !ok {
+			break
+		}
+	}
+	_ = st.Close()
+	if _, ok := gotBody.Messages[0]["content"].([]any); !ok {
+		t.Errorf("stream content = %#v, want parts array", gotBody.Messages[0]["content"])
+	}
+}

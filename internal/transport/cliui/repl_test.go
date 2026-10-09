@@ -143,7 +143,7 @@ func TestRepl_PreservesFinalEventWithoutDeltaForFollowUp(t *testing.T) {
 
 func TestRunOneShot(t *testing.T) {
 	var buf bytes.Buffer
-	if err := cliui.RunOneShot(context.Background(), fakeSvc{}, "fake/m", "", "hi", 1, &buf); err != nil {
+	if err := cliui.RunOneShot(context.Background(), fakeSvc{}, "fake/m", "", "hi", nil, 1, &buf); err != nil {
 		t.Fatalf("err=%v", err)
 	}
 	if !strings.Contains(buf.String(), "hello") {
@@ -774,5 +774,17 @@ func TestRepl_EscThenCtrlCQuits(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("REPL did not terminate — Ctrl-C after ESC was lost")
+	}
+}
+
+func TestRunOneShot_PassesImages(t *testing.T) {
+	svc := &inputCapturingSvc{}
+	img := llm.Image{Name: "a.png", MIMEType: "image/png", Data: []byte("x")}
+	if err := cliui.RunOneShot(context.Background(), svc, "fake/m", "", "q", []llm.Image{img}, 1, io.Discard); err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	got := svc.inputs[0].Messages[0]
+	if got.Content != "q" || len(got.Images) != 1 || got.Images[0].Name != "a.png" {
+		t.Errorf("message = %+v", got)
 	}
 }

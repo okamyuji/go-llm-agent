@@ -167,7 +167,11 @@ func (r *REPL) Run(ctx context.Context) error {
 // セッション記録・圧縮判定までを行う。戻り値 true は REPL の終了を意味する
 // (ユーザーの Ctrl-C か シグナル受信)
 func (r *REPL) executeTurn(ctx context.Context, pump *bytePump, line string, st *replState, out io.Writer, rec *sessionWriter) bool {
-	userMsg := llm.Message{Role: llm.RoleUser, Content: line}
+	return r.executeMessage(ctx, pump, llm.Message{Role: llm.RoleUser, Content: line}, st, out, rec)
+}
+
+// executeMessage userMsg を履歴へ積んで 1 ターンを実行する。戻り値は executeTurn と同じ
+func (r *REPL) executeMessage(ctx context.Context, pump *bytePump, userMsg llm.Message, st *replState, out io.Writer, rec *sessionWriter) bool {
 	st.history = append(st.history, userMsg)
 
 	turnMessages, quit, usage := r.runTurn(ctx, pump, append([]llm.Message{}, st.history...), st.toolChoice)
@@ -350,10 +354,28 @@ func (r *REPL) handleSlashCommand(ctx context.Context, pump *bytePump, line stri
 		r.handleCostCommand(out)
 	case "/memory":
 		r.handleMemoryCommand(arg, out)
+	case "/image":
+		return r.handleImageCommand(ctx, pump, arg, st, out, rec)
 	default:
-		fmt.Fprintf(out, "[コマンド] %s は未定義です。利用可能: /quit /exit /clear /tools off|on /help /model /compact /cost /memory\n", name)
+		fmt.Fprintf(out, "[コマンド] %s は未定義です。利用可能: /quit /exit /clear /tools off|on /help /model /compact /cost /memory /image\n", name)
 	}
 	return false
+}
+
+// handleImageCommand "/image <path> <質問>" の画像と質問を 1 ターンとして送る。戻り値は executeMessage と同じ
+func (r *REPL) handleImageCommand(ctx context.Context, pump *bytePump, arg string, st *replState, out io.Writer, rec *sessionWriter) bool {
+	path, question, _ := strings.Cut(arg, " ")
+	question = strings.TrimSpace(question)
+	if path == "" || question == "" {
+		fmt.Fprintln(out, "[image] 使い方: /image <path> <質問>")
+		return false
+	}
+	img, err := llm.LoadImage(path)
+	if err != nil {
+		fmt.Fprintf(out, "[image] %v\n", err)
+		return false
+	}
+	return r.executeMessage(ctx, pump, llm.Message{Role: llm.RoleUser, Content: question, Images: []llm.Image{img}}, st, out, rec)
 }
 
 // helpText 全スラッシュコマンドの一覧と一行説明を返す
@@ -366,6 +388,7 @@ func helpText() string {
   /clear                  会話履歴を破棄し、新しいセッションを開始します
   /tools off|on           ツール定義の送信を無効化/有効化します
   /memory [file]          自動メモリの一覧と索引、または指定ファイルの本文を表示します
+  /image <path> <質問>    画像を添付して質問します (png/jpeg/gif/webp、20MB まで)
   # <本文>                本文を自動メモリ (memories.md) へ即時保存します (LLM へは送りません)
   /quit, /exit            REPL を終了します
 `

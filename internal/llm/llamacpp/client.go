@@ -97,7 +97,7 @@ type chatPayload struct {
 // 両方欠けた {"role":"assistant"} は 400 invalid_request_error になるため。
 type chatPayloadMsg struct {
 	Role       string            `json:"role"`
-	Content    string            `json:"content"`
+	Content    any               `json:"content"`
 	Name       string            `json:"name,omitempty"`
 	ToolCallID string            `json:"tool_call_id,omitempty"`
 	ToolCalls  []chatPayloadCall `json:"tool_calls,omitempty"`
@@ -217,6 +217,31 @@ func normalizeArgs(raw json.RawMessage) json.RawMessage {
 	return json.RawMessage(s)
 }
 
+type contentPart struct {
+	Type     string           `json:"type"`
+	Text     string           `json:"text,omitempty"`
+	ImageURL *contentImageURL `json:"image_url,omitempty"`
+}
+
+type contentImageURL struct {
+	URL string `json:"url"`
+}
+
+// messageContent 画像が無ければ文字列、あれば OpenAI 形式の parts 配列を返す
+func messageContent(m llm.Message) any {
+	if len(m.Images) == 0 {
+		return m.Content
+	}
+	parts := make([]contentPart, 0, len(m.Images)+1)
+	if m.Content != "" {
+		parts = append(parts, contentPart{Type: "text", Text: m.Content})
+	}
+	for _, img := range m.Images {
+		parts = append(parts, contentPart{Type: "image_url", ImageURL: &contentImageURL{URL: img.DataURL()}})
+	}
+	return parts
+}
+
 func (c *Client) toPayload(req llm.ChatRequest, stream bool) chatPayload {
 	temperature := req.Temperature
 	if temperature == nil {
@@ -240,7 +265,7 @@ func (c *Client) toPayload(req llm.ChatRequest, stream bool) chatPayload {
 		p.ChatTemplateKwargs = map[string]any{"enable_thinking": *c.think}
 	}
 	for _, m := range req.Messages {
-		pm := chatPayloadMsg{Role: string(m.Role), Content: m.Content, Name: m.Name, ToolCallID: m.ToolCallID}
+		pm := chatPayloadMsg{Role: string(m.Role), Content: messageContent(m), Name: m.Name, ToolCallID: m.ToolCallID}
 		for _, tc := range m.ToolCalls {
 			args := tc.Arguments
 			if len(args) == 0 {

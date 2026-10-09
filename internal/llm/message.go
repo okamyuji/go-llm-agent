@@ -17,9 +17,18 @@ const (
 type Message struct {
 	Role       Role
 	Content    string
+	Images     []Image
 	ToolCalls  []ToolCall
 	ToolCallID string
 	Name       string
+}
+
+// Image メッセージに添付する画像
+type Image struct {
+	// Name 利用者が指定したパス。セッション記録の目印に使い、LLM へは送らない
+	Name     string
+	MIMEType string
+	Data     []byte
 }
 
 // ToolCall LLM からのツール呼び出し依頼
