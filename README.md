@@ -1,6 +1,6 @@
 # go-llm-agent
 
-Go 1.25製のCGOなし単一バイナリAIエージェントです。OpenAI、Anthropic、Google Gemini、Ollama、llama.cpp (llama-server) を同一CLIとHTTP APIから扱えます。LiteLLMのように複数のLLMプロバイダーを統一インターフェースで操作でき、その上に薄いエージェントループ (tool calling、会話履歴、内蔵ツール) を提供します。
+Go 1.26製のCGOなし単一バイナリAIエージェントです。OpenAI、Anthropic、Google Gemini、Ollama、llama.cpp (llama-server) を同一CLIとHTTP APIから扱えます。LiteLLMのように複数のLLMプロバイダーを統一インターフェースで操作でき、その上に薄いエージェントループ (tool calling、会話履歴、内蔵ツール) を提供します。
 
 ## 主な特徴
 

@@ -41,8 +41,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install staticcheck
-        # v0.8 系は go >= 1.26 を要求するため、go.mod の go 1.25 に合わせて v0.7 系へ固定する
-        run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+        run: go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
 
       - name: Install golangci-lint
         # v2.12 以前は package facts のキャッシュ不整合で _test.go の t.Fatal 後に
@@ -86,8 +85,7 @@ jobs:
           cache: true
 
       - name: Install staticcheck
-        # v0.8 系は go >= 1.26 を要求するため、go.mod の go 1.25 に合わせて v0.7 系へ固定する
-        run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+        run: go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
 
       - name: Install golangci-lint
         # v2.12 以前は package facts のキャッシュ不整合で _test.go の t.Fatal 後に
