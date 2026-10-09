@@ -377,6 +377,8 @@ E2Eスクリプトは `tests/e2e/14-pii-redact.sh` でTestPIIRedactor_* と Test
 
 `safety.input_scanner` で入力テキストに対する正規表現スキャン、`safety.output_redactor` で出力テキストに対する機微情報マスキングを行います。すべてのツール返却テキストは `[UNTRUSTED INPUT: tool=<name>]` で始まるuntrustedマーカーで包まれ、LLMにuntrustedソースであることを明示します。
 
+`input_scanner`は本文のテキストだけを検査し、`/image`や`-image`で添付した画像は検査しません。画像に描かれた文字は、利用者の発話と同じuserロールでモデルへ届きます。外部から受け取ったスクリーンショットなどを添付する場合は、`agent.approval.required_tools`に書き込み系ツールを列挙してください。
+
 ```yaml
 safety:
   input_scanner:
