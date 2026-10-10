@@ -147,3 +147,36 @@ func TestREPL_ImageLoadErrorsShowPrefixAndPathOnce(t *testing.T) {
 		})
 	}
 }
+
+// TestREPL_ImageRejectsWhenHistoryImagesExceedLimit 履歴の画像は毎ターン送り直すため、合計が上限を超える /image は送らない
+func TestREPL_ImageRejectsWhenHistoryImagesExceedLimit(t *testing.T) {
+	dir := t.TempDir()
+	png := func(name string, size int64) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Truncate(p, size); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	big1 := png("big1.png", llm.MaxImageBytes)
+	big2 := png("big2.png", llm.MaxImageBytes)
+	small := png("small.png", 64)
+	svc := &inputCapturingSvc{}
+	got := runSlashREPL(t, svc, cliui.Options{}, "/image "+big1+" q1\n/image "+big2+" q2\n/image "+small+" q3\n/quit\n")
+	if len(svc.inputs) != 2 {
+		t.Fatalf("turns sent = %d, want 2 (the third image exceeds the history limit)", len(svc.inputs))
+	}
+	// 2 枚目で合計がちょうど上限になる。上限ちょうどは受け付け、超える 3 枚目だけを拒否する
+	for i, want := range []string{"q1", "q2"} {
+		msgs := svc.inputs[i].Messages
+		if got := msgs[len(msgs)-1].Content; got != want {
+			t.Errorf("turn %d question = %q, want %q", i, got, want)
+		}
+	}
+	if !strings.Contains(got, "[image] ") || !strings.Contains(got, "/clear") {
+		t.Errorf("want an [image] message suggesting /clear: %q", got)
+	}
+}

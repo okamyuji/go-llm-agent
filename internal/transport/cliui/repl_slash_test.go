@@ -3,6 +3,7 @@ package cliui_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -60,7 +61,7 @@ func runSlashREPL(t *testing.T, svc agent.Service, opt cliui.Options, input stri
 		opt.Model = "test/m"
 	}
 	r := cliui.NewREPL(svc, opt)
-	if err := r.Run(context.Background()); err != nil {
+	if err := r.Run(t.Context()); err != nil {
 		t.Fatalf("Run err=%v", err)
 	}
 	return buf.String()
@@ -253,5 +254,21 @@ func TestREPL_UnknownCommandListsAllCommands(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("一覧に %q が無い: %q", want, got)
 		}
+	}
+}
+
+// emitAndReturnErrorSvc agent のループと同じく EventError を送ったうえで同じ err を返す
+type emitAndReturnErrorSvc struct{}
+
+func (emitAndReturnErrorSvc) Run(_ context.Context, _ agent.Input, out chan<- agent.Event) error {
+	err := errors.New("boom")
+	out <- agent.Event{Kind: agent.EventError, Err: err}
+	return err
+}
+
+func TestREPL_TurnErrorIsShownOnce(t *testing.T) {
+	got := runSlashREPL(t, emitAndReturnErrorSvc{}, cliui.Options{}, "hello\n/quit\n")
+	if n := strings.Count(got, "[error] boom"); n != 1 {
+		t.Errorf("[error] shown %d times, want 1: %q", n, got)
 	}
 }
