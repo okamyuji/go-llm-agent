@@ -362,6 +362,21 @@ func (r *REPL) handleSlashCommand(ctx context.Context, pump *bytePump, line stri
 	return false
 }
 
+// maxHistoryImageBytes 会話履歴に残せる画像の合計。履歴の画像は毎ターン base64 で送り直すため、
+// 上限の画像 2 枚分までに抑える
+const maxHistoryImageBytes = 2 * llm.MaxImageBytes
+
+// historyImageBytes 履歴に残っている画像の合計バイト数
+func historyImageBytes(history []llm.Message) int {
+	total := 0
+	for _, m := range history {
+		for _, img := range m.Images {
+			total += len(img.Data)
+		}
+	}
+	return total
+}
+
 // handleImageCommand "/image <path> <質問>" の画像と質問を 1 ターンとして送る。戻り値は executeMessage と同じ
 func (r *REPL) handleImageCommand(ctx context.Context, pump *bytePump, arg string, st *replState, out io.Writer, rec *sessionWriter) bool {
 	path, question, _ := strings.Cut(arg, " ")
@@ -373,6 +388,10 @@ func (r *REPL) handleImageCommand(ctx context.Context, pump *bytePump, arg strin
 	img, err := llm.LoadImage(path)
 	if err != nil {
 		fmt.Fprintf(out, "[image] %v\n", err)
+		return false
+	}
+	if total := historyImageBytes(st.history) + len(img.Data); total > maxHistoryImageBytes {
+		fmt.Fprintf(out, "[image] 会話中の画像が合計 %d バイトになり上限 %d バイトを超えます。/clear で履歴を捨ててから添付してください\n", total, maxHistoryImageBytes)
 		return false
 	}
 	return r.executeMessage(ctx, pump, llm.Message{Role: llm.RoleUser, Content: question, Images: []llm.Image{img}}, st, out, rec)
@@ -586,6 +605,9 @@ type turnState struct {
 	// usageLastIn 最後に届いた EventUsage の InputTokens (圧縮の閾値判定用)
 	usageLastIn int
 	interrupted bool
+	// errorShown このターンでエラーを表示済みなら true。agent のループは EventError を送ったうえで
+	// 同じ err を返し、runTurn がそれをもう一度 EventError として流すため、2 件目以降は表示しない
+	errorShown bool
 	// pasteActive 生成中の入力ストリームが bracketed paste の内側にあるとき true。
 	// ペースト本文中の単独 ESC を中断キーとして食い潰さないための追跡
 	pasteActive bool
@@ -635,9 +657,10 @@ func (r *REPL) handleTurnEvent(ctx context.Context, ev agent.Event, st *turnStat
 	case agent.EventError:
 		r.stopSpinner()
 		_ = st.safeOut.Flush()
-		if suppressTurnError(ctx, st.interrupted, ev.Err) {
+		if st.errorShown || suppressTurnError(ctx, st.interrupted, ev.Err) {
 			return
 		}
+		st.errorShown = true
 		fmt.Fprintf(st.out, "\n[error] %v\n", ev.Err)
 	}
 }
