@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -229,7 +230,8 @@ func TestRunOneShot_SendsImageToProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	img := filepath.Join(dir, "a.png")
-	if err := os.WriteFile(img, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), 0o600); err != nil {
+	imageBytes := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+	if err := os.WriteFile(img, imageBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -253,7 +255,8 @@ func TestRunOneShot_SendsImageToProvider(t *testing.T) {
 	}
 	image, _ := parts[1].(map[string]any)
 	u, _ := image["image_url"].(map[string]any)
-	if s, _ := u["url"].(string); !strings.HasPrefix(s, "data:image/png;base64,") {
-		t.Errorf("image part = %v", parts[1])
+	want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imageBytes)
+	if got, _ := u["url"].(string); got != want {
+		t.Errorf("image url = %q, want %q", got, want)
 	}
 }
