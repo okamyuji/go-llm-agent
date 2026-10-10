@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 )
 
 // MaxImageBytes 1 枚の画像の上限。履歴の画像は毎ターン base64 で送り直すため、メモリと送信量を抑える値にする
@@ -20,11 +21,33 @@ var supportedImageTypes = []string{"image/png", "image/jpeg", "image/gif", "imag
 
 // DataURL 画像を data URI にする
 func (i Image) DataURL() string {
-	return "data:" + i.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(i.Data)
+	// 履歴の画像を毎ターン変換するため、出力の大きさで 1 回だけ確保して途中の文字列を作らない
+	const chunk = 3 * 1024
+	var enc [chunk / 3 * 4]byte
+	var b strings.Builder
+	b.Grow(len("data:;base64,") + len(i.MIMEType) + base64.StdEncoding.EncodedLen(len(i.Data)))
+	b.WriteString("data:")
+	b.WriteString(i.MIMEType)
+	b.WriteString(";base64,")
+	for data := i.Data; len(data) > 0; {
+		n := min(len(data), chunk)
+		base64.StdEncoding.Encode(enc[:], data[:n])
+		b.Write(enc[:base64.StdEncoding.EncodedLen(n)])
+		data = data[n:]
+	}
+	return b.String()
 }
 
 // LoadImage path の画像を読み込む。形式は拡張子でなく中身で判定する
 func LoadImage(path string) (Image, error) {
+	// FIFO などは書き手が現れるまで Open が戻らないので、開く前に通常ファイルに限る
+	info, err := os.Stat(path)
+	if err != nil {
+		return Image{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return Image{}, fmt.Errorf("%s is not a regular file", path)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return Image{}, err
