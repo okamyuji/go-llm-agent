@@ -27,22 +27,22 @@ func (i Image) DataURL() string {
 func LoadImage(path string) (Image, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return Image{}, fmt.Errorf("image: %w", err)
+		return Image{}, err
 	}
 	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(io.LimitReader(f, MaxImageBytes+1))
 	if err != nil {
-		return Image{}, fmt.Errorf("image: read %s: %w", path, err)
+		return Image{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	if len(data) == 0 {
-		return Image{}, fmt.Errorf("image: %s is empty", path)
+		return Image{}, fmt.Errorf("%s is empty", path)
 	}
 	if len(data) > MaxImageBytes {
-		return Image{}, fmt.Errorf("image: %s exceeds %d bytes", path, MaxImageBytes)
+		return Image{}, fmt.Errorf("%s exceeds %d bytes", path, MaxImageBytes)
 	}
 	mime := http.DetectContentType(data)
 	if !slices.Contains(supportedImageTypes, mime) {
-		return Image{}, fmt.Errorf("image: %s has unsupported type %s (png, jpeg, gif, webp only)", path, mime)
+		return Image{}, fmt.Errorf("%s has unsupported type %s (png, jpeg, gif, webp only)", path, mime)
 	}
 	return Image{Name: path, MIMEType: mime, Data: data}, nil
 }

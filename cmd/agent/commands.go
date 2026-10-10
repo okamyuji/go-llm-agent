@@ -28,7 +28,7 @@ func runOneShot(ctx context.Context, p oneShotParams) error {
 		// 設定と provider を組み立てる前に読み、壊れた入力で LLM を呼ばない
 		img, err := llm.LoadImage(p.ImagePath)
 		if err != nil {
-			return err
+			return fmt.Errorf("image: %w", err)
 		}
 		images = []llm.Image{img}
 	}

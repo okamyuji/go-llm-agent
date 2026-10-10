@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -197,5 +200,49 @@ func TestCmdRun_ImageLoadErrorStopsBeforeConfig(t *testing.T) {
 	})
 	if err == nil || !strings.HasPrefix(err.Error(), "image:") {
 		t.Errorf("err = %v, want image load error", err)
+	}
+}
+
+// TestRunOneShot_SendsImageToProvider -image の画像が設定済み provider へ content parts として届く
+func TestRunOneShot_SendsImageToProvider(t *testing.T) {
+	var gotBody struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"red\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	path := writeChatConfig(t, dir, "")
+	cfg, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, bytes.Replace(cfg, []byte("http://127.0.0.1:1"), []byte(srv.URL), 1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	img := filepath.Join(dir, "a.png")
+	if err := os.WriteFile(img, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runOneShot(context.Background(), oneShotParams{ConfigPath: path, Prompt: "q", ImagePath: img, Out: &out}); err != nil {
+		t.Fatalf("runOneShot: %v", err)
+	}
+	if !strings.Contains(out.String(), "red") {
+		t.Errorf("output = %q", out.String())
+	}
+	last := gotBody.Messages[len(gotBody.Messages)-1]
+	parts, ok := last["content"].([]any)
+	if !ok || len(parts) != 2 {
+		t.Fatalf("user content = %#v, want text and image parts", last["content"])
+	}
+	u, _ := parts[1].(map[string]any)["image_url"].(map[string]any)
+	if s, _ := u["url"].(string); !strings.HasPrefix(s, "data:image/png;base64,") {
+		t.Errorf("image url = %v", u)
 	}
 }

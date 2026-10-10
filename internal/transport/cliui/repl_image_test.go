@@ -1,12 +1,20 @@
 package cliui_test
 
 import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/okamyuji/go-llm-agent/internal/agent"
 	"github.com/okamyuji/go-llm-agent/internal/llm"
+	"github.com/okamyuji/go-llm-agent/internal/llm/anthropic"
+	"github.com/okamyuji/go-llm-agent/internal/tool"
 	"github.com/okamyuji/go-llm-agent/internal/transport/cliui"
 )
 
@@ -57,5 +65,62 @@ func TestREPL_ImageRejectsBadInputWithoutSending(t *testing.T) {
 				t.Errorf("output lacks [image] message: %q", got)
 			}
 		})
+	}
+}
+
+func TestREPL_ImageLoadErrorHasSinglePrefix(t *testing.T) {
+	got := runSlashREPL(t, &inputCapturingSvc{}, cliui.Options{}, "/image "+filepath.Join(t.TempDir(), "x.png")+" q\n/quit\n")
+	if !strings.Contains(got, "[image] open ") {
+		t.Errorf("want [image] followed by the open error: %q", got)
+	}
+	if strings.Contains(got, "[image] image:") {
+		t.Errorf("prefix is duplicated: %q", got)
+	}
+}
+
+func TestREPL_ImageRecordsPathInSessionJSONL(t *testing.T) {
+	dir := t.TempDir()
+	p := writePNG(t)
+	runSlashREPL(t, &inputCapturingSvc{}, cliui.Options{SessionsDir: dir}, "/image "+p+" 何色ですか\n/quit\n")
+	files, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("session files = %v, err = %v", files, err)
+	}
+	b, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte("[画像: "+p+"]\\n何色ですか")) {
+		t.Errorf("JSONL lacks the image marker: %s", b)
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte(base64.StdEncoding.EncodeToString(raw))) {
+		t.Errorf("JSONL contains image bytes: %s", b)
+	}
+}
+
+// TestREPL_ImageWithUnsupportedProviderShowsError 非対応 provider は HTTP を呼ばずに拒否し、REPL はそのエラーを表示する
+func TestREPL_ImageWithUnsupportedProviderShowsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("anthropic must not be called with images")
+	}))
+	defer srv.Close()
+	reg := llm.NewRegistry(map[string]llm.Provider{"anthropic": anthropic.New(anthropic.Options{BaseURL: srv.URL, APIKey: "KEY"})})
+	var buf bytes.Buffer
+	opt := cliui.Options{
+		Model:          "anthropic/m",
+		In:             strings.NewReader("/image " + writePNG(t) + " q\n/quit\n"),
+		Out:            &buf,
+		DisableSpinner: true,
+		Registry:       reg,
+	}
+	if err := cliui.NewREPL(agent.New(reg, tool.NewRegistry(nil, nil)), opt).Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(buf.String(), "images not supported by anthropic") {
+		t.Errorf("output lacks the unsupported error: %q", buf.String())
 	}
 }
