@@ -249,7 +249,7 @@ func TestREPL_UnknownCommandListsAllCommands(t *testing.T) {
 	if !strings.Contains(got, "/foo は未定義です") {
 		t.Fatalf("未定義メッセージなし: %q", got)
 	}
-	for _, want := range []string{"/help", "/model", "/compact", "/cost"} {
+	for _, want := range []string{"/help", "/model", "/compact", "/cost", "/image"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("一覧に %q が無い: %q", want, got)
 		}
