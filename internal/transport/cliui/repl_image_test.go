@@ -2,7 +2,6 @@ package cliui_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
@@ -68,16 +67,6 @@ func TestREPL_ImageRejectsBadInputWithoutSending(t *testing.T) {
 	}
 }
 
-func TestREPL_ImageLoadErrorHasSinglePrefix(t *testing.T) {
-	got := runSlashREPL(t, &inputCapturingSvc{}, cliui.Options{}, "/image "+filepath.Join(t.TempDir(), "x.png")+" q\n/quit\n")
-	if !strings.Contains(got, "[image] open ") {
-		t.Errorf("want [image] followed by the open error: %q", got)
-	}
-	if strings.Contains(got, "[image] image:") {
-		t.Errorf("prefix is duplicated: %q", got)
-	}
-}
-
 func TestREPL_ImageRecordsPathInSessionJSONL(t *testing.T) {
 	dir := t.TempDir()
 	p := writePNG(t)
@@ -117,10 +106,44 @@ func TestREPL_ImageWithUnsupportedProviderShowsError(t *testing.T) {
 		DisableSpinner: true,
 		Registry:       reg,
 	}
-	if err := cliui.NewREPL(agent.New(reg, tool.NewRegistry(nil, nil)), opt).Run(context.Background()); err != nil {
+	if err := cliui.NewREPL(agent.New(reg, tool.NewRegistry(nil, nil)), opt).Run(t.Context()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(buf.String(), "images not supported by anthropic") {
 		t.Errorf("output lacks the unsupported error: %q", buf.String())
+	}
+}
+
+// TestREPL_ImageLoadErrorsShowPrefixAndPathOnce LoadImage の失敗はどの分岐でも [image] とパスを 1 回ずつだけ表示する
+func TestREPL_ImageLoadErrorsShowPrefixAndPathOnce(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, data []byte) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	big := write("big.png", []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"))
+	if err := os.Truncate(big, llm.MaxImageBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"missing":   filepath.Join(dir, "x.png"),
+		"empty":     write("e.png", nil),
+		"not image": write("t.png", []byte("hello world")),
+		"too large": big,
+		"directory": t.TempDir(),
+	}
+	for name, p := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := runSlashREPL(t, &inputCapturingSvc{}, cliui.Options{}, "/image "+p+" q\n/quit\n")
+			if !strings.Contains(got, "[image] ") || strings.Contains(got, "[image] image:") {
+				t.Errorf("want a single [image] prefix: %q", got)
+			}
+			if n := strings.Count(got, p); n != 1 {
+				t.Errorf("path appears %d times, want 1: %q", n, got)
+			}
+		})
 	}
 }

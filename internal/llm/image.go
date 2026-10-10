@@ -32,7 +32,7 @@ func LoadImage(path string) (Image, error) {
 	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(io.LimitReader(f, MaxImageBytes+1))
 	if err != nil {
-		return Image{}, fmt.Errorf("read %s: %w", path, err)
+		return Image{}, err
 	}
 	if len(data) == 0 {
 		return Image{}, fmt.Errorf("%s is empty", path)

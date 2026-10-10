@@ -205,6 +205,8 @@ func TestCmdRun_ImageLoadErrorStopsBeforeConfig(t *testing.T) {
 
 // TestRunOneShot_SendsImageToProvider -image の画像が設定済み provider へ content parts として届く
 func TestRunOneShot_SendsImageToProvider(t *testing.T) {
+	// 監査を有効にすると利用者のホームへ WAL を書くため、このテストでは止める
+	t.Setenv("IGGY_PAT", "")
 	var gotBody struct {
 		Messages []map[string]any `json:"messages"`
 	}
@@ -230,19 +232,27 @@ func TestRunOneShot_SendsImageToProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := runOneShot(context.Background(), oneShotParams{ConfigPath: path, Prompt: "q", ImagePath: img, Out: &out}); err != nil {
+	if err := runOneShot(t.Context(), oneShotParams{ConfigPath: path, Prompt: "q", ImagePath: img, Out: &out}); err != nil {
 		t.Fatalf("runOneShot: %v", err)
 	}
 	if !strings.Contains(out.String(), "red") {
 		t.Errorf("output = %q", out.String())
+	}
+	if len(gotBody.Messages) == 0 {
+		t.Fatal("provider received no messages")
 	}
 	last := gotBody.Messages[len(gotBody.Messages)-1]
 	parts, ok := last["content"].([]any)
 	if !ok || len(parts) != 2 {
 		t.Fatalf("user content = %#v, want text and image parts", last["content"])
 	}
-	u, _ := parts[1].(map[string]any)["image_url"].(map[string]any)
+	text, _ := parts[0].(map[string]any)
+	if text["type"] != "text" || text["text"] != "q" {
+		t.Errorf("text part = %v", parts[0])
+	}
+	image, _ := parts[1].(map[string]any)
+	u, _ := image["image_url"].(map[string]any)
 	if s, _ := u["url"].(string); !strings.HasPrefix(s, "data:image/png;base64,") {
-		t.Errorf("image url = %v", u)
+		t.Errorf("image part = %v", parts[1])
 	}
 }
