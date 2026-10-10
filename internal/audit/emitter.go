@@ -173,6 +173,9 @@ func (e *Emitter) LLMRequest(ctx context.Context, provider, model string, req ll
 		for _, tc := range m.ToolCalls {
 			mp.ToolCalls = append(mp.ToolCalls, e.toolCallPayload(tc, true))
 		}
+		for _, img := range m.Images {
+			mp.Images = append(mp.Images, ImagePayload{Name: RedactString(img.Name, e.opts.Redactor), MIMEType: img.MIMEType, Bytes: len(img.Data)})
+		}
 		p.Messages = append(p.Messages, mp)
 	}
 	for _, t := range req.Tools {

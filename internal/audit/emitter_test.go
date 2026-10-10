@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -236,4 +237,28 @@ func TestEmitterShutdownReleasesLock(t *testing.T) {
 		t.Fatal("run lock must be released after Shutdown")
 	}
 	_ = f.Close()
+}
+
+// TestEmitterLLMRequestRecordsImagesWithoutBytes 画像を添付した事実は残し、本体は記録しない
+func TestEmitterLLMRequestRecordsImagesWithoutBytes(t *testing.T) {
+	dir := t.TempDir()
+	fi := newFakeIggy(t)
+	e := NewEmitter(Options{WALDir: dir, IggyURL: fi.srv.URL, PAT: "p", Redactor: upperRedactor{}})
+	ctx := WithSessionID(context.Background(), "s")
+	e.LLMRequest(ctx, "llamacpp", "m", llm.ChatRequest{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "q", Images: []llm.Image{{Name: "/home/SECRET/a.png", MIMEType: "image/png", Data: []byte("image-bytes")}}},
+	}})
+	_ = e.Shutdown(context.Background())
+	evs := readAllEvents(t, dir)
+	var p LLMRequestPayload
+	if err := json.Unmarshal(evs[0].Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	imgs := p.Messages[0].Images
+	if len(imgs) != 1 || imgs[0].Name != "/home/[R]/a.png" || imgs[0].MIMEType != "image/png" || imgs[0].Bytes != len("image-bytes") {
+		t.Fatalf("images = %+v, payload=%s", imgs, evs[0].Payload)
+	}
+	if strings.Contains(string(evs[0].Payload), "image-bytes") || strings.Contains(string(evs[0].Payload), "aW1hZ2UtYnl0ZXM") {
+		t.Fatalf("payload leaks image bytes: %s", evs[0].Payload)
+	}
 }

@@ -42,6 +42,14 @@ type MessagePayload struct {
 	Name       string            `json:"name,omitempty"`
 	ToolCallID string            `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCallPayload `json:"tool_calls,omitempty"`
+	Images     []ImagePayload    `json:"images,omitempty"`
+}
+
+// ImagePayload 添付画像の目印。本体は記録しない
+type ImagePayload struct {
+	Name     string `json:"name"`
+	MIMEType string `json:"mime_type"`
+	Bytes    int    `json:"bytes"`
 }
 
 // ToolCallPayload ツール呼出。tool_call イベントの payload と llm_response.tool_call の両方に使う
