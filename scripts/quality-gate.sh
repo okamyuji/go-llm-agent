@@ -5,6 +5,14 @@
 # 統一しており、v8.30 で protect --staged の挙動が安定しない問題を回避する。
 set -euo pipefail
 
+# CI は go.mod の go 行の版で動く。手元の Go が新しいと staticcheck が新しい export data を読めずに
+# 落ちるため、GOTOOLCHAIN が未設定なら go.mod の版に揃えて CI と同じ版で検査する
+if [ -z "${GOTOOLCHAIN:-}" ]; then
+  GOTOOLCHAIN="go$(go list -m -f '{{.GoVersion}}')"
+  export GOTOOLCHAIN
+fi
+echo "==> go toolchain: $(go version)"
+
 echo "==> gofmt"
 ./scripts/hooks/check_gofmt.sh
 
