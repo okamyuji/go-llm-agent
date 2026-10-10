@@ -149,7 +149,7 @@ REPLの`/image <path> <質問>`と`agent run -image <path> -p <質問>`で、画
 - llamacppとopenaiは、画像をdata URIの`image_url`としてOpenAI互換のcontent配列で送ります。anthropic、gemini、ollamaは送信前にエラーを返します
 - 形式はファイルの中身で判定します。拡張子が`.png`でも中身がテキストなら拒否します
 - パスに空白を含むファイルは`/image`で指定できません
-- 添付した画像は会話履歴に残り、以後のターンでも送ります。セッション記録（JSONL）には画像の本体を保存せず、`[画像: <path>]`の行だけを残します。`-resume`で再開した会話や、`/compact`で圧縮した区間には画像が含まれません
+- 添付した画像は会話履歴に残り、以後のターンでも送ります。履歴の画像の合計が40MBを超える`/image`は拒否するので、`/clear`で履歴を捨ててから添付してください。セッション記録（JSONL）には画像の本体を保存せず、`[画像: <path>]`の行だけを残します。`-resume`で再開した会話や、`/compact`で圧縮した区間には画像が含まれません
 - 画像が履歴に残っている間に`/model`でanthropic、gemini、ollamaへ切り替えると、画像を付けていないターンも`images not supported`で失敗します。`/clear`で履歴を捨てると元に戻ります
 
 ### セッション記録と再開
@@ -468,9 +468,9 @@ server:
 
 E2Eスクリプトは `tests/e2e/04-http-auth.sh` です。401 / 200 / 429 のすべてのシナリオをローカル環境変数のみで検証します。設計の詳細は `docs/design/04-http-auth-ratelimit.md` を参照してください。
 
-## リトライとフォールバック
+## リトライ
 
-`providers.<name>.retry` でリトライ設定を、`fallback_to` で別プロバイダーへの切替を指定できます。`request_timeout_seconds` は HTTPクライアント全体のタイムアウトを上書きします。
+`providers.<name>.retry` でリトライ設定を指定できます。`request_timeout_seconds` は HTTPクライアント全体のタイムアウトを上書きします。
 
 ```yaml
 providers:
@@ -481,10 +481,11 @@ providers:
       initial_backoff_ms: 200
       max_backoff_ms: 5000
       jitter_ratio: 0.2
-    fallback_to: anthropic
 ```
 
-リトライ対象は `llm.ProviderError.Retryable=true` の429と5xx系のみで、4xxの入力エラーやcontextのキャンセルは即座に失敗します。バックオフは指数増加でジッタを掛け、`MaxBackoff` を上限とします。リトライ試行数とフォールバック発火回数はOTel メトリクス `llm.retry.attempts` と `llm.fallback.total` に記録されます。
+リトライ対象は `llm.ProviderError.Retryable=true` の429と5xx系のみで、4xxの入力エラーやcontextのキャンセルは即座に失敗します。バックオフは指数増加でジッタを掛け、`MaxBackoff` を上限とします。リトライ試行数はOTel メトリクス `llm.retry.attempts` に記録されます。
+
+`fallback_to` は設定として読み込み、存在しないプロバイダーや循環する指定を起動時に拒否します。ただし、agentのループは失敗時に別プロバイダーへ切り替えません。そのため、プロンプトが設定外のプロバイダーへ送られることはありません。
 
 E2Eスクリプトは `tests/e2e/03-llm-retry.sh` です。`tests/e2e/fixtures/retry_exercise` のフェイクプロバイダーを介して 429を2回返した後成功するシナリオを検証します。設計の詳細は `docs/design/03-llm-retry-backoff.md` を参照してください。
 
@@ -690,7 +691,7 @@ observability:
 エクスポート対象は次のとおりです。
 
 - スパン: `agent.run`、`llm.call`、`tool.execute`。親子関係がtrace上で1本につながります。
-- メトリクス: `llm.tokens.input`、`llm.tokens.output`、`tool.duration_ms`、`tool.success`、`tool.failure`、`llm.retry.attempts`、`llm.fallback.total`。
+- メトリクス: `llm.tokens.input`、`llm.tokens.output`、`tool.duration_ms`、`tool.success`、`tool.failure`、`llm.retry.attempts`。
 - ログ: `obs.NewLogger` でラップした slog レコードに `trace_id` と `span_id` の属性が付きます。
 
 実動作確認はリポジトリ同梱のE2Eスクリプトで再現できます。Goとbashのみで動き、ローカルPC固有の設定には依存しません。
@@ -716,7 +717,7 @@ make build-all           # 対応する全プラットフォーム向けにク�
 
 ビルド時のバージョンは`-ldflags -X main.version=...`で埋め込み、`agent version`で表示します。`make build`は未指定なら`git describe --tags`の値（例: `v0.13.0-3-gabc1234-dirty`）を使います。
 
-`scripts/quality-gate.sh` はpre-commitとCIが共有する品質確認の入口です。mutation対象packageの除外テスト、gofmt、go vet、staticcheck、golangci-lint、govulncheck、`go test --count=1 --shuffle=on -race -cover`、release build、機密ファイルのstage防止、`gitleaks detect --no-git --source .` を順に実行します。`RUN_E2E=1`では`tests/e2e/*.sh`もすべて実行します。gitleaksはstage状態にかかわらず作業ツリーを検査し、`.gitleaks.toml`のallowlistに列挙したpathとマスク済みplaceholderを対象外にします。
+`scripts/quality-gate.sh` はpre-commitとCIが共有する品質確認の入口です。`GOTOOLCHAIN`が未設定なら、go.modの`go`行の版のGoに揃えて実行します。mutation対象packageの除外テスト、gofmt、go vet、staticcheck、golangci-lint、govulncheck、`go test --count=1 --shuffle=on -race -cover`、release build、機密ファイルのstage防止、`gitleaks detect --no-git --source .` を順に実行します。`RUN_E2E=1`では`tests/e2e/*.sh`もすべて実行します。gitleaksはstage状態にかかわらず作業ツリーを検査し、`.gitleaks.toml`のallowlistに列挙したpathとマスク済みplaceholderを対象外にします。
 
 変更行のmutation testingは、比較元commitと1つ以上のGo packageを指定して実行します。
 
