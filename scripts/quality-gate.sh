@@ -6,12 +6,15 @@
 set -euo pipefail
 
 # CI は go.mod の go 行の版で動く。手元の Go が新しいと staticcheck が新しい export data を読めずに
-# 落ちるため、GOTOOLCHAIN が未設定なら go.mod の版に揃えて CI と同じ版で検査する
-if [ -z "${GOTOOLCHAIN:-}" ]; then
+# 落ちるため、GOTOOLCHAIN が未設定なら go.mod の版に揃えて CI と同じ版で検査する。
+# go env -w で設定した値も尊重するため、環境変数ではなく go env -changed で判定する
+if [ -z "$(go env -changed GOTOOLCHAIN)" ]; then
   GOTOOLCHAIN="go$(go list -m -f '{{.GoVersion}}')"
   export GOTOOLCHAIN
 fi
-echo "==> go toolchain: $(go version)"
+# コマンド置換の失敗は echo の引数では set -e に拾われないため、取得の失敗で止まるよう代入を分ける
+go_version="$(go version)"
+echo "==> go toolchain: ${go_version}"
 
 echo "==> gofmt"
 ./scripts/hooks/check_gofmt.sh
