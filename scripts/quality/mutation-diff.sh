@@ -16,6 +16,16 @@ cd "$ROOT"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# 既定値の分岐を反転した mutant は、テストに渡した一時ディレクトリを無視して利用者のホームへ書く
+# (例: 監査 WAL の置き場所)。gremlins は一時 HOME で走らせ、HOME から決まる Go のキャッシュ場所は
+# 差し替える前の値に固定してモジュールの再ダウンロードを避ける
+GOPATH="$(go env GOPATH)"
+GOMODCACHE="$(go env GOMODCACHE)"
+GOCACHE="$(go env GOCACHE)"
+GOENV="$(go env GOENV)"
+export GOPATH GOMODCACHE GOCACHE GOENV
+mkdir "$TMP/home"
+
 # 変更行 (追加行) を file:line 形式で列挙
 git diff --unified=0 "$BASE"...HEAD -- '*.go' | awk '
   /^\+\+\+ b\// { file = substr($2, 3) }
@@ -68,7 +78,7 @@ for pkg in "$@"; do
 
   echo ">>> gremlins unleash $pkg"
   # timeout-coefficient: 既定係数では重いパッケージの mutant が全件 TIMED OUT になる
-  gremlins unleash "$pkg" --timeout-coefficient 20 --workers 4 2>&1 | tee "$TMP/gremlins_out" | tail -5
+  HOME="$TMP/home" gremlins unleash "$pkg" --timeout-coefficient 20 --workers 4 2>&1 | tee "$TMP/gremlins_out" | tail -5
   # 出力形式: "  KILLED CONDITIONALS_NEGATION at fs.go:55:41" (パスはpkg相対)
   awk -v pkg="$pkg_rel" '
     / (LIVED|NOT COVERED) / {
