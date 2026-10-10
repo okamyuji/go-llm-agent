@@ -364,7 +364,7 @@ func (r *REPL) handleSlashCommand(ctx context.Context, pump *bytePump, line stri
 
 // maxHistoryImageBytes 会話履歴に残せる画像の合計。履歴の画像は毎ターン base64 で送り直すため、
 // 上限の画像 2 枚分までに抑える
-const maxHistoryImageBytes = 2 * llm.MaxImageBytes
+const maxHistoryImageBytes = 40 << 20
 
 // historyImageBytes 履歴に残っている画像の合計バイト数
 func historyImageBytes(history []llm.Message) int {

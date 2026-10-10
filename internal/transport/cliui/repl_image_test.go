@@ -169,6 +169,13 @@ func TestREPL_ImageRejectsWhenHistoryImagesExceedLimit(t *testing.T) {
 	if len(svc.inputs) != 2 {
 		t.Fatalf("turns sent = %d, want 2 (the third image exceeds the history limit)", len(svc.inputs))
 	}
+	// 2 枚目で合計がちょうど上限になる。上限ちょうどは受け付け、超える 3 枚目だけを拒否する
+	for i, want := range []string{"q1", "q2"} {
+		msgs := svc.inputs[i].Messages
+		if got := msgs[len(msgs)-1].Content; got != want {
+			t.Errorf("turn %d question = %q, want %q", i, got, want)
+		}
+	}
 	if !strings.Contains(got, "[image] ") || !strings.Contains(got, "/clear") {
 		t.Errorf("want an [image] message suggesting /clear: %q", got)
 	}

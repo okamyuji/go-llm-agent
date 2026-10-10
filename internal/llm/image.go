@@ -23,7 +23,7 @@ var supportedImageTypes = []string{"image/png", "image/jpeg", "image/gif", "imag
 func (i Image) DataURL() string {
 	// 履歴の画像を毎ターン変換するため、出力の大きさで 1 回だけ確保して途中の文字列を作らない
 	const chunk = 3 * 1024
-	var enc [chunk / 3 * 4]byte
+	var enc [4096]byte // chunk を base64 にした長さ
 	var b strings.Builder
 	b.Grow(len("data:;base64,") + len(i.MIMEType) + base64.StdEncoding.EncodedLen(len(i.Data)))
 	b.WriteString("data:")

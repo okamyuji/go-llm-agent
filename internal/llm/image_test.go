@@ -126,6 +126,19 @@ func TestImage_DataURLAllocatesOnce(t *testing.T) {
 	}
 }
 
+// TestImage_DataURLGrowsExactly 大きな割り当ては 8KB 単位に切り上がり、確保量の小さな不足が余りに隠れる。
+// 出力を 128KB より 2 バイト長くし、確保量が足りなければ 128KB までしか切り上がらず 2 回目の割り当てが起きるようにする
+func TestImage_DataURLGrowsExactly(t *testing.T) {
+	const want = 128<<10 + 2
+	img := llm.Image{MIMEType: "image/png", Data: make([]byte, 98289)}
+	if got := len(img.DataURL()); got != want {
+		t.Fatalf("len = %d, want %d", got, want)
+	}
+	if n := testing.AllocsPerRun(10, func() { _ = img.DataURL() }); n > 1 {
+		t.Errorf("DataURL allocates %.0f times, want 1", n)
+	}
+}
+
 func TestImage_DataURLMatchesStdEncodingAcrossChunks(t *testing.T) {
 	for _, n := range []int{0, 1, 2, 3, 3071, 3072, 3073, 6145, 100000} {
 		data := make([]byte, n)
