@@ -206,9 +206,6 @@ func TestCmdRun_ImageLoadErrorStopsBeforeConfig(t *testing.T) {
 
 // TestRunOneShot_SendsImageToProvider -image の画像が設定済み provider へ content parts として届く
 func TestRunOneShot_SendsImageToProvider(t *testing.T) {
-	// 監査 WAL と自動メモリが利用者のホームへ書き込み、ホームの MEMORY.md を読まないよう隔離する
-	t.Setenv("IGGY_PAT", "")
-	t.Setenv("HOME", t.TempDir())
 	var gotBody struct {
 		Messages []map[string]any `json:"messages"`
 	}

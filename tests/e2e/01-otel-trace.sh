@@ -98,7 +98,9 @@ export AGENT_DUMMY_KEY=dummy
 # 4. agent run を実行し、LLM 呼び出し失敗による非ゼロ終了を許容する
 printf "${YELLOW}>>> running agent (LLM call expected to fail intentionally)${NC}\n"
 set +e
-"$WORK/agent" run --config "$WORK/cfg.yaml" -p "ping" > "$WORK/run.log" 2>&1
+# 監査 WAL と自動メモリを利用者のホームへ書かないよう、HOME を作業ディレクトリへ向け IGGY_PAT を外す
+mkdir -p "$WORK/home"
+env -u IGGY_PAT HOME="$WORK/home" "$WORK/agent" run --config "$WORK/cfg.yaml" -p "ping" > "$WORK/run.log" 2>&1
 RUN_EXIT=$?
 set -e
 printf "agent run exited with %d (failure is expected for this E2E)\n" "$RUN_EXIT"
