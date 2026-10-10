@@ -138,7 +138,7 @@ func TestREPL_ImageLoadErrorsShowPrefixAndPathOnce(t *testing.T) {
 	for name, p := range cases {
 		t.Run(name, func(t *testing.T) {
 			got := runSlashREPL(t, &inputCapturingSvc{}, cliui.Options{}, "/image "+p+" q\n/quit\n")
-			if !strings.Contains(got, "[image] ") || strings.Contains(got, "[image] image:") {
+			if strings.Count(got, "[image]") != 1 || strings.Contains(got, "[image] image:") {
 				t.Errorf("want a single [image] prefix: %q", got)
 			}
 			if n := strings.Count(got, p); n != 1 {
