@@ -7,8 +7,8 @@ Go 1.26製のCGOなし単一バイナリAIエージェントです。OpenAI、An
 - 単一バイナリで配布できます。CGO不要で Linux、macOS、Windowsのamd64とarm64に対応します
 - 5プロバイダー (OpenAI、Anthropic、Google Gemini、Ollama、llama.cpp) を統一した抽象層として扱えます
 - ストリーミングとtool callingに対応します
-- 内蔵ツールはfs_read、fs_write、fs_edit、shell、http_fetch、search_files、web_search、web_fetchの8種類です (ほかにRAG用のnote_add / note_search、自動メモリ用のmemory_write / memory_read)
-- 対話REPL、ワンショットrun、OpenAI互換HTTP APIの3種類のインターフェースを提供します
+- 内蔵ツールはfs_read、fs_write、fs_edit、shell、http_fetch、search_files、web_search、web_fetchです (ほかにRAG用のnote_add / note_search、自動メモリ用のmemory_write / memory_read)
+- 対話REPL、ワンショットrun、OpenAI互換HTTP APIのインターフェースを提供します
 - pre-commitとCIでgofmt、go vet、staticcheck、golangci-lint、govulncheck、race・coverage付きGoテスト、release build、gitleaksを実行します
 
 ## クイックスタート
@@ -401,7 +401,7 @@ E2Eスクリプトは `tests/e2e/06-injection-and-redact.sh` です。fixtures/s
 
 ## ツール呼び出しの強制度とスキーマ検証
 
-`agent.tool_choice` でLLM のツール呼び出し挙動を制御できます。`mode` は `auto` / `required` / `none` / `tool` の 4 種類で、`tool` を指定したときは `name` に具体的なツール名を入れます。各プロバイダー (OpenAI / Anthropic / Gemini / Ollama / llama.cpp) のネイティブなtool_choice仕様にマッピングされます。
+`agent.tool_choice` でLLM のツール呼び出し挙動を制御できます。`mode` は `auto` / `required` / `none` / `tool` のいずれかで、`tool` を指定したときは `name` に具体的なツール名を入れます。各プロバイダー (OpenAI / Anthropic / Gemini / Ollama / llama.cpp) のネイティブなtool_choice仕様にマッピングされます。
 
 `mode: none` はツール定義の送信ごと抑制します。定義を送ったまま「呼ぶな」と指示するだけでは、tool_choiceを無視するモデルがツール呼び出しJSONをテキストとして出力する事故を防げないためです。純粋なQA用途では `enabled_tools: []` がDefaultReadonlyToolsにフォールバックする点に注意し、`mode: none` を明示してください。
 
@@ -706,17 +706,17 @@ bash tests/e2e/01-otel-trace.sh
 ```bash
 make precommit-install   # pre-commit フックを有効化
 make quality             # 品質ゲートをローカル実行（CI と同一フロー）
-RUN_E2E=1 make quality   # 品質ゲートに28本のE2Eスクリプトを追加
-make build-all           # 6 バイナリへクロスコンパイル
+RUN_E2E=1 make quality   # 品質ゲートに tests/e2e/*.sh の E2E を追加
+make build-all           # 対応する全プラットフォーム向けにクロスコンパイル
 ```
 
 ### バージョン付与
 
-バージョンは`vMAJOR.MINOR.PATCH`のsemantic versionで、mainへのマージごとにGitHub Actions（`.github/workflows/release.yml`）が自動で付与します。直近の`v`タグ以降のコミットをConventional Commitsとして読み、`feat`ならMINOR、`fix`/`refactor`/`docs`/`chore`などならPATCH、`type!:`または本文の`BREAKING CHANGE`ならMAJOR（0.x系の間はMINOR）を上げてタグとGitHub Release（6バイナリ添付）を作ります。計算規則は`scripts/release/next-version.sh`が単一の情報源で、`bash scripts/release/next-version_test.sh`で検証できます。起点は「マージ済みPRの本数」をMINORに置いた`v0.13.0`です。
+バージョンは`vMAJOR.MINOR.PATCH`のsemantic versionで、mainへのマージごとにGitHub Actions（`.github/workflows/release.yml`）が自動で付与します。直近の`v`タグ以降のコミットをConventional Commitsとして読み、`feat`ならMINOR、`fix`/`refactor`/`docs`/`chore`などならPATCH、`type!:`または本文の`BREAKING CHANGE`ならMAJOR（0.x系の間はMINOR）を上げてタグとGitHub Release（全プラットフォームのバイナリ添付）を作ります。計算規則は`scripts/release/next-version.sh`が単一の情報源で、`bash scripts/release/next-version_test.sh`で検証できます。起点は「マージ済みPRの本数」をMINORに置いた`v0.13.0`です。
 
 ビルド時のバージョンは`-ldflags -X main.version=...`で埋め込み、`agent version`で表示します。`make build`は未指定なら`git describe --tags`の値（例: `v0.13.0-3-gabc1234-dirty`）を使います。
 
-`scripts/quality-gate.sh` はpre-commitとCIが共有する品質確認の入口です。mutation対象packageの除外テスト、gofmt、go vet、staticcheck、golangci-lint、govulncheck、`go test --count=1 --shuffle=on -race -cover`、release build、機密ファイルのstage防止、`gitleaks detect --no-git --source .` を順に実行します。`RUN_E2E=1`では28本の`tests/e2e/*.sh`も実行します。gitleaksはstage状態にかかわらず作業ツリーを検査し、`.gitleaks.toml`のallowlistに列挙したpathとマスク済みplaceholderを対象外にします。
+`scripts/quality-gate.sh` はpre-commitとCIが共有する品質確認の入口です。mutation対象packageの除外テスト、gofmt、go vet、staticcheck、golangci-lint、govulncheck、`go test --count=1 --shuffle=on -race -cover`、release build、機密ファイルのstage防止、`gitleaks detect --no-git --source .` を順に実行します。`RUN_E2E=1`では`tests/e2e/*.sh`もすべて実行します。gitleaksはstage状態にかかわらず作業ツリーを検査し、`.gitleaks.toml`のallowlistに列挙したpathとマスク済みplaceholderを対象外にします。
 
 変更行のmutation testingは、比較元commitと1つ以上のGo packageを指定して実行します。
 
