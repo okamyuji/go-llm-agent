@@ -12,7 +12,7 @@ import (
 )
 
 // RunOneShot 1 回限りのプロンプト送信を行い結果を out に書き出す
-func RunOneShot(ctx context.Context, svc agent.Service, model, systemPrompt, prompt string, maxHops int, out io.Writer) error {
+func RunOneShot(ctx context.Context, svc agent.Service, model, systemPrompt, prompt string, images []llm.Image, maxHops int, out io.Writer) error {
 	if out == nil {
 		out = os.Stdout
 	}
@@ -24,7 +24,7 @@ func RunOneShot(ctx context.Context, svc agent.Service, model, systemPrompt, pro
 		_ = svc.Run(ctx, agent.Input{
 			Model:        model,
 			SystemPrompt: systemPrompt,
-			Messages:     []llm.Message{{Role: llm.RoleUser, Content: prompt}},
+			Messages:     []llm.Message{{Role: llm.RoleUser, Content: prompt, Images: images}},
 			MaxToolHops:  maxHops,
 		}, ch)
 		close(ch)

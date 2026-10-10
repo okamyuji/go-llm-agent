@@ -63,7 +63,7 @@ type chatPayload struct {
 
 type chatPayloadMsg struct {
 	Role       string            `json:"role"`
-	Content    string            `json:"content,omitempty"`
+	Content    any               `json:"content,omitempty"`
 	Name       string            `json:"name,omitempty"`
 	ToolCallID string            `json:"tool_call_id,omitempty"`
 	ToolCalls  []chatPayloadCall `json:"tool_calls,omitempty"`
@@ -163,10 +163,39 @@ func (c *Client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatRespon
 	return out, nil
 }
 
+type contentPart struct {
+	Type     string           `json:"type"`
+	Text     string           `json:"text,omitempty"`
+	ImageURL *contentImageURL `json:"image_url,omitempty"`
+}
+
+type contentImageURL struct {
+	URL string `json:"url"`
+}
+
+// messageContent 画像が無ければ文字列、あれば parts 配列を返す。
+// any に空文字を入れると omitempty が効かないため、空の本文は nil にする
+func messageContent(m llm.Message) any {
+	if len(m.Images) == 0 {
+		if m.Content == "" {
+			return nil
+		}
+		return m.Content
+	}
+	var parts []contentPart
+	if m.Content != "" {
+		parts = append(parts, contentPart{Type: "text", Text: m.Content})
+	}
+	for _, img := range m.Images {
+		parts = append(parts, contentPart{Type: "image_url", ImageURL: &contentImageURL{URL: img.DataURL()}})
+	}
+	return parts
+}
+
 func toPayload(req llm.ChatRequest, stream bool) chatPayload {
 	p := chatPayload{Model: req.Model, Stream: stream}
 	for _, m := range req.Messages {
-		pm := chatPayloadMsg{Role: string(m.Role), Content: m.Content, Name: m.Name, ToolCallID: m.ToolCallID}
+		pm := chatPayloadMsg{Role: string(m.Role), Content: messageContent(m), Name: m.Name, ToolCallID: m.ToolCallID}
 		for _, tc := range m.ToolCalls {
 			pm.ToolCalls = append(pm.ToolCalls, chatPayloadCall{
 				ID: tc.ID, Type: "function",

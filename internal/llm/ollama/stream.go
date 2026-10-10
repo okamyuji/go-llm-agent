@@ -21,6 +21,9 @@ type streamReader struct {
 
 // Stream Ollama に NDJSON で問い合わせ ChatStream を返す
 func (c *Client) Stream(ctx context.Context, req llm.ChatRequest) (llm.ChatStream, error) {
+	if err := llm.RejectImages(c.Name(), req.Messages); err != nil {
+		return nil, err
+	}
 	p := c.toPayload(req, true)
 	body, err := json.Marshal(p)
 	if err != nil {

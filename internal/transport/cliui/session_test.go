@@ -387,3 +387,26 @@ func TestLoadSession_LargeLineWithinScannerBuffer(t *testing.T) {
 		t.Fatalf("len=%d want=%d", len(msgs[0].Content), len(big))
 	}
 }
+
+func TestMessageToEntry_RecordsImagePathsNotBytes(t *testing.T) {
+	m := llm.Message{Role: llm.RoleUser, Content: "何色?", Images: []llm.Image{
+		{Name: "/tmp/a.png", MIMEType: "image/png", Data: []byte("secret-bytes")},
+		{Name: "/tmp/b.jpg", MIMEType: "image/jpeg", Data: []byte("x")},
+	}}
+	e := messageToEntry(m)
+	want := "[画像: /tmp/a.png]\n[画像: /tmp/b.jpg]\n何色?"
+	if e.Content != want {
+		t.Errorf("Content = %q, want %q", e.Content, want)
+	}
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "secret-bytes") || strings.Contains(string(b), "c2VjcmV0") {
+		t.Errorf("entry leaks image bytes: %s", b)
+	}
+	back, err := entryToMessage(e)
+	if err != nil || len(back.Images) != 0 || back.Content != want {
+		t.Errorf("round trip = %+v, %v", back, err)
+	}
+}

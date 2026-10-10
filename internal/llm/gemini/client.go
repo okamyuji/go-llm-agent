@@ -116,6 +116,9 @@ type gemResponse struct {
 
 // Chat 同期で Gemini に問い合わせる
 func (c *Client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if err := llm.RejectImages(c.Name(), req.Messages); err != nil {
+		return nil, err
+	}
 	p := toPayload(req)
 	body, err := json.Marshal(p)
 	if err != nil {

@@ -27,10 +27,16 @@ type sessionEntry struct {
 }
 
 func messageToEntry(m llm.Message) sessionEntry {
+	// 画像の本体は JSONL を肥大させるので保存せず、再開後も何を見せたか分かるようパスだけ残す
+	var b strings.Builder
+	for _, img := range m.Images {
+		fmt.Fprintf(&b, "[画像: %s]\n", img.Name)
+	}
+	content := b.String() + m.Content
 	return sessionEntry{
 		Ts:         time.Now().UTC(),
 		Role:       string(m.Role),
-		Content:    m.Content,
+		Content:    content,
 		ToolCallID: m.ToolCallID,
 		Name:       m.Name,
 		ToolCalls:  m.ToolCalls,

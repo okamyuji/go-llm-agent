@@ -69,7 +69,7 @@ func runSlashREPL(t *testing.T, svc agent.Service, opt cliui.Options, input stri
 func TestREPL_HelpListsAllCommands(t *testing.T) {
 	svc := &inputCapturingSvc{}
 	got := runSlashREPL(t, svc, cliui.Options{}, "/help\n/quit\n")
-	for _, want := range []string{"/help", "/model", "/compact", "/cost", "/clear", "/tools off|on", "/quit, /exit"} {
+	for _, want := range []string{"/help", "/model", "/compact", "/cost", "/clear", "/tools off|on", "/image <path> <質問>", "/quit, /exit"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("help 出力に %q が無い: %q", want, got)
 		}

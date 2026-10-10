@@ -23,6 +23,9 @@ type streamReader struct {
 
 // Stream Gemini に SSE で問い合わせ ChatStream を返す
 func (c *Client) Stream(ctx context.Context, req llm.ChatRequest) (llm.ChatStream, error) {
+	if err := llm.RejectImages(c.Name(), req.Messages); err != nil {
+		return nil, err
+	}
 	p := toPayload(req)
 	body, err := json.Marshal(p)
 	if err != nil {

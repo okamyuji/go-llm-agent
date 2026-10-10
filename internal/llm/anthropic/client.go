@@ -93,6 +93,9 @@ type msgResp struct {
 
 // Chat 同期で Anthropic に問い合わせる
 func (c *Client) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	if err := llm.RejectImages(c.Name(), req.Messages); err != nil {
+		return nil, err
+	}
 	p := toPayload(req, false)
 	body, err := json.Marshal(p)
 	if err != nil {

@@ -124,10 +124,11 @@ func cmdRun(ctx context.Context, args []string) error {
 	configPath := fs.String("config", "config.yaml", "config file path")
 	model := fs.String("model", "", "model id (provider/name)")
 	prompt := fs.String("p", "", "prompt")
+	image := fs.String("image", "", "image file to attach (png/jpeg/gif/webp)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return runOneShot(ctx, oneShotParams{ConfigPath: *configPath, Model: *model, Prompt: *prompt})
+	return runOneShot(ctx, oneShotParams{ConfigPath: *configPath, Model: *model, Prompt: *prompt, ImagePath: *image})
 }
 
 func cmdServe(ctx context.Context, args []string) error {

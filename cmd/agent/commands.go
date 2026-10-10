@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/okamyuji/go-llm-agent/internal/eval"
+	"github.com/okamyuji/go-llm-agent/internal/llm"
 	"github.com/okamyuji/go-llm-agent/internal/transport/cliui"
 	"github.com/okamyuji/go-llm-agent/internal/transport/httpapi"
 )
@@ -16,11 +17,21 @@ type oneShotParams struct {
 	ConfigPath string
 	Model      string
 	Prompt     string
+	ImagePath  string
 	Out        io.Writer
 }
 
 // runOneShot 単発プロンプトを 1 ターン実行して結果を書き出す
 func runOneShot(ctx context.Context, p oneShotParams) error {
+	var images []llm.Image
+	if p.ImagePath != "" {
+		// 設定と provider を組み立てる前に読み、壊れた入力で LLM を呼ばない
+		img, err := llm.LoadImage(p.ImagePath)
+		if err != nil {
+			return err
+		}
+		images = []llm.Image{img}
+	}
 	deps, err := buildServiceDeps(ctx, p.ConfigPath, p.Model, false)
 	if err != nil {
 		return err
@@ -29,7 +40,7 @@ func runOneShot(ctx context.Context, p oneShotParams) error {
 	if out == nil {
 		out = os.Stdout
 	}
-	return cliui.RunOneShot(ctx, deps.svc, deps.model, deps.cfg.Agent.SystemPrompt, p.Prompt, deps.cfg.Agent.MaxToolHops, out)
+	return cliui.RunOneShot(ctx, deps.svc, deps.model, deps.cfg.Agent.SystemPrompt, p.Prompt, images, deps.cfg.Agent.MaxToolHops, out)
 }
 
 // serveParams serve サブコマンドの実行パラメータ。Addr が空なら config の値を使う

@@ -158,3 +158,79 @@ func TestChatDeclaresToolsWithParametersAndDescription(t *testing.T) {
 		t.Errorf("function.description = %v, want 'Read a file'", fn["description"])
 	}
 }
+
+func TestChat_SendsImagesAsContentParts(t *testing.T) {
+	var gotBody struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+
+	img := llm.Image{MIMEType: "image/jpeg", Data: []byte("ab")}
+	c := openai.New(openai.Options{BaseURL: srv.URL, APIKey: "KEY"})
+	_, err := c.Chat(context.Background(), llm.ChatRequest{
+		Model: "m",
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: "q", Images: []llm.Image{img}},
+			{Role: llm.RoleAssistant, Content: ""},
+			{Role: llm.RoleUser, Content: "next"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	parts, ok := gotBody.Messages[0]["content"].([]any)
+	if !ok || len(parts) != 2 {
+		t.Fatalf("content[0] = %#v", gotBody.Messages[0]["content"])
+	}
+	if p := parts[0].(map[string]any); p["type"] != "text" || p["text"] != "q" {
+		t.Errorf("text part = %v", p)
+	}
+	u := parts[1].(map[string]any)["image_url"].(map[string]any)["url"]
+	if u != "data:image/jpeg;base64,YWI=" {
+		t.Errorf("url = %v", u)
+	}
+	if _, ok := gotBody.Messages[1]["content"]; ok {
+		t.Errorf("empty assistant content should be omitted: %v", gotBody.Messages[1])
+	}
+	if s, ok := gotBody.Messages[2]["content"].(string); !ok || s != "next" {
+		t.Errorf("content[2] = %#v", gotBody.Messages[2]["content"])
+	}
+}
+
+func TestStream_SendsImagesAsContentParts(t *testing.T) {
+	var gotBody struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	c := openai.New(openai.Options{BaseURL: srv.URL, APIKey: "KEY"})
+	st, err := c.Stream(context.Background(), llm.ChatRequest{
+		Model:    "m",
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "q", Images: []llm.Image{{MIMEType: "image/png", Data: []byte("ab")}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for {
+		if _, ok := st.Recv(); !ok {
+			break
+		}
+	}
+	_ = st.Close()
+	if _, ok := gotBody.Messages[0]["content"].([]any); !ok {
+		t.Errorf("stream content = %#v, want parts array", gotBody.Messages[0]["content"])
+	}
+}
