@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // MaxImageBytes 1 枚の画像の上限。履歴の画像は毎ターン base64 で送り直すため、メモリと送信量を抑える値にする
@@ -40,19 +41,20 @@ func (i Image) DataURL() string {
 
 // LoadImage path の画像を読み込む。形式は拡張子でなく中身で判定する
 func LoadImage(path string) (Image, error) {
-	// FIFO などは書き手が現れるまで Open が戻らないので、開く前に通常ファイルに限る
-	info, err := os.Stat(path)
+	// FIFO は書き手が現れるまで通常の Open が戻らない。O_NONBLOCK で開いてから開いた fd を調べ、
+	// Stat と Open の間にパスが差し替わっても止まらないようにする
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return Image{}, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
 	if err != nil {
 		return Image{}, err
 	}
 	if !info.Mode().IsRegular() {
 		return Image{}, fmt.Errorf("%s is not a regular file", path)
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return Image{}, err
-	}
-	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(io.LimitReader(f, MaxImageBytes+1))
 	if err != nil {
 		return Image{}, err
