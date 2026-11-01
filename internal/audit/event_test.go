@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/santhosh-tekuri/jsonschema/v5"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func loadSchema(t *testing.T) *jsonschema.Schema {
 	t.Helper()
 	c := jsonschema.NewCompiler()
-	c.Draft = jsonschema.Draft2020
+	c.DefaultDraft(jsonschema.Draft2020)
 	s, err := c.Compile("testdata/event.schema.json")
 	if err != nil {
 		t.Fatal(err)

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/okamyuji/go-llm-agent/internal/tool"
@@ -104,5 +105,53 @@ func TestSchemaValidator_EmptyArgsBecomesEmptyObject(t *testing.T) {
 	ok, _ := v.Validate("fs_read", nil)
 	if !ok {
 		t.Fatal("empty args must be treated as {} and pass type:object schema")
+	}
+}
+
+func newFourStringPropsValidator(t *testing.T) SchemaValidator {
+	t.Helper()
+	reg := &stubReg{specs: []tool.Spec{{
+		Name:   "multi",
+		Schema: json.RawMessage(`{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"},"c":{"type":"string"},"d":{"type":"string"}}}`),
+	}}}
+	v, err := NewSchemaValidator(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestSchemaValidator_SummarizesAtMostThreeErrors(t *testing.T) {
+	t.Parallel()
+	v := newFourStringPropsValidator(t)
+	ok, msg := v.Validate("multi", json.RawMessage(`{"a":1,"b":2,"c":3,"d":4}`))
+	if ok {
+		t.Fatal("expected validation failure")
+	}
+	if got := strings.Count(msg, "; "); got != 3 {
+		t.Fatalf("expected 3 errors plus a remainder, got %d separators in %q", got, msg)
+	}
+	if !strings.HasSuffix(msg, "(1 more)") {
+		t.Fatalf("expected remainder count, got %q", msg)
+	}
+}
+
+func TestSchemaValidator_ThreeErrorsHaveNoRemainder(t *testing.T) {
+	t.Parallel()
+	v := newFourStringPropsValidator(t)
+	ok, msg := v.Validate("multi", json.RawMessage(`{"a":1,"b":2,"c":3}`))
+	if ok {
+		t.Fatal("expected validation failure")
+	}
+	if strings.Contains(msg, "more)") || strings.Count(msg, "; ") != 2 {
+		t.Fatalf("expected exactly 3 errors without remainder, got %q", msg)
+	}
+}
+
+func TestNewSchemaValidator_RejectsMalformedSchema(t *testing.T) {
+	t.Parallel()
+	reg := &stubReg{specs: []tool.Spec{{Name: "broken", Schema: json.RawMessage(`{"type":`)}}}
+	if _, err := NewSchemaValidator(reg); err == nil {
+		t.Fatal("expected an error for malformed schema JSON")
 	}
 }
