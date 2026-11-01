@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	jsonschema "github.com/santhosh-tekuri/jsonschema/v5"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/okamyuji/go-llm-agent/internal/tool"
 )
@@ -16,7 +16,7 @@ type SchemaValidator interface {
 	Validate(toolName string, args json.RawMessage) (ok bool, msg string)
 }
 
-// schemaValidator santhosh-tekuri/jsonschema/v5 を使う実装
+// schemaValidator santhosh-tekuri/jsonschema/v6 を使う実装
 // 旧版 xeipuuv/gojsonschema は maintenance mode のため移行した
 type schemaValidator struct {
 	schemas map[string]*jsonschema.Schema
@@ -36,7 +36,11 @@ func NewSchemaValidator(reg tool.Registry) (SchemaValidator, error) {
 		compiler := jsonschema.NewCompiler()
 		// schema 本体に id がない場合に備えて固定の URL を使う
 		const schemaURL = "inline://tool-schema.json"
-		if err := compiler.AddResource(schemaURL, strings.NewReader(string(sp.Schema))); err != nil {
+		doc, err := jsonschema.UnmarshalJSON(strings.NewReader(string(sp.Schema)))
+		if err != nil {
+			return nil, fmt.Errorf("agent: schema parse failed for tool %q: %w", sp.Name, err)
+		}
+		if err := compiler.AddResource(schemaURL, doc); err != nil {
 			return nil, fmt.Errorf("agent: schema add resource failed for tool %q: %w", sp.Name, err)
 		}
 		sch, err := compiler.Compile(schemaURL)
@@ -58,7 +62,7 @@ func (v *schemaValidator) Validate(toolName string, args json.RawMessage) (bool,
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}
-	// jsonschema/v5 は any 型インスタンスを検証する。json.RawMessage を一度デコードする
+	// jsonschema/v6 は any 型インスタンスを検証する。json.RawMessage を一度デコードする
 	var instance any
 	if err := json.Unmarshal(args, &instance); err != nil {
 		return false, fmt.Sprintf("invalid json: %v", err)
@@ -73,18 +77,21 @@ func (v *schemaValidator) Validate(toolName string, args json.RawMessage) (bool,
 	return true, ""
 }
 
-// summarizeValidationError ValidationError.BasicOutput からエラー要約文字列を作る
-// 1 個目の root エラーと、最大 3 件の cause を ; 区切りで結合する
+// summarizeValidationError BasicOutput の葉エラーを最大 3 件、; 区切りで結合する
+// v6 の ValidationError は Message を持たないため、メッセージは BasicOutput 経由で得る
 func summarizeValidationError(verr *jsonschema.ValidationError) string {
+	const maxErrors = 3
+	units := verr.BasicOutput().Errors
 	var parts []string
-	parts = append(parts, fmt.Sprintf("%s: %s", verr.InstanceLocation, verr.Message))
-	const maxCauses = 3
-	for i, c := range verr.Causes {
-		if i >= maxCauses {
-			parts = append(parts, fmt.Sprintf("(%d more)", len(verr.Causes)-maxCauses))
+	for i, u := range units {
+		if i >= maxErrors {
+			parts = append(parts, fmt.Sprintf("(%d more)", len(units)-maxErrors))
 			break
 		}
-		parts = append(parts, fmt.Sprintf("%s: %s", c.InstanceLocation, c.Message))
+		parts = append(parts, fmt.Sprintf("%s: %s", u.InstanceLocation, u.Error))
+	}
+	if len(parts) == 0 {
+		return verr.Error()
 	}
 	return strings.Join(parts, "; ")
 }
