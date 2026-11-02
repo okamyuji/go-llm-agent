@@ -81,7 +81,7 @@ func (v *schemaValidator) Validate(toolName string, args json.RawMessage) (bool,
 // v6 の ValidationError は Message を持たないため、メッセージは BasicOutput 経由で得る
 func summarizeValidationError(verr *jsonschema.ValidationError) string {
 	const maxErrors = 3
-	units := verr.BasicOutput().Errors
+	units := leafUnits(verr.BasicOutput().Errors)
 	var parts []string
 	for i, u := range units {
 		if i >= maxErrors {
@@ -94,4 +94,23 @@ func summarizeValidationError(verr *jsonschema.ValidationError) string {
 		return verr.Error()
 	}
 	return strings.Join(parts, "; ")
+}
+
+// leafUnits allOf や anyOf の「'allOf' failed」のような途中のエントリを除く。
+// 途中のエントリの KeywordLocation は、その下の原因のエントリの接頭辞になる
+func leafUnits(units []jsonschema.OutputUnit) []jsonschema.OutputUnit {
+	var leaves []jsonschema.OutputUnit
+	for _, u := range units {
+		parent := false
+		for _, o := range units {
+			if strings.HasPrefix(o.KeywordLocation, u.KeywordLocation+"/") {
+				parent = true
+				break
+			}
+		}
+		if !parent {
+			leaves = append(leaves, u)
+		}
+	}
+	return leaves
 }
