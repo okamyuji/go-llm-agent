@@ -180,3 +180,23 @@ func TestSchemaValidator_SummarizesLeafErrorsOfNestedCombinators(t *testing.T) {
 		t.Fatalf("expected 3 of 5 leaf errors plus (2 more), got %q", msg)
 	}
 }
+
+func TestSchemaValidator_KeepsIndependentErrorsOfArrayItems(t *testing.T) {
+	t.Parallel()
+	reg := &stubReg{specs: []tool.Spec{{
+		Name:   "items",
+		Schema: json.RawMessage(`{"type":"object","properties":{"arr":{"type":"array","items":{"oneOf":[{"type":"integer"},{"type":"number"}]}}}}`),
+	}}}
+	v, err := NewSchemaValidator(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 要素 0 は両方に合わず、要素 1 は両方に合う。要素ごとに KeywordLocation は同じだが、別々の失敗である
+	ok, msg := v.Validate("items", json.RawMessage(`{"arr":["x",1]}`))
+	if ok {
+		t.Fatal("expected validation failure")
+	}
+	if !strings.Contains(msg, "/arr/1") {
+		t.Fatalf("summary must keep the error of item 1: %q", msg)
+	}
+}
