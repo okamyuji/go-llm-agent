@@ -77,21 +77,33 @@ func (v *schemaValidator) Validate(toolName string, args json.RawMessage) (bool,
 	return true, ""
 }
 
-// summarizeValidationError BasicOutput の葉エラーを最大 3 件、; 区切りで結合する
+// summarizeValidationError エラーの木の末端（原因を持たない失敗）を最大 3 件、; 区切りで結合する。
+// allOf や anyOf の「'allOf' failed」は原因を持つ途中の節点なので出さない
 // v6 の ValidationError は Message を持たないため、メッセージは BasicOutput 経由で得る
 func summarizeValidationError(verr *jsonschema.ValidationError) string {
 	const maxErrors = 3
-	units := verr.BasicOutput().Errors
+	leaves := leafErrors(verr, nil)
 	var parts []string
-	for i, u := range units {
+	for i, leaf := range leaves {
 		if i >= maxErrors {
-			parts = append(parts, fmt.Sprintf("(%d more)", len(units)-maxErrors))
+			parts = append(parts, fmt.Sprintf("(%d more)", len(leaves)-maxErrors))
 			break
 		}
+		// 原因のない節点の BasicOutput は自分自身の 1 件になる
+		u := leaf.BasicOutput()
 		parts = append(parts, fmt.Sprintf("%s: %s", u.InstanceLocation, u.Error))
 	}
-	if len(parts) == 0 {
-		return verr.Error()
-	}
 	return strings.Join(parts, "; ")
+}
+
+// leafErrors 木を深さ優先でたどり、原因を持たない節点を順に集める。
+// KeywordLocation は配列の要素ごとに同じになるので、親子の判定には使えない
+func leafErrors(e *jsonschema.ValidationError, out []*jsonschema.ValidationError) []*jsonschema.ValidationError {
+	if len(e.Causes) == 0 {
+		return append(out, e)
+	}
+	for _, c := range e.Causes {
+		out = leafErrors(c, out)
+	}
+	return out
 }

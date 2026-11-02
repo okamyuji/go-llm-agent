@@ -155,3 +155,48 @@ func TestNewSchemaValidator_RejectsMalformedSchema(t *testing.T) {
 		t.Fatal("expected an error for malformed schema JSON")
 	}
 }
+
+func TestSchemaValidator_SummarizesLeafErrorsOfNestedCombinators(t *testing.T) {
+	t.Parallel()
+	reg := &stubReg{specs: []tool.Spec{{
+		Name: "nested",
+		Schema: json.RawMessage(`{"type":"object","properties":{` +
+			`"a":{"allOf":[{"anyOf":[{"type":"string","minLength":5},{"type":"integer"}]}]},` +
+			`"b":{"type":"integer"},"c":{"type":"integer"},"d":{"type":"integer"}}}`),
+	}}}
+	v, err := NewSchemaValidator(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 末端は a の minLength と type、b、c、d の 5 件。allOf と anyOf の途中の失敗は原因ではない
+	ok, msg := v.Validate("nested", json.RawMessage(`{"a":"ab","b":"x","c":"y","d":"z"}`))
+	if ok {
+		t.Fatal("expected validation failure")
+	}
+	if strings.Contains(msg, "' failed") {
+		t.Fatalf("summary must list leaf errors, not combinator wrappers: %q", msg)
+	}
+	if !strings.HasSuffix(msg, "(2 more)") {
+		t.Fatalf("expected 3 of 5 leaf errors plus (2 more), got %q", msg)
+	}
+}
+
+func TestSchemaValidator_KeepsIndependentErrorsOfArrayItems(t *testing.T) {
+	t.Parallel()
+	reg := &stubReg{specs: []tool.Spec{{
+		Name:   "items",
+		Schema: json.RawMessage(`{"type":"object","properties":{"arr":{"type":"array","items":{"oneOf":[{"type":"integer"},{"type":"number"}]}}}}`),
+	}}}
+	v, err := NewSchemaValidator(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 要素 0 は両方に合わず、要素 1 は両方に合う。要素ごとに KeywordLocation は同じだが、別々の失敗である
+	ok, msg := v.Validate("items", json.RawMessage(`{"arr":["x",1]}`))
+	if ok {
+		t.Fatal("expected validation failure")
+	}
+	if !strings.Contains(msg, "/arr/1") {
+		t.Fatalf("summary must keep the error of item 1: %q", msg)
+	}
+}
